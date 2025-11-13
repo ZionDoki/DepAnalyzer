@@ -9,7 +9,7 @@ from typing import List
 from parsers.cpp.cmake.commands.base import CommandHandler
 from parsers.cpp.cmake.tokens import clean_token, is_valid_dependency
 from parsers.cpp.cmake.variables import CMakeVariableResolver
-from utils.graph import GraphManager
+from graph.manager import GraphManager
 
 log = logging.getLogger("depanalyzer.parsers.cpp.cmake.commands.variables")
 

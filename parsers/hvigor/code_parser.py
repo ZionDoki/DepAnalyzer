@@ -7,10 +7,13 @@ from typing import Optional, Set
 
 from tree_sitter import Language, Parser, Query, QueryCursor
 
-from base.base import BaseCodeParser, normalize_node_id
+# TODO: This parser uses old architecture and needs migration
+# Temporarily using a compatibility shim since base.base was removed
+from parsers.base import BaseParser as BaseCodeParser
+from core.identifiers import normalize_node_id
 from core.schema import EdgeKind, NodeType, edge_attrs
 from core.identifiers import make_external_id
-from utils.graph import Edge, GraphManager, Vertex
+from graph.manager import GraphManager
 
 logger = logging.getLogger("depanalyzer.parsers.hvigor.code")
 
@@ -97,13 +100,12 @@ class CodeParser(BaseCodeParser):
 
             with self.graph_lock:
                 shared_graph.add_node(
-                    Vertex(
-                        label=source_id,
-                        id=source_id,
-                        src_path=str(file_path.resolve()),
-                        type=NodeType.CODE,
-                        parser_name=self.NAME,
-                    )
+                    source_id,
+                    node_type=NodeType.CODE,
+                    id=source_id,
+                    src_path=str(file_path.resolve()),
+                    parser_name=self.NAME,
+                    confidence=1.0,
                 )
 
                 for dep_id in dependencies:
@@ -112,42 +114,39 @@ class CodeParser(BaseCodeParser):
                     if ":" not in dep_path:  # Regular file path
                         dep_abs_path = Path(self.repo_root) / dep_path
                         shared_graph.add_node(
-                            Vertex(
-                                label=dep_id,
-                                id=dep_id,
-                                src_path=str(dep_abs_path.resolve()),
-                                type=NodeType.CODE,
-                                parser_name=self.NAME,
-                            )
+                            dep_id,
+                            node_type=NodeType.CODE,
+                            id=dep_id,
+                            src_path=str(dep_abs_path.resolve()),
+                            parser_name=self.NAME,
+                            confidence=1.0,
                         )
+                        attrs = edge_attrs(EdgeKind.IMPORT, self.NAME)
                         shared_graph.add_edge(
-                            Edge(
-                                u=source_id,
-                                v=dep_id,
-                                **edge_attrs(EdgeKind.IMPORT, self.NAME),
-                            )
+                            source_id,
+                            dep_id,
+                            edge_kind=attrs.get("kind", EdgeKind.IMPORT),
+                            **{k: v for k, v in attrs.items() if k != "kind"},
                         )
 
                 # Add unresolved placeholders with external origin and low confidence
                 for dep_id in unresolved:
                     shared_graph.add_node(
-                        Vertex(
-                            label=dep_id,
-                            id=dep_id,
-                            src_path="N/A",
-                            type=NodeType.CODE,
-                            parser_name=self.NAME,
-                            origin="external",
-                            provenance="import_unresolved",
-                            confidence=0.3,
-                        )
+                        dep_id,
+                        node_type=NodeType.CODE,
+                        id=dep_id,
+                        src_path="N/A",
+                        parser_name=self.NAME,
+                        origin="external",
+                        provenance="import_unresolved",
+                        confidence=0.3,
                     )
+                    attrs = edge_attrs(EdgeKind.IMPORT, self.NAME)
                     shared_graph.add_edge(
-                        Edge(
-                            u=source_id,
-                            v=dep_id,
-                            **edge_attrs(EdgeKind.IMPORT, self.NAME),
-                        )
+                        source_id,
+                        dep_id,
+                        edge_kind=attrs.get("kind", EdgeKind.IMPORT),
+                        **{k: v for k, v in attrs.items() if k != "kind"},
                     )
 
         except (OSError, IOError, TypeError, ValueError) as e:

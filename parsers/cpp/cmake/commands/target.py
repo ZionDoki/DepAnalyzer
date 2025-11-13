@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-from base.base import normalize_node_id
+from core.identifiers import normalize_node_id
 from parsers.cpp.cmake.commands.base import CommandHandler
 from parsers.cpp.cmake.tokens import (
     clean_token,
@@ -14,7 +14,7 @@ from parsers.cpp.cmake.tokens import (
     CMAKE_VAR_PATTERN,
 )
 from parsers.cpp.cmake.variables import CMakeVariableResolver
-from utils.graph import GraphManager
+from graph.manager import GraphManager
 
 log = logging.getLogger("depanalyzer.parsers.cpp.cmake.commands.target")
 
@@ -164,31 +164,29 @@ class TargetCommandHandler(CommandHandler):
             shared_graph: Graph manager.
             variable_resolver: Variable resolver.
         """
-        alias_node = shared_graph.create_vertex(
+        alias_target_id = normalize_node_id(
+            file_path,
+            self.repo_root,
+            variable_resolver.resolve(alias_of),
+        )
+        shared_graph.add_node(
             target_id,
+            node_type=node_type,
             parser_name=self.parser_name,
-            type=node_type,
             src_path=src_path,
             id=target_id,
             origin="in_repo",
             provenance="cmake_add_target",
             declared_via=command_name,
             confidence=1.0,
-            alias_of=normalize_node_id(
-                file_path,
-                self.repo_root,
-                variable_resolver.resolve(alias_of),
-            ),
+            alias_of=alias_target_id,
         )
-        shared_graph.add_node(alias_node)
         shared_graph.add_edge(
-            shared_graph.create_edge(
-                target_id,
-                alias_node["alias_of"],
-                parser_name=self.parser_name,
-                label="alias_of",
-                kind="alias_of",
-            )
+            target_id,
+            alias_target_id,
+            edge_kind="alias_of",
+            parser_name=self.parser_name,
+            confidence=1.0,
         )
 
     def _create_target_node(
@@ -210,10 +208,10 @@ class TargetCommandHandler(CommandHandler):
             is_imported: Whether this is an imported target.
             shared_graph: Graph manager.
         """
-        v = shared_graph.create_vertex(
+        shared_graph.add_node(
             target_id,
+            node_type=node_type,
             parser_name=self.parser_name,
-            type=node_type,
             src_path=src_path,
             id=target_id,
             origin=("external" if is_imported else "in_repo"),
@@ -231,7 +229,6 @@ class TargetCommandHandler(CommandHandler):
                 )
             ),
         )
-        shared_graph.add_node(v)
 
     def _add_source_files(
         self,
@@ -301,16 +298,18 @@ class TargetCommandHandler(CommandHandler):
                         resolved_var = variable_resolver.resolve(var_expr)
                         source_id = source_id.replace(var_expr, resolved_var)
 
-            source_node = shared_graph.create_vertex(
-                source_id, parser_name=self.parser_name, type="code", id=source_id
+            shared_graph.add_node(
+                source_id,
+                node_type="code",
+                parser_name=self.parser_name,
+                id=source_id,
+                confidence=1.0,
             )
-            shared_graph.add_node(source_node)
 
-            edge = shared_graph.create_edge(
+            shared_graph.add_edge(
                 target_id,
                 source_id,
+                edge_kind="sources",
                 parser_name=self.parser_name,
-                label="sources",
-                kind="sources",
+                confidence=1.0,
             )
-            shared_graph.add_edge(edge)

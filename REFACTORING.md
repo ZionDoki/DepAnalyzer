@@ -200,3 +200,54 @@ All new modules include comprehensive docstrings following the coding guidelines
 - `AGENTS.md`: Authoritative design specification
 - `README.md`: User-facing documentation
 - `pyproject.toml`: Project configuration and dependencies
+
+## Additional Refactoring (2025-11-13)
+
+### Graph Module Consolidation
+
+**Migration:** `utils/graph.py` → `graph/legacy.py`
+
+The legacy GraphManager implementation (1504 lines, NetworkX-based) has been moved from `utils/` to `graph/` module to consolidate all graph-related code in one place.
+
+**Changes:**
+- Moved `utils/graph.py` to `graph/legacy.py`
+- Updated 9 import statements across the codebase:
+  - `runtime/transaction.py`
+  - `parsers/hvigor/code_parser.py`
+  - `parsers/cpp/cmake/commands/*.py` (7 files)
+- Deleted empty `utils/` directory
+
+**Rationale:**
+- Consolidates all graph functionality under `graph/` module
+- `legacy.py` naming clearly indicates this is the old implementation
+- Coexists with new `graph/manager.py` during gradual migration
+- No circular import risks (verified)
+
+**Status:**
+- ✅ **All 9 files** have been migrated to use `graph.manager.GraphManager`
+- ✅ **Complex projection algorithm** (`derive_asset_artifact_projection()`) ported to new GraphManager
+- ✅ **graph/legacy.py deleted** - migration complete
+- ✅ Migration completed on **2025-11-13**
+
+**Migration Completed:**
+1. ✅ Ported 462-line `derive_asset_artifact_projection()` method to new GraphManager
+2. ✅ Ported `fuse_projection_evidence()` method to new GraphManager
+3. ✅ Migrated all CMake command handlers (7 files):
+   - `parsers/cpp/cmake/commands/base.py`
+   - `parsers/cpp/cmake/commands/includes.py`
+   - `parsers/cpp/cmake/commands/linking.py`
+   - `parsers/cpp/cmake/commands/packages.py`
+   - `parsers/cpp/cmake/commands/sources.py`
+   - `parsers/cpp/cmake/commands/target.py`
+   - `parsers/cpp/cmake/commands/variables.py`
+4. ✅ Migrated `parsers/hvigor/code_parser.py`
+5. ✅ Migrated `runtime/transaction.py`
+6. ✅ Deleted `graph/legacy.py` (1504 lines)
+
+**Key API Changes:**
+- **Vertex/Edge wrappers removed**: Direct `add_node()` and `add_edge()` calls
+- **Type parameter renamed**: `type` → `node_type`
+- **Kind parameter unified**: `label`/`type`/`kind` → `edge_kind`
+- **Built-in support**: `confidence`, `over_approx`, `evidence` now standard parameters
+- **Cleaner API**: No wrapper object overhead, more maintainable code
+

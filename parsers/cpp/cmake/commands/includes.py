@@ -14,8 +14,8 @@ from typing import List
 from parsers.cpp.cmake.commands.base import CommandHandler
 from parsers.cpp.cmake.tokens import clean_token
 from parsers.cpp.cmake.variables import CMakeVariableResolver
-from utils.graph import GraphManager
-from base.base import normalize_node_id
+from graph.manager import GraphManager
+from core.identifiers import normalize_node_id
 
 log = logging.getLogger("depanalyzer.parsers.cpp.cmake.commands.includes")
 
@@ -82,7 +82,8 @@ class IncludesCommandHandler(CommandHandler):
             return False
 
         # Merge with existing include_dirs on the node
-        current = shared_graph.graph.nodes.get(target_id, {}).get("include_dirs")
+        node_data = shared_graph.get_node(target_id)
+        current = node_data.get("include_dirs") if node_data else None
         merged: list[str] = []
         seen: set[str] = set()
         if isinstance(current, list):
@@ -96,8 +97,10 @@ class IncludesCommandHandler(CommandHandler):
                 seen.add(d)
 
         # Ensure node exists and update attribute
-        v = shared_graph.create_vertex(target_id, id=target_id)
-        shared_graph.add_node(v)
-        shared_graph.graph.nodes[target_id]["include_dirs"] = merged
+        if not shared_graph.has_node(target_id):
+            shared_graph.add_node(
+                target_id, node_type="artifact", parser_name=self.parser_name, id=target_id
+            )
+        shared_graph._backend.native_graph.nodes[target_id]["include_dirs"] = merged
         log.debug("Recorded %s include dirs on %s", len(paths), target_id)
         return True

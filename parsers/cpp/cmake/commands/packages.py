@@ -9,7 +9,7 @@ from typing import List
 from parsers.cpp.cmake.commands.base import CommandHandler
 from parsers.cpp.cmake.tokens import clean_token
 from parsers.cpp.cmake.variables import CMakeVariableResolver
-from utils.graph import GraphManager
+from graph.manager import GraphManager
 
 log = logging.getLogger("depanalyzer.parsers.cpp.cmake.commands.packages")
 
@@ -91,10 +91,10 @@ class PackagesCommandHandler(CommandHandler):
                 break
 
         lib_id = f"ext_lib:{pkg}{('@' + version) if version else ''}"
-        lib_v = shared_graph.create_vertex(
+        shared_graph.add_node(
             lib_id,
+            node_type="external_library",
             parser_name=self.parser_name,
-            type="external_library",
             id=lib_id,
             origin="external",
             provenance="find_package",
@@ -103,7 +103,6 @@ class PackagesCommandHandler(CommandHandler):
             name=pkg,
             version=version,
         )
-        shared_graph.add_node(lib_v)
         return True
 
     def _handle_fetchcontent_declare(
@@ -190,10 +189,10 @@ class PackagesCommandHandler(CommandHandler):
                 if git_tag:
                     lib_id = f"ext_lib:{project_name}@{git_tag}"
 
-                lib_v = shared_graph.create_vertex(
+                shared_graph.add_node(
                     lib_id,
+                    node_type="external_library",
                     parser_name=self.parser_name,
-                    type="external_library",
                     id=lib_id,
                     origin="external",
                     provenance="fetchcontent",
@@ -204,16 +203,15 @@ class PackagesCommandHandler(CommandHandler):
                     git_repository=git_repo,
                     git_tag=git_tag,
                 )
-                shared_graph.add_node(lib_v)
                 log.info("Created FetchContent node: %s (repo: %s, tag: %s)",
                          lib_id, git_repo, git_tag)
             else:
                 # Create node even without Declare info (defensive)
                 lib_id = f"ext_lib:{project_name}@fetchcontent"
-                lib_v = shared_graph.create_vertex(
+                shared_graph.add_node(
                     lib_id,
+                    node_type="external_library",
                     parser_name=self.parser_name,
-                    type="external_library",
                     id=lib_id,
                     origin="external",
                     provenance="fetchcontent",
@@ -221,7 +219,6 @@ class PackagesCommandHandler(CommandHandler):
                     confidence=0.7,
                     name=project_name,
                 )
-                shared_graph.add_node(lib_v)
                 log.warning(
                     "Created FetchContent node without Declare info: %s", project_name
                 )

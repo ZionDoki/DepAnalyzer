@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
-from base.base import normalize_node_id
+from core.identifiers import normalize_node_id
 from parsers.cpp.cmake.commands.base import CommandHandler
 from parsers.cpp.cmake.tokens import clean_token, CMAKE_VAR_PATTERN
 from parsers.cpp.cmake.variables import CMakeVariableResolver
-from utils.graph import GraphManager
+from graph.manager import GraphManager
 
 
 class LinkingCommandHandler(CommandHandler):
@@ -81,14 +81,14 @@ class LinkingCommandHandler(CommandHandler):
                 else:
                     target_id = normalize_node_id(file_path, self.repo_root, resolved_lib)
 
-            e = shared_graph.create_edge(
+            shared_graph.add_edge(
                 source_id,
                 target_id,
+                edge_kind="link_libraries",
                 parser_name=self.parser_name,
-                label="link_libraries",
-                kind="link_libraries",
+                confidence=1.0,
+                over_approx=False,
             )
-            shared_graph.add_edge(e)
             i += 1
 
         return True

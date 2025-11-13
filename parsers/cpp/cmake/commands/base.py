@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import List, Optional
 
-from utils.graph import GraphManager
+from graph.manager import GraphManager
 from parsers.cpp.cmake.variables import CMakeVariableResolver
 
 

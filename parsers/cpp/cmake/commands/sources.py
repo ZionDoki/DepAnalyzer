@@ -10,11 +10,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
-from base.base import normalize_node_id
+from core.identifiers import normalize_node_id
 from parsers.cpp.cmake.commands.base import CommandHandler
 from parsers.cpp.cmake.tokens import clean_token, CMAKE_VAR_PATTERN
 from parsers.cpp.cmake.variables import CMakeVariableResolver
-from utils.graph import GraphManager
+from graph.manager import GraphManager
 
 
 class SourcesCommandHandler(CommandHandler):
@@ -98,15 +98,19 @@ class SourcesCommandHandler(CommandHandler):
                         var_expr = m.group(0)
                         source_id = source_id.replace(var_expr, variable_resolver.resolve(var_expr))
 
-                src_v = shared_graph.create_vertex(source_id, parser_name=self.parser_name, type="code", id=source_id)
-                shared_graph.add_node(src_v)
-                e = shared_graph.create_edge(
+                shared_graph.add_node(
+                    source_id,
+                    node_type="code",
+                    parser_name=self.parser_name,
+                    id=source_id,
+                    confidence=1.0,
+                )
+                shared_graph.add_edge(
                     target_id,
                     source_id,
+                    edge_kind="sources",
                     parser_name=self.parser_name,
-                    label="sources",
-                    kind="sources",
                     source_scope=None,
+                    confidence=1.0,
                 )
-                shared_graph.add_edge(e)
         return True

@@ -159,7 +159,7 @@ class Transaction:
             logger.info("Transaction completed in %.2fs", elapsed)
 
             # Import here to avoid circular dependency
-            from utils.graph import GraphManager
+            from graph.manager import GraphManager
 
             # Return graph manager (will be properly initialized in later implementation)
             if not self._graph_manager:
