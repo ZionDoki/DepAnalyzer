@@ -5,15 +5,6 @@ description = "Dependency analyzer tool"
 authors = ["Zihao <zhangzihao2025@lzu.edu.cn> Shufei <2337739735@qq.com>"]
 readme = "README.md"
 license = "MIT"
-packages = [
-    { include = "app" },
-    { include = "base" },
-    { include = "core" },
-    { include = "dependencies" },
-    { include = "parsers" },
-    { include = "tasks" },
-    { include = "utils" },
-]
 
 [tool.poetry.dependencies]
 python = ">=3.12,<=3.14"
@@ -21,7 +12,7 @@ tree-sitter = "*"
 tree-sitter-typescript = "*"
 tree-sitter-c = "*"
 tree-sitter-cpp = "^0.23.4"
-lark = "*"
+tree-sitter-cmake = {git = "https://github.com/uyha/tree-sitter-cmake.git"}
 networkx = "^3.2.1"
 toml = "^0.10.2"
 rich = "^14.0.0"
