@@ -6,6 +6,7 @@ execution, avoiding recursion.
 """
 
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -102,7 +103,9 @@ class Worker:
         self._lock = threading.RLock()
         self._executor: Optional[ThreadPoolExecutor] = None
 
-        logger.info("Worker initialized with %d max workers", max_workers)
+        logger.info(
+            "[PID %d] Worker initialized with %d max workers", os.getpid(), max_workers
+        )
 
     def enqueue(self, task: Task) -> bool:
         """Add task to queue if not already seen.
@@ -153,12 +156,17 @@ class Worker:
             TaskResult: Execution result.
         """
         start_time = time.time()
-        logger.info("Executing task: %s", task.task_id)
+        logger.info("[PID %d] Executing task: %s", os.getpid(), task.task_id)
 
         try:
             result = task.func()
             execution_time = time.time() - start_time
-            logger.info("Task %s completed in %.2fs", task.task_id, execution_time)
+            logger.info(
+                "[PID %d] Task %s completed in %.2fs",
+                os.getpid(),
+                task.task_id,
+                execution_time,
+            )
             return TaskResult(
                 task_id=task.task_id,
                 success=True,
@@ -167,7 +175,7 @@ class Worker:
             )
         except Exception as e:
             execution_time = time.time() - start_time
-            logger.error("Task %s failed: %s", task.task_id, e)
+            logger.error("[PID %d] Task %s failed: %s", os.getpid(), task.task_id, e)
             return TaskResult(
                 task_id=task.task_id,
                 success=False,
@@ -181,7 +189,9 @@ class Worker:
         Returns:
             Dict[str, TaskResult]: Results for all executed tasks.
         """
-        logger.info("Starting task execution with %d tasks", len(self._queue))
+        logger.info(
+            "[PID %d] Starting task execution with %d tasks", os.getpid(), len(self._queue)
+        )
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             self._executor = executor
@@ -197,7 +207,9 @@ class Worker:
 
                     future = executor.submit(self._execute_task, task)
                     futures[future] = task.task_id
-                    logger.debug("Submitted task %s for execution", task.task_id)
+                    logger.debug(
+                        "[PID %d] Submitted task %s for execution", os.getpid(), task.task_id
+                    )
 
                 # Wait for at least one task to complete
                 if futures:
@@ -221,7 +233,9 @@ class Worker:
                                 with self._lock:
                                     self._results[task_id] = result
                             except Exception as e:
-                                logger.error("Task %s failed: %s", task_id, e)
+                                logger.error(
+                                    "[PID %d] Task %s failed: %s", os.getpid(), task_id, e
+                                )
                                 with self._lock:
                                     self._results[task_id] = TaskResult(
                                         task_id=task_id,
@@ -236,7 +250,12 @@ class Worker:
 
         successful = sum(1 for r in self._results.values() if r.success)
         failed = len(self._results) - successful
-        logger.info("Task execution completed: %d successful, %d failed", successful, failed)
+        logger.info(
+            "[PID %d] Task execution completed: %d successful, %d failed",
+            os.getpid(),
+            successful,
+            failed,
+        )
 
         return self._results
 

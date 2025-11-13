@@ -4,6 +4,7 @@ import logging
 import time
 from pathlib import Path
 
+from depanalyzer.runtime.coordinator import TransactionCoordinator
 from depanalyzer.runtime.transaction import Transaction
 
 logger = logging.getLogger("depanalyzer.cli.scan")
@@ -27,31 +28,63 @@ def scan_command(args) -> int:
     start_time = time.time()
 
     try:
-        # Create and run transaction
+        # Create coordinator with process pool
+        coordinator = TransactionCoordinator.get_instance()
+
+        # Create and submit transaction to process pool
         transaction = Transaction(
             source=args.source,
             max_workers=args.workers,
             max_dependency_depth=args.max_depth,
         )
 
-        output_path = Path(args.output)
-        graph_manager = transaction.run(output_path=output_path)
+        logger.info("Submitting transaction %s to process pool", transaction.transaction_id)
+        future = coordinator.submit(transaction)
 
-        # Save graph
-        format_ext = output_path.suffix.lstrip(".")
-        if format_ext not in ["json", "gml", "dot"]:
-            format_ext = "json"
+        # Wait for transaction to complete
+        logger.info("Waiting for transaction to complete...")
+        result = future.result()
 
-        graph_manager.save(output_path, format=format_ext)
+        if not result.success:
+            logger.error("Transaction failed: %s", result.error)
+            return 1
 
         elapsed = time.time() - start_time
         logger.info("Scan completed in %.2fs", elapsed)
-        logger.info("Graph: %d nodes, %d edges",
-                    graph_manager.node_count(), graph_manager.edge_count())
-        logger.info("Output: %s", output_path)
+        logger.info(
+            "Graph: %d nodes, %d edges (graph_id: %s)",
+            result.node_count,
+            result.edge_count,
+            result.graph_id,
+        )
+
+        # Get graph from registry for export
+        from depanalyzer.graph.registry import GraphRegistry
+
+        registry = GraphRegistry()
+        cache_path = registry.get_cache_path(result.graph_id)
+
+        if cache_path:
+            logger.info("Graph cached at: %s", cache_path)
+
+            # TODO: Implement export from cache
+            output_path = Path(args.output)
+            logger.info("Output: %s", output_path)
+            logger.info("Export functionality to be implemented")
+        else:
+            logger.warning("Graph not found in registry: %s", result.graph_id)
+
+        # Shutdown coordinator
+        coordinator.shutdown()
 
         return 0
 
     except Exception as e:
         logger.error("Scan failed: %s", e, exc_info=True)
         return 1
+    finally:
+        # Ensure cleanup
+        try:
+            TransactionCoordinator.get_instance().shutdown(wait=False)
+        except:
+            pass

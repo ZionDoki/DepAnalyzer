@@ -1,181 +1,156 @@
-"""ArkTS/HVigor code parser using tree-sitter for dependency extraction."""
+"""ArkTS/HVigor code parser using BaseCodeParser interface.
+
+Extracts import dependencies from ArkTS/TypeScript source files using tree-sitter.
+Designed for process-pool execution.
+"""
 
 import logging
-import traceback
 from pathlib import Path
-from typing import Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
-from tree_sitter import Language, Parser, Query, QueryCursor
+from depanalyzer.parsers.base import BaseCodeParser
 
-# TODO: This parser uses old architecture and needs migration
-# Temporarily using a compatibility shim since base.base was removed
-from parsers.base import BaseParser as BaseCodeParser
-from core.identifiers import normalize_node_id
-from core.schema import EdgeKind, NodeType, edge_attrs
-from core.identifiers import make_external_id
-from graph.manager import GraphManager
+logger = logging.getLogger("depanalyzer.parsers.hvigor.code_parser")
 
-logger = logging.getLogger("depanalyzer.parsers.hvigor.code")
-
-# --- Tree-sitter Language Setup ---
+# Try to import tree-sitter TypeScript bindings
+_TREE_SITTER_AVAILABLE = True
 try:
     import tree_sitter_typescript as tst
+    from tree_sitter import Language, Parser, Query, QueryCursor
 
     TS_LANGUAGE = Language(tst.language_typescript())
-except (ImportError, OSError, TypeError) as e:
-    logger.error("Could not load tree-sitter-typescript language: %s", e)
+except (ImportError, OSError, TypeError) as err:
+    logger.debug("tree-sitter TypeScript import failed: %s", err)
+    _TREE_SITTER_AVAILABLE = False
     TS_LANGUAGE = None
 
+# Tree-sitter query for import/export statements
+IMPORT_QUERY = """
+    (import_statement source: (string) @path)
+    (export_statement source: (string) @path)
+"""
 
-class CodeParser(BaseCodeParser):
-    """ArkTS/HVigor code parser that extracts import relationships.
 
-    Parses ArkTS/TypeScript files using tree-sitter and records code nodes and
-    import edges in the shared dependency graph.
+class HvigorCodeParser(BaseCodeParser):
+    """ArkTS/HVigor code parser for extracting import dependencies.
+
+    Pure function implementation suitable for process pool execution.
+    Uses tree-sitter for TypeScript/ArkTS parsing.
     """
 
-    NAME = "hvigor"
-    CODE_GLOBS = ["**/*.ets", "**/*.ts"]
+    NAME = "hvigor_code"
+    ECOSYSTEM = "hvigor"
+    CODE_GLOBS = ["**/*.ets", "**/*.ts", "**/*.js"]
 
-    def __init__(self, repo_root: str, shared_graph: GraphManager):
-        """Initialize the ArkTS/HVigor code parser.
+    def parse_file(self, file_path: Path) -> Dict[str, Any]:
+        """Parse an ArkTS/TypeScript file to extract imports.
 
-        Args:
-            repo_root: Repository root path.
-            shared_graph: Shared graph manager instance.
-
-        Returns:
-            None.
-        """
-        super().__init__(repo_root, shared_graph)
-        if not TS_LANGUAGE:
-            raise RuntimeError(
-                "ArkTS CodeParser cannot be initialized: "
-                "tree-sitter language failed to load."
-            )
-
-        query_string = """
-            (import_statement source: (string) @path)
-            (export_statement source: (string) @path)
-        """
-        self.dependency_query = Query(TS_LANGUAGE, query_string)
-
-    def parse_file(self, file_path: Path, shared_graph: GraphManager) -> None:
-        """Parse a source file and add code nodes and import edges.
+        This is a pure function that can safely execute in worker processes.
 
         Args:
-            file_path: Path to the source file to parse.
-            shared_graph: Graph to update with nodes and import edges.
+            file_path: Path to ArkTS/TypeScript source file.
 
         Returns:
-            None. The method updates the graph in place.
+            Dict[str, Any]: Parse result with structure:
+                {
+                    "file": str,
+                    "imports": List[str],  # Resolved import paths
+                    "unresolved": List[str],  # Unresolved import specifiers
+                    "root": str,  # "tree-sitter"
+                }
         """
-        source_id = normalize_node_id(file_path, self.repo_root)
+        result = {"file": str(file_path)}
+
+        if not _TREE_SITTER_AVAILABLE or TS_LANGUAGE is None:
+            return {
+                **result,
+                "error": "tree-sitter TypeScript language not available"
+            }
 
         try:
-            with open(file_path, "rb") as f:
-                content = f.read()
+            content = file_path.read_bytes()
+        except OSError as exc:
+            logger.warning("Failed reading %s: %s", file_path, exc)
+            return {**result, "error": str(exc)}
 
+        try:
+            # Parse with tree-sitter
             ts_parser = Parser(TS_LANGUAGE)
             tree = ts_parser.parse(content)
 
-            cursor = QueryCursor(self.dependency_query)
+            # Query for import/export statements
+            query = Query(TS_LANGUAGE, IMPORT_QUERY)
+            cursor = QueryCursor(query)
             capture_dict = cursor.captures(tree.root_node)
 
-            dependencies: Set[str] = set()
-            unresolved: Set[str] = set()
+            import_specifiers: Set[str] = set()
+
+            # Extract import specifiers
             if "path" in capture_dict:
                 for node in capture_dict["path"]:
                     dep_str = node.text.decode("utf8").strip("\"'")
-                    if dep_str.startswith("@ohos"):
-                        continue
-                    resolved_path = self._resolve_dependency(file_path, dep_str)
-                    if resolved_path and resolved_path.is_file():
-                        dep_id = normalize_node_id(resolved_path, self.repo_root)
-                        dependencies.add(dep_id)
-                    else:
-                        # Create a conservative placeholder for unresolved imports
-                        placeholder_id = make_external_id(dep_str)
-                        unresolved.add(placeholder_id)
+                    # Skip @ohos system imports
+                    if not dep_str.startswith("@ohos"):
+                        import_specifiers.add(dep_str)
 
-            with self.graph_lock:
-                shared_graph.add_node(
-                    source_id,
-                    node_type=NodeType.CODE,
-                    id=source_id,
-                    src_path=str(file_path.resolve()),
-                    parser_name=self.NAME,
-                    confidence=1.0,
-                )
+            # Resolve imports to file paths
+            resolved_imports: List[str] = []
+            unresolved_imports: List[str] = []
 
-                for dep_id in dependencies:
-                    # Derive path from ID to fill src_path when possible
-                    dep_path = dep_id.replace("//", "")
-                    if ":" not in dep_path:  # Regular file path
-                        dep_abs_path = Path(self.repo_root) / dep_path
-                        shared_graph.add_node(
-                            dep_id,
-                            node_type=NodeType.CODE,
-                            id=dep_id,
-                            src_path=str(dep_abs_path.resolve()),
-                            parser_name=self.NAME,
-                            confidence=1.0,
-                        )
-                        attrs = edge_attrs(EdgeKind.IMPORT, self.NAME)
-                        shared_graph.add_edge(
-                            source_id,
-                            dep_id,
-                            edge_kind=attrs.get("kind", EdgeKind.IMPORT),
-                            **{k: v for k, v in attrs.items() if k != "kind"},
-                        )
+            for dep_str in import_specifiers:
+                resolved_path = self._resolve_import(file_path, dep_str)
+                if resolved_path and resolved_path.is_file():
+                    resolved_imports.append(str(resolved_path))
+                else:
+                    unresolved_imports.append(dep_str)
 
-                # Add unresolved placeholders with external origin and low confidence
-                for dep_id in unresolved:
-                    shared_graph.add_node(
-                        dep_id,
-                        node_type=NodeType.CODE,
-                        id=dep_id,
-                        src_path="N/A",
-                        parser_name=self.NAME,
-                        origin="external",
-                        provenance="import_unresolved",
-                        confidence=0.3,
-                    )
-                    attrs = edge_attrs(EdgeKind.IMPORT, self.NAME)
-                    shared_graph.add_edge(
-                        source_id,
-                        dep_id,
-                        edge_kind=attrs.get("kind", EdgeKind.IMPORT),
-                        **{k: v for k, v in attrs.items() if k != "kind"},
-                    )
+            result["imports"] = resolved_imports
+            result["unresolved"] = unresolved_imports
+            result["root"] = "tree-sitter"
 
-        except (OSError, IOError, TypeError, ValueError) as e:
-            error_msg = (
-                f"Error parsing file {file_path}: {str(e)}\n{traceback.format_exc()}"
+            logger.debug(
+                "Parsed %s: %d resolved imports, %d unresolved",
+                file_path.name,
+                len(resolved_imports),
+                len(unresolved_imports)
             )
-            logger.error("%s", error_msg)
 
-    def _resolve_dependency(self, source_file: Path, dep_str: str) -> Optional[Path]:
-        """Resolves a dependency string to an absolute file path."""
-        project_root = Path(self.repo_root)
+            return result
 
-        if dep_str.startswith(("./", "../")):
-            resolved = (source_file.parent / dep_str).resolve()
-            for ext in [".ets", ".ts", ".js"]:
-                if (resolved.with_suffix(ext)).is_file():
-                    return resolved.with_suffix(ext)
-            if resolved.is_dir():
-                for ext in [".ets", ".ts", ".js"]:
-                    if (resolved / f"index{ext}").is_file():
-                        return resolved / f"index{ext}"
-            return None
+        except (TypeError, ValueError, RuntimeError) as exc:
+            logger.error("tree-sitter parse failed for %s: %s", file_path, exc)
+            return {**result, "error": str(exc)}
+
+    def _resolve_import(self, source_file: Path, import_spec: str) -> Optional[Path]:
+        """Resolve an import specifier to an absolute file path.
+
+        Args:
+            source_file: Path to the source file containing the import.
+            import_spec: Import specifier string (e.g., "./foo", "../bar").
+
+        Returns:
+            Optional[Path]: Resolved absolute path, or None if not found.
+        """
+        # Relative imports
+        if import_spec.startswith(("./", "../")):
+            base_path = (source_file.parent / import_spec).resolve()
         else:
-            possible_path = project_root / dep_str
+            # Absolute/module imports (resolve from project root)
+            # Note: In process pool, we don't have access to repo_root
+            # So we resolve relative to source file's parent as best effort
+            base_path = source_file.parent / import_spec
+
+        # Try with common extensions
+        for ext in [".ets", ".ts", ".js"]:
+            candidate = base_path.with_suffix(ext)
+            if candidate.is_file():
+                return candidate
+
+        # Try as directory with index file
+        if base_path.is_dir():
             for ext in [".ets", ".ts", ".js"]:
-                if (possible_path.with_suffix(ext)).is_file():
-                    return possible_path.with_suffix(ext)
-            if possible_path.is_dir():
-                for ext in [".ets", ".ts", ".js"]:
-                    if (possible_path / f"index{ext}").is_file():
-                        return possible_path / f"index{ext}"
+                index_file = base_path / f"index{ext}"
+                if index_file.is_file():
+                    return index_file
+
         return None

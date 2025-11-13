@@ -1,15 +1,19 @@
-"""Base detector and parser interfaces for the new architecture.
+"""Base detector, parser, and dependency fetcher interfaces for the new architecture.
 
-Following AGENTS.md design: parsers split into detector (嗅探) and parser (解析) phases.
+Following AGENTS.md design: each ecosystem must implement three interfaces:
+1. Detector - Lightweight scanning to identify parsing targets
+2. Parser - Detailed parsing and graph construction
+3. DepFetcher - Dependency fetching logic specific to the ecosystem
 """
 
 import logging
+import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
-from graph.manager import GraphManager
-from runtime.eventbus import Event, EventBus
+from depanalyzer.graph.manager import GraphManager
+from depanalyzer.runtime.eventbus import Event, EventBus
 
 logger = logging.getLogger("depanalyzer.parsers.base")
 
@@ -22,6 +26,7 @@ class BaseDetector(ABC):
     """
 
     NAME: str = "base"
+    ECOSYSTEM: str = "base"  # Ecosystem identifier (cpp, hvigor, npm, etc.)
 
     def __init__(self, workspace_root: Path, eventbus: EventBus) -> None:
         """Initialize detector.
@@ -32,7 +37,7 @@ class BaseDetector(ABC):
         """
         self.workspace_root = workspace_root
         self.eventbus = eventbus
-        logger.debug("Detector %s initialized", self.NAME)
+        logger.debug("Detector %s (%s) initialized", self.NAME, self.ECOSYSTEM)
 
     @abstractmethod
     def detect(self) -> List[Path]:
@@ -60,6 +65,7 @@ class BaseParser(ABC):
     """
 
     NAME: str = "base"
+    ECOSYSTEM: str = "base"  # Ecosystem identifier
 
     def __init__(
         self,
@@ -77,7 +83,7 @@ class BaseParser(ABC):
         self.workspace_root = workspace_root
         self.graph_manager = graph_manager
         self.eventbus = eventbus
-        logger.debug("Parser %s initialized", self.NAME)
+        logger.debug("Parser %s (%s) initialized", self.NAME, self.ECOSYSTEM)
 
     @abstractmethod
     def parse(self, target_path: Path) -> None:
@@ -118,3 +124,300 @@ class BaseParser(ABC):
             **attributes: Additional attributes.
         """
         self.graph_manager.add_edge(source, target, edge_kind, **attributes)
+
+    def discover_code_files(self) -> List[Path]:
+        """Discover code files that need to be parsed.
+
+        Config parsers can override this to discover source files based on
+        configuration content (e.g., from CMakeLists.txt, package.json).
+
+        Returns:
+            List[Path]: List of source code files to parse. Empty list means no code parsing needed.
+        """
+        return []
+
+
+class BaseCodeParser(ABC):
+    """Base class for code file parsers.
+
+    Code parsers extract fine-grained dependencies from source code files
+    (e.g., #include in C++, import in TypeScript). They are executed in
+    a global process pool for maximum parallelism.
+
+    Important: parse_file() must be a pure function (stateless) that can
+    safely execute in worker processes.
+    """
+
+    NAME: str = "base_code"
+    ECOSYSTEM: str = "base"
+    CODE_GLOBS: List[str] = []  # e.g., ["**/*.c", "**/*.cpp"]
+
+    @abstractmethod
+    def parse_file(self, file_path: Path) -> Dict[str, Any]:
+        """Parse a single source code file.
+
+        This method MUST be a pure function (no side effects) that can
+        safely execute in worker processes. Do not access instance state
+        that requires synchronization.
+
+        Args:
+            file_path: Path to source code file.
+
+        Returns:
+            Dict[str, Any]: Parse result with structure:
+                {
+                    "file": str,
+                    "includes": List[Path],  # or "imports"
+                    "exports": Optional[List[str]],
+                    ...
+                }
+        """
+        raise NotImplementedError
+
+    def can_handle_file(self, file_path: Path) -> bool:
+        """Check if this parser can handle the given file.
+
+        Args:
+            file_path: Path to file to check.
+
+        Returns:
+            bool: True if file extension matches CODE_GLOBS.
+        """
+        return any(file_path.match(glob) for glob in self.CODE_GLOBS)
+
+
+class DependencySpec:
+    """Specification for a dependency to be fetched.
+
+    This is a simplified version that each ecosystem's DepFetcher will handle.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        version: Optional[str] = None,
+        source_url: Optional[str] = None,
+        ecosystem: Optional[str] = None,
+        metadata: Optional[Dict] = None,
+    ) -> None:
+        """Initialize dependency specification.
+
+        Args:
+            name: Dependency name.
+            version: Version specification (semver, git tag, etc.).
+            source_url: Source URL (git URL, registry URL, etc.).
+            ecosystem: Target ecosystem identifier.
+            metadata: Additional metadata specific to the ecosystem.
+        """
+        self.name = name
+        self.version = version
+        self.source_url = source_url
+        self.ecosystem = ecosystem
+        self.metadata = metadata or {}
+
+    def __repr__(self) -> str:
+        return f"DependencySpec(name={self.name}, version={self.version}, ecosystem={self.ecosystem})"
+
+
+class BaseDepFetcher(ABC):
+    """Base class for dependency fetchers.
+
+    Each ecosystem implements its own DepFetcher to handle dependency
+    downloading/cloning logic specific to that ecosystem.
+
+    Provides git clone as a common utility method that can be reused.
+    """
+
+    NAME: str = "base"
+    ECOSYSTEM: str = "base"  # Ecosystem identifier
+
+    def __init__(self, cache_root: Path) -> None:
+        """Initialize dependency fetcher.
+
+        Args:
+            cache_root: Root directory for dependency cache.
+        """
+        self.cache_root = cache_root
+        self.cache_root.mkdir(parents=True, exist_ok=True)
+        logger.debug("DepFetcher %s (%s) initialized", self.NAME, self.ECOSYSTEM)
+
+    @abstractmethod
+    def fetch(self, dep_spec: DependencySpec) -> Optional[Path]:
+        """Fetch a dependency to local cache.
+
+        Args:
+            dep_spec: Dependency specification.
+
+        Returns:
+            Optional[Path]: Local path to fetched dependency, None if failed.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def can_handle(self, dep_spec: DependencySpec) -> bool:
+        """Check if this fetcher can handle the given dependency.
+
+        Args:
+            dep_spec: Dependency specification.
+
+        Returns:
+            bool: True if this fetcher can handle the dependency.
+        """
+        raise NotImplementedError
+
+    def get_cache_dir(self, dep_spec: DependencySpec) -> Path:
+        """Get cache directory for a specific dependency.
+
+        Args:
+            dep_spec: Dependency specification.
+
+        Returns:
+            Path: Cache directory path.
+        """
+        # Default: ecosystem/name/version
+        parts = [self.ECOSYSTEM, dep_spec.name]
+        if dep_spec.version:
+            parts.append(dep_spec.version)
+        return self.cache_root / Path(*parts)
+
+    def git_clone(
+        self,
+        url: str,
+        target_dir: Path,
+        branch: Optional[str] = None,
+        tag: Optional[str] = None,
+        depth: int = 1,
+        force: bool = False,
+    ) -> bool:
+        """Clone a git repository (common utility method).
+
+        Args:
+            url: Git repository URL.
+            target_dir: Target directory for cloning.
+            branch: Specific branch to clone (optional).
+            tag: Specific tag to clone (optional).
+            depth: Clone depth (default: 1 for shallow clone).
+            force: Force re-clone if directory exists.
+
+        Returns:
+            bool: True if clone succeeded, False otherwise.
+        """
+        # Check if already exists
+        if target_dir.exists():
+            if force:
+                logger.info("Force re-cloning, removing existing directory: %s", target_dir)
+                import shutil
+                shutil.rmtree(target_dir)
+            else:
+                logger.info("Repository already exists at: %s", target_dir)
+                return True
+
+        # Ensure parent directory exists
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        # Build git clone command
+        cmd = ["git", "clone", "--depth", str(depth)]
+
+        if branch:
+            cmd.extend(["--branch", branch])
+        elif tag:
+            cmd.extend(["--branch", tag])
+
+        cmd.extend([url, str(target_dir)])
+
+        logger.info("Cloning git repository: %s", url)
+        logger.debug("Git clone command: %s", " ".join(cmd))
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout
+                check=True,
+            )
+            logger.info("Successfully cloned to: %s", target_dir)
+            return True
+
+        except subprocess.TimeoutExpired:
+            logger.error("Git clone timed out after 5 minutes: %s", url)
+            return False
+
+        except subprocess.CalledProcessError as e:
+            logger.error("Git clone failed: %s", e.stderr)
+            return False
+
+        except Exception as e:
+            logger.error("Unexpected error during git clone: %s", e)
+            return False
+
+    def download_file(self, url: str, target_path: Path) -> bool:
+        """Download a file from URL (common utility method).
+
+        Args:
+            url: File URL.
+            target_path: Target file path.
+
+        Returns:
+            bool: True if download succeeded, False otherwise.
+        """
+        try:
+            import urllib.request
+
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+
+            logger.info("Downloading file: %s", url)
+            urllib.request.urlretrieve(url, target_path)
+            logger.info("Downloaded to: %s", target_path)
+            return True
+
+        except Exception as e:
+            logger.error("Failed to download file %s: %s", url, e)
+            return False
+
+    def extract_archive(self, archive_path: Path, target_dir: Path) -> bool:
+        """Extract archive file (common utility method).
+
+        Supports: .zip, .tar.gz, .tar.bz2, .tar.xz
+
+        Args:
+            archive_path: Path to archive file.
+            target_dir: Target directory for extraction.
+
+        Returns:
+            bool: True if extraction succeeded, False otherwise.
+        """
+        try:
+            import shutil
+
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            logger.info("Extracting archive: %s", archive_path)
+
+            if archive_path.suffix == ".zip":
+                import zipfile
+                with zipfile.ZipFile(archive_path, "r") as zip_ref:
+                    zip_ref.extractall(target_dir)
+            elif archive_path.name.endswith((".tar.gz", ".tgz")):
+                import tarfile
+                with tarfile.open(archive_path, "r:gz") as tar_ref:
+                    tar_ref.extractall(target_dir)
+            elif archive_path.name.endswith(".tar.bz2"):
+                import tarfile
+                with tarfile.open(archive_path, "r:bz2") as tar_ref:
+                    tar_ref.extractall(target_dir)
+            elif archive_path.name.endswith(".tar.xz"):
+                import tarfile
+                with tarfile.open(archive_path, "r:xz") as tar_ref:
+                    tar_ref.extractall(target_dir)
+            else:
+                logger.error("Unsupported archive format: %s", archive_path.suffix)
+                return False
+
+            logger.info("Extracted to: %s", target_dir)
+            return True
+
+        except Exception as e:
+            logger.error("Failed to extract archive %s: %s", archive_path, e)
+            return False
+
