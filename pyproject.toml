@@ -1,0 +1,39 @@
+[tool.poetry]
+name = "depanalyzer"
+version = "0.1.0"
+description = "Dependency analyzer tool"
+authors = ["Zihao <zhangzihao2025@lzu.edu.cn> Shufei <2337739735@qq.com>"]
+readme = "README.md"
+license = "MIT"
+packages = [
+    { include = "app" },
+    { include = "base" },
+    { include = "core" },
+    { include = "dependencies" },
+    { include = "parsers" },
+    { include = "tasks" },
+    { include = "utils" },
+]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<=3.14"
+tree-sitter = "*"
+tree-sitter-typescript = "*"
+tree-sitter-c = "*"
+tree-sitter-cpp = "^0.23.4"
+lark = "*"
+networkx = "^3.2.1"
+toml = "^0.10.2"
+rich = "^14.0.0"
+textual = "^3.0.1"
+platformdirs = "^4.0.0"
+requests = "^2.31.0"
+json5 = "^0.12.0"
+pydantic = "^2.11.7"
+
+[tool.poetry.scripts]
+depanalyzer = "app.run:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
