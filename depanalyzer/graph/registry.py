@@ -10,6 +10,7 @@ import json
 import logging
 import multiprocessing
 import os
+from multiprocessing.managers import SyncManager
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -26,8 +27,8 @@ class GraphRegistry:
     """
 
     _instance: Optional["GraphRegistry"] = None
-    _manager: Optional[multiprocessing.managers.SyncManager] = None
-    _lock: Optional[multiprocessing.Lock] = None
+    _manager: Optional[SyncManager] = None
+    _lock: Optional[Any] = None  # multiprocessing.Lock type
     _initialized: bool = False
 
     def __new__(cls) -> "GraphRegistry":
