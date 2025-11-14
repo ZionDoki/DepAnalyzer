@@ -78,15 +78,17 @@ class CMakeGraphBuilder:
         node_type = data["node_type"]
 
         # Create target node
+        # Extract confidence for add_node position parameter
+        confidence = data.get("confidence", 1.0)
+
+        # Build attributes dict (excluding node_type and confidence which are position params)
         node_attrs = {
-            "node_type": node_type,
             "parser_name": event.source,
             "src_path": data.get("src_path"),
             "id": target_id,
             "origin": data.get("origin", "in_repo"),
             "provenance": data.get("provenance", "cmake_add_target"),
             "declared_via": data.get("declared_via"),
-            "confidence": data.get("confidence", 1.0),
         }
 
         # Add optional attributes
@@ -97,7 +99,8 @@ class CMakeGraphBuilder:
         if data.get("alias_of"):
             node_attrs["alias_of"] = data["alias_of"]
 
-        self.graph_manager.add_node(target_id, **node_attrs)
+        # Call add_node with node_type as second position parameter
+        self.graph_manager.add_node(target_id, node_type, confidence=confidence, **node_attrs)
         log.debug("Created target node: %s (type=%s)", target_id, node_type)
 
         # Handle alias edge if present
@@ -190,13 +193,13 @@ class CMakeGraphBuilder:
             source_id = source_data["source_id"]
             node_type = source_data.get("node_type", "code")
 
-            # Create source node
+            # Create source node with node_type as position parameter
             self.graph_manager.add_node(
                 source_id,
-                node_type=node_type,
+                node_type,
+                confidence=confidence,
                 parser_name=event.source,
                 id=source_id,
-                confidence=confidence,
             )
 
             # Create source edge
@@ -268,10 +271,10 @@ class CMakeGraphBuilder:
         if not self.graph_manager.has_node(target_id):
             self.graph_manager.add_node(
                 target_id,
-                node_type="artifact",
+                "artifact",
+                confidence=0.8,
                 parser_name=event.source,
                 id=target_id,
-                confidence=0.8,
             )
 
         # Update include_dirs attribute using the new API
@@ -289,14 +292,16 @@ class CMakeGraphBuilder:
         node_type = data.get("node_type", "external_library")
 
         # Create external library node
+        # Extract confidence for position parameter
+        confidence = data.get("confidence", 1.0)
+
+        # Build attributes dict (excluding node_type and confidence which are position params)
         node_attrs = {
-            "node_type": node_type,
             "parser_name": event.source,
             "id": lib_id,
             "origin": data.get("origin", "external"),
             "provenance": data.get("provenance"),
             "declared_via": data.get("declared_via"),
-            "confidence": data.get("confidence", 1.0),
             "name": data.get("name"),
         }
 
@@ -310,5 +315,6 @@ class CMakeGraphBuilder:
         if data.get("git_tag"):
             node_attrs["git_tag"] = data["git_tag"]
 
-        self.graph_manager.add_node(lib_id, **node_attrs)
+        # Call add_node with node_type as second position parameter
+        self.graph_manager.add_node(lib_id, node_type, confidence=confidence, **node_attrs)
         log.debug("Created external library node: %s", lib_id)
