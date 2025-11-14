@@ -113,6 +113,20 @@ class Workspace:
             raise RuntimeError("Workspace not acquired. Call acquire() first.")
         return self._root_path
 
+    @property
+    def root_path(self) -> Path:
+        """Workspace root path property.
+
+        Returns:
+            Path: Root path.
+
+        Raises:
+            RuntimeError: If workspace not acquired yet.
+        """
+        if self._root_path is None:
+            raise RuntimeError("Workspace not acquired. Call acquire() first.")
+        return self._root_path
+
     def get_signature(self) -> str:
         """Compute stable signature for this workspace.
 
