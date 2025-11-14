@@ -4,8 +4,8 @@ import logging
 from pathlib import Path
 from typing import List
 
-from parsers.base import BaseDetector
-from runtime.eventbus import Event, EventType
+from depanalyzer.parsers.base import BaseDetector
+from depanalyzer.runtime.eventbus import Event, EventType
 
 logger = logging.getLogger("depanalyzer.parsers.cpp.cmake.detector")
 
