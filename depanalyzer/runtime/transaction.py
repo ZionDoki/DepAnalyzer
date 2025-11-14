@@ -68,6 +68,7 @@ class Transaction:
 
         # Will be initialized during run
         self._graph_manager = None
+        self._dependency_collector = None
         self._current_phase = None
         self._start_time = 0.0
 
@@ -89,6 +90,7 @@ class Transaction:
         state["worker"] = None
         state["eventbus"] = None
         state["_graph_manager"] = None
+        state["_dependency_collector"] = None
         return state
 
     def __setstate__(self, state: dict) -> None:
@@ -226,6 +228,13 @@ class Transaction:
             )
             logger.info("Initialized GraphManager with graph_id: %s, root_path: %s",
                         self.graph_id, self.workspace.root_path)
+
+        # Initialize dependency collector to collect DEPENDENCY_DISCOVERED events
+        if self._dependency_collector is None:
+            from depanalyzer.hooks.dependency_collector import DependencyCollector
+            eventbus = self._ensure_eventbus()
+            self._dependency_collector = DependencyCollector(eventbus)
+            logger.info("Initialized DependencyCollector")
 
         if not hasattr(self, '_detected_targets') or not self._detected_targets:
             logger.info("No targets detected, skipping parse phase")
@@ -385,7 +394,7 @@ class Transaction:
     def _phase_resolve_deps(self) -> None:
         """Phase D: Unified dependency resolution.
 
-        Discovers dependencies and spawns child transactions in parallel.
+        Discovers dependencies, fetches them, and spawns child transactions in parallel.
         """
         logger.info("=== Phase: %s ===", LifecyclePhase.RESOLVE_DEPS)
         self._current_phase = LifecyclePhase.RESOLVE_DEPS
@@ -395,14 +404,35 @@ class Transaction:
             logger.info("Max dependency depth reached, skipping dependency resolution")
             return
 
-        # Discover dependencies
-        dependencies = self._discover_dependencies()
+        # Discover dependencies (returns List[DependencySpec])
+        dep_specs = self._discover_dependencies()
 
-        if not dependencies:
+        if not dep_specs:
             logger.info("No dependencies found")
             return
 
-        logger.info("Found %d dependencies to resolve", len(dependencies))
+        logger.info("Found %d dependencies to resolve", len(dep_specs))
+
+        # Resolve dependencies (fetch to local paths)
+        from depanalyzer.runtime.dependency_resolver import resolve_dependencies
+
+        resolved_deps = resolve_dependencies(
+            dep_specs,
+            cache_root=Path(".depanalyzer_cache/deps")
+        )
+
+        # Filter out failed dependencies
+        successful_deps = [dep for dep in resolved_deps if dep["success"]]
+
+        if not successful_deps:
+            logger.warning("No dependencies were successfully fetched")
+            return
+
+        logger.info(
+            "Successfully fetched %d/%d dependencies",
+            len(successful_deps),
+            len(resolved_deps)
+        )
 
         # Import coordinator
         from depanalyzer.runtime.coordinator import TransactionCoordinator
@@ -412,10 +442,10 @@ class Transaction:
 
         # Submit child transactions to process pool
         futures = []
-        for dep in dependencies:
+        for dep in successful_deps:
             logger.info(
                 "Creating child transaction for dependency: %s (parent: %s)",
-                dep.get("name", "unknown"),
+                dep["name"],
                 self.transaction_id,
             )
 
@@ -447,7 +477,7 @@ class Transaction:
                     logger.info(
                         "Child transaction %s completed: %s (%d nodes, %d edges)",
                         child_tx_id,
-                        dep.get("name", "unknown"),
+                        dep["name"],
                         result.node_count,
                         result.edge_count,
                     )
@@ -459,7 +489,7 @@ class Transaction:
                     logger.error(
                         "Child transaction %s failed: %s - %s",
                         child_tx_id,
-                        dep.get("name", "unknown"),
+                        dep["name"],
                         result.error,
                     )
 
@@ -475,43 +505,156 @@ class Transaction:
             failed_count,
         )
 
-    def _discover_dependencies(self) -> List[Dict[str, str]]:
+    def _discover_dependencies(self) -> List["DependencySpec"]:
         """Discover dependencies from the current graph.
 
-        This is a placeholder that should be implemented based on the
-        actual dependency discovery logic.
+        This method collects dependencies from two sources:
+        1. DEPENDENCY_DISCOVERED events collected by DependencyCollector
+        2. external_dep/external_library nodes in the GraphManager
 
         Returns:
-            List[Dict[str, str]]: List of dependency specifications.
-                Each dict should have at minimum: {"name": "...", "source": "..."}
+            List[DependencySpec]: List of dependency specifications.
         """
-        # TODO: Implement actual dependency discovery
-        # This should analyze the parsed code and extract:
-        # - npm/yarn dependencies from package.json
-        # - Maven/Gradle dependencies from pom.xml/build.gradle
-        # - pip dependencies from requirements.txt
-        # - etc.
+        from depanalyzer.parsers.base import DependencySpec
 
-        logger.info("Dependency discovery not yet implemented")
-        return []
+        discovered = []
 
-    def _link_dependency_graph(self, child_graph_id: str, dep_info: Dict[str, str]) -> None:
+        # Method 1: Get dependencies from DependencyCollector (event-driven)
+        if self._dependency_collector:
+            event_deps = self._dependency_collector.get_discovered_dependencies()
+            discovered.extend(event_deps)
+            logger.info("Collected %d dependencies from events", len(event_deps))
+
+        # Method 2: Scan GraphManager for external dependency nodes
+        if self._graph_manager:
+            graph_deps = []
+            for node_id in self._graph_manager.nodes():
+                node_attrs = self._graph_manager.get_node_attributes(node_id)
+                node_type = node_attrs.get("type")
+
+                # Check if node is an external dependency
+                if node_type in ["external_dep", "external_library"]:
+                    # Extract dependency information from node attributes
+                    dep_spec = DependencySpec(
+                        ecosystem=node_attrs.get("ecosystem", "unknown"),
+                        name=node_attrs.get("name", node_id),
+                        version=node_attrs.get("version"),
+                        source_url=node_attrs.get("git_repository") or node_attrs.get("source_url"),
+                    )
+                    graph_deps.append(dep_spec)
+
+            discovered.extend(graph_deps)
+            logger.info("Discovered %d dependencies from graph nodes", len(graph_deps))
+
+        # Deduplicate dependencies by (ecosystem, name, version)
+        unique_deps = {}
+        for dep in discovered:
+            key = (dep.ecosystem, dep.name, dep.version)
+            if key not in unique_deps:
+                unique_deps[key] = dep
+
+        result = list(unique_deps.values())
+        logger.info("Total unique dependencies discovered: %d", len(result))
+        return result
+
+    def _link_dependency_graph(self, child_graph_id: str, dep_info: Dict[str, Any]) -> None:
         """Link a child dependency graph to the current graph.
+
+        This method:
+        1. Creates a Proxy node in the parent graph pointing to the child graph
+        2. Registers the child graph in GraphRegistry (already done in child transaction)
+        3. Records the package-level dependency in GlobalDAG
 
         Args:
             child_graph_id: Graph ID of the child dependency.
-            dep_info: Dependency information dict.
+            dep_info: Dependency information dict containing name, version, ecosystem, etc.
         """
-        # TODO: Implement graph linking logic
-        # This should create edges in the current graph pointing to the child graph
-        # via the GraphRegistry
+        if not self._graph_manager:
+            logger.warning("No graph manager, cannot link dependency graph")
+            return
+
+        dep_name = dep_info.get("name", "unknown")
+        dep_version = dep_info.get("version", "latest")
+        dep_ecosystem = dep_info.get("ecosystem", "unknown")
 
         logger.info(
-            "Linking dependency graph %s to current graph %s (dep: %s)",
+            "Linking dependency graph %s to current graph %s (dep: %s/%s)",
             child_graph_id,
             self.graph_id,
-            dep_info.get("name", "unknown"),
+            dep_name,
+            dep_version,
         )
+
+        try:
+            # 1. Create a Proxy node in parent graph pointing to child graph
+            from depanalyzer.graph.manager import NodeType
+
+            proxy_id = f"dep_graph:{child_graph_id}"
+
+            self._graph_manager.add_node(
+                proxy_id,
+                NodeType.PROXY,
+                child_graph_id=child_graph_id,
+                source_path=dep_info.get("source"),
+                ecosystem=dep_ecosystem,
+                name=dep_name,
+                version=dep_version,
+                origin="external",
+                provenance="third_party_dependency",
+            )
+
+            logger.debug(
+                "Created Proxy node %s for child graph %s",
+                proxy_id,
+                child_graph_id,
+            )
+
+            # Find external library nodes in current graph that match this dependency
+            # and link them to the proxy node
+            for node_id in self._graph_manager.nodes():
+                node_attrs = self._graph_manager.get_node_attributes(node_id)
+                node_type = node_attrs.get("type")
+
+                if node_type in ["external_dep", "external_library"]:
+                    # Check if this external node matches the dependency
+                    node_name = node_attrs.get("name")
+                    if node_name == dep_name:
+                        # Create edge from external node to proxy
+                        self._graph_manager.add_edge(
+                            node_id,
+                            proxy_id,
+                            edge_kind="depends_on",
+                            parser_name="transaction",
+                            confidence=1.0,
+                        )
+                        logger.debug(
+                            "Linked external node %s to proxy %s",
+                            node_id,
+                            proxy_id,
+                        )
+
+            # 2. Record package-level dependency in GlobalDAG
+            from depanalyzer.graph.global_dag import GlobalDAG
+
+            global_dag = GlobalDAG.get_instance()
+            global_dag.add_dependency(
+                parent_graph_id=self.graph_id,
+                child_graph_id=child_graph_id,
+            )
+
+            logger.info(
+                "Recorded package-level dependency in GlobalDAG: %s -> %s",
+                self.graph_id,
+                child_graph_id,
+            )
+
+        except Exception as e:
+            logger.error(
+                "Failed to link dependency graph %s: %s",
+                child_graph_id,
+                e,
+                exc_info=True,
+            )
 
     def _phase_join(self) -> None:
         """Phase E: Hook execution for cross-domain associations.
@@ -562,8 +705,47 @@ class Transaction:
         logger.info("=== Phase: %s ===", LifecyclePhase.ANALYZE)
         self._current_phase = LifecyclePhase.ANALYZE
 
-        # TODO: Implement analysis
-        logger.info("Analysis phase not yet implemented")
+        if not self._graph_manager:
+            logger.warning("GraphManager not initialized, skipping analyze phase")
+            return
+
+        # 1. Derive asset->artifact projection
+        logger.info("Deriving asset-to-artifact projection")
+        try:
+            self._graph_manager.derive_asset_artifact_projection()
+            logger.info("Asset-to-artifact projection completed")
+        except Exception as e:
+            logger.error("Failed to derive asset-artifact projection: %s", e, exc_info=True)
+
+        # 2. Deadcode analysis
+        logger.info("Running deadcode analysis")
+        try:
+            from depanalyzer.analysis.deadcode import DeadcodeAnalyzer
+
+            dc_analyzer = DeadcodeAnalyzer(self._graph_manager)
+            dead_nodes = dc_analyzer.analyze()
+
+            # Store results in graph metadata
+            self._graph_manager.set_metadata("dead_nodes", list(dead_nodes))
+            logger.info("Identified %d dead nodes", len(dead_nodes))
+        except Exception as e:
+            logger.error("Deadcode analysis failed: %s", e, exc_info=True)
+
+        # 3. Linkage type analysis
+        logger.info("Running linkage analysis")
+        try:
+            from depanalyzer.analysis.linkage import LinkageAnalyzer
+
+            linkage_analyzer = LinkageAnalyzer(self._graph_manager)
+            linkage_map = linkage_analyzer.analyze()
+
+            # Store results in graph metadata
+            self._graph_manager.set_metadata("linkage_map", linkage_map)
+            logger.info("Analyzed %d linkage edges", len(linkage_map))
+        except Exception as e:
+            logger.error("Linkage analysis failed: %s", e, exc_info=True)
+
+        logger.info("Analysis phase completed")
 
     def _phase_export(self, output_path: Optional[Path] = None) -> None:
         """Phase G: Export results.
@@ -574,10 +756,56 @@ class Transaction:
         logger.info("=== Phase: %s ===", LifecyclePhase.EXPORT)
         self._current_phase = LifecyclePhase.EXPORT
 
-        # TODO: Implement export
+        if not self._graph_manager:
+            logger.warning("No graph manager to export")
+            return
+
+        # Export to user-specified path if provided
         if output_path:
-            logger.info("Export to: %s", output_path)
-        logger.info("Export phase not yet implemented")
+            try:
+                import json
+                from networkx.readwrite import node_link_data
+
+                # Ensure parent directory exists
+                output_path = Path(output_path)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+
+                # Get the native NetworkX graph
+                native_graph = self._graph_manager._backend.native_graph
+
+                # Convert to node-link format
+                graph_data = node_link_data(native_graph)
+
+                # Add metadata
+                graph_metadata = {
+                    "graph_id": self.graph_id,
+                    "transaction_id": self.transaction_id,
+                    "source": self.source,
+                    "node_count": self._graph_manager.node_count(),
+                    "edge_count": self._graph_manager.edge_count(),
+                    "timestamp": time.time(),
+                }
+
+                # Combine metadata and graph data
+                output_data = {
+                    "metadata": graph_metadata,
+                    "graph": graph_data,
+                }
+
+                # Write to file
+                with open(output_path, "w", encoding="utf-8") as f:
+                    json.dump(output_data, f, indent=2)
+
+                logger.info(
+                    "Graph exported to: %s (%d nodes, %d edges)",
+                    output_path,
+                    self._graph_manager.node_count(),
+                    self._graph_manager.edge_count(),
+                )
+            except Exception as e:
+                logger.error("Failed to export graph to %s: %s", output_path, e)
+
+        logger.info("Export phase completed")
 
     def _flush_graph_to_disk(self) -> Optional[Path]:
         """Serialize graph to disk and return cache path.
@@ -697,6 +925,23 @@ class Transaction:
             cache_path = self._flush_graph_to_disk()
             if cache_path:
                 logger.info("Graph cached at: %s", cache_path)
+
+                # Register graph in GraphRegistry
+                from depanalyzer.graph.registry import GraphRegistry
+
+                registry = GraphRegistry.get_instance()
+                summary = {
+                    "node_count": self._graph_manager.node_count(),
+                    "edge_count": self._graph_manager.edge_count(),
+                    "source": self.source,
+                    "transaction_id": self.transaction_id,
+                }
+                registry.register(
+                    graph_id=self.graph_id,
+                    cache_path=cache_path,
+                    summary=summary,
+                )
+                logger.info("Registered graph %s in GraphRegistry", self.graph_id)
 
             # Build result
             result = TransactionResult(

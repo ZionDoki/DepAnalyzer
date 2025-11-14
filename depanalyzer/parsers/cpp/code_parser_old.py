@@ -12,15 +12,14 @@ import re
 from pathlib import Path
 from typing import List
 
-from parsers.base import BaseParser
-from graph.manager import GraphManager
-from runtime.eventbus import Event, EventType
-from core.identifiers import (
+from depanalyzer.parsers.base import BaseParser
+from depanalyzer.graph.manager import GraphManager, EdgeKind, NodeType
+from depanalyzer.runtime.eventbus import Event, EventType
+from depanalyzer.core.identifiers import (
     make_file_id,
     make_include_placeholder_id,
     make_system_header_id,
 )
-from core.schema import EdgeKind, NodeType
 
 log = logging.getLogger("depanalyzer.parsers.cpp")
 

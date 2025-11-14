@@ -94,8 +94,8 @@ def main() -> int:
         help="Export existing graph to different format",
     )
     export_parser.add_argument(
-        "input",
-        help="Input graph file",
+        "graph_id",
+        help="Graph ID to export (from scan output)",
     )
     export_parser.add_argument(
         "-o",
@@ -106,8 +106,14 @@ def main() -> int:
     export_parser.add_argument(
         "-f",
         "--format",
-        choices=["json", "gml", "dot"],
-        help="Output format (auto-detected if not specified)",
+        choices=["json", "gml", "dot", "asset_artifact"],
+        default="json",
+        help="Output format (default: json, use asset_artifact for asset->artifact mapping)",
+    )
+    export_parser.add_argument(
+        "--with-deps",
+        action="store_true",
+        help="Include dependency graphs in export",
     )
 
     # Query command (placeholder)
