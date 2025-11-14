@@ -70,7 +70,7 @@ class LinkageAnalyzer:
             return "unknown"
 
         # Get target node attributes to infer linkage type
-        target_attrs = self.graph_manager.get_node_attributes(target)
+        target_attrs = self.graph_manager.get_node(target)
         if not target_attrs:
             return "unknown"
 

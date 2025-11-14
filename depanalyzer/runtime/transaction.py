@@ -536,7 +536,7 @@ class Transaction:
         if self._graph_manager:
             graph_deps = []
             for node_id in self._graph_manager.nodes():
-                node_attrs = self._graph_manager.get_node_attributes(node_id)
+                node_attrs = self._graph_manager.get_node(node_id)
                 node_type = node_attrs.get("type")
 
                 # Check if node is an external dependency
@@ -619,7 +619,7 @@ class Transaction:
             # Find external library nodes in current graph that match this dependency
             # and link them to the proxy node
             for node_id in self._graph_manager.nodes():
-                node_attrs = self._graph_manager.get_node_attributes(node_id)
+                node_attrs = self._graph_manager.get_node(node_id)
                 node_type = node_attrs.get("type")
 
                 if node_type in ["external_dep", "external_library"]:
