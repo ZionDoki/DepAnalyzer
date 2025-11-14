@@ -1,0 +1,624 @@
+先把结论说在前面：
+当前这个 commit（包含 `depanalyzer/runtime/*`, `graph/*`, `parsers/*`, `hooks/*` 等）已经把你之前的架构思路基本「骨架化」出来了，但离「可以跑通一次真实混编项目、得到资产→产物映射图」还有一段距离。存在若干**阻塞级别的实现问题**（运行即报错 / 无法产生图），以及一批「骨架已经搭好但尚未接线」的模块。
+
+下面我分三块讲：
+
+1. 逐条对照你的需求，看现在代码做到哪一步。
+2. 指出我认为最严重、必须优先修的实现问题。
+3. 给出一个开发团队可以直接照着做的、分阶段的修改计划（包括如何把多 GraphManager + GraphRegistry + GlobalDAG 接起来）。
+
+---
+
+## 一、按你的需求逐条对照
+
+### 1. 支持各种语言的混编解析
+
+**已有骨架：**
+
+* 有统一的生态注册中心 `EcosystemRegistry`，负责注册 detector / parser / code parser / dep fetcher：
+* 抽象接口已经齐全：
+
+  * `BaseDetector / BaseParser / BaseCodeParser / BaseDepFetcher`，并且 parser 拿到的是 `GraphManager + EventBus`，code parser 是纯函数、跑在 `CodeParserPool` 的进程池里：  
+* CMake 侧已经有一套比较完整的 config parser + command handlers + hook：
+
+  * `depanalyzer/parsers/cpp/config_parser.CMakeParser` 使用 tree-sitter-cmake 和命令处理器，并通过 `CMakeGraphBuilder` hook 走事件驱动建图：  
+* Hvigor 侧也有新的 config parser 草稿，负责解析 build-profile / module / oh-package / oh-package-lock，并注册契约：  
+
+**关键问题：**
+
+* **目前没有任何生态被真正注册进去**：在 repo 内没有找到对 `register_ecosystem()` 或 `EcosystemRegistry.register_*()` 的调用，`parsers/__init__.py` 也是空壳：
+
+  * 这意味着 `Transaction._phase_detect()` 调用 `registry.list_ecosystems()` 时，得到的是空集，于是会直接打印 “No ecosystems registered, skipping detection” 然后跳过整个检测 / 解析阶段：
+* Hvigor 的 `config_parser.py` 仍然在用旧的包结构：
+
+  * `from parsers.base import BaseParser`、`from core.dependency import DependencySpec`、`from runtime.eventbus import Event` 等，而新的抽象都在 `depanalyzer.parsers.base` / `depanalyzer.runtime.eventbus` / `depanalyzer.graph.manager` 下。
+  * 这些模块（`parsers`, `core`, `runtime` 顶层包）在当前 repo 内并不存在，因此这段代码**运行必然 ImportError**。
+
+**小结：**
+多语言混编解析的抽象层设计是对的，但目前处于「接口和文档准备好，具体生态尚未挂上来」的状态。要真正满足需求 1，需要补齐「生态注册 + Hvigor/CMake parser 对接新基类」这一步。
+
+---
+
+### 2. 支持第三方依赖拉取 & 非递归扩展
+
+**已有骨架：**
+
+* 抽象的 `DependencySpec` + `BaseDepFetcher` 已经定义好，并提供了 git clone / 下载 / 解压的通用工具方法 。
+* Hvigor 的 `HvigorDepFetcher` 实现了：
+
+  * 基于 OHPM registry 的元数据获取与版本解析；
+  * 无 repository 时生成「license-only 节点」而不强制拉源码；
+  * 有 repository 时按发布时间找到最近的 commit 并完整 clone：  。
+* 事务级并发设计已经做好：
+
+  * `TransactionCoordinator` 提供全局 `ProcessPoolExecutor`，`Transaction._phase_resolve_deps()` 会为每个依赖创建新的 `Transaction` 并 `submit()`，这完全符合你「不要用递归，而用队列 / 调度器」的想法  。
+
+**缺口：**
+
+* `_discover_dependencies()` 目前是纯占位，返回空列表并只打印 “Dependency discovery not yet implemented”：
+* `_link_dependency_graph()` 同样是 TODO，只记录一条 log，没有真正连父子图：
+* HvigorParser 虽然会通过 `EventType.DEPENDENCY_DISCOVERED` 发布依赖事件并构造 `DependencySpec`：，但 `Transaction` / 某个 hook 没有去收集这些事件。
+* `GraphRegistry` / `GlobalDAG` 已实现 graph_id → cache_path / summary 的注册与 package-level DAG 拓扑排序接口，但没有任何生产代码在使用： 
+
+**小结：**
+第三方依赖的「拉取 + 建子图 + 用 graph_id 链接回父图」这一整条链路，目前只实现了底层 fetcher 和调度骨架，没有接通。功能上仍然是「未实现」。
+
+---
+
+### 3. 高性能 / 低开销
+
+**亮点：**
+
+* 单事务内部：
+
+  * `Worker`：基于 `deque` + `ThreadPoolExecutor` + BFS 调度，带任务去重和优先级，恰好满足你「用队列替代调用栈 / 递归」的要求 。
+  * Config parsing 在 `_phase_parse()` 第一阶段跑在线程池，I/O 密集、适合线程：。
+* 全局 code 解析：
+
+  * `CodeParserPool` 是全局单例 `ProcessPoolExecutor`，每个 worker 进程内部有自己的 parser 实例缓存 `_CODE_PARSER_CACHE`，避免频繁 init tree-sitter： 。
+  * 与 `docs/config_vs_code_parsing.md` 描述的一致：配置解析线程池 + 代码解析进程池的两阶段架构 。
+* 事务级：
+
+  * `TransactionCoordinator` 用进程池跑 `Transaction.run()`，和多进程架构说明文档完全对齐 。
+
+**需要注意的点：**
+
+* 目前设计是：**主进程** 用 `ProcessPoolExecutor` 跑 Transaction；**每个 Transaction 进程内部** 再调用 `CodeParserPool.get_instance()`，再次创建自己的 `ProcessPoolExecutor`。这是典型的「嵌套进程池」，在进程数较多时会有不小的资源开销（但在 1~2 层、线程数可控的情况下仍然可用）。
+* 如果未来要跑很多子 Transaction（深层第三方依赖），建议：
+
+  * 至少把 `CodeParserPool` 封装成「在子进程中退化为线程池」或
+  * 限制 `max_dependency_depth` 默认值，并暴露配置，让你可以在不同场景调优。
+
+总体上，高性能骨架是合理的，主要问题在**功能链路尚未打通**，而不是架构本身。
+
+---
+
+### 4. 合规安全 / 过估计策略
+
+这里的设计思路是对的，但实际落地还不完整。
+
+**已有设计：**
+
+* `GraphManager.add_node/add_edge` 都有 `over_approx` 标志位，用来记录「保守过估计」： 
+* CMakeGraphBuilder 对 `CMAKE_LINK_DEPENDENCY_FOUND` 事件的处理会把 `over_approx` 从事件 data 中传入边属性： 。
+* HvigorDepFetcher 对没有 repository 的 OHPM 包只生成一份 meta JSON（含 license），并设置 `license_only=True`，满足「只做 license 层级合规、不过度解析源码」的要求。
+
+**缺口：**
+
+* 上层分析（`_phase_analyze`）还没使用 `over_approx`、`license_only` 等信息去做任何决策，`_phase_analyze` 目前只是打印 “not yet implemented”：
+* 没有任何地方真正调用 `GraphManager.derive_asset_artifact_projection` 来生成「资产→产物」投影，它只在 `GraphManager` 内部定义，未被使用。
+
+---
+
+### 5. 动/静态链接识别、deadcode 检测
+
+**实现情况：**
+
+* 已有分析器类：
+
+  * `DeadcodeAnalyzer`：从 HAP/HAR/HSP/executable 等最终产物节点做反向可达性分析来识别 deadcode： 
+  * `LinkageAnalyzer`：遍历 `kind == EdgeKind.LINKS` 的边来判断 static/dynamic/module，目前 `_infer_linkage_type()` 还只是返回 "unknown"：  
+  * `LinkageEnrichment` hook 也只是一个空壳，遍历 `kind == EdgeKind.LINKS` 的边然后 `TODO`： 
+* `Transaction._phase_analyze()` 没有调用上述任何分析器：
+
+**小结：**
+分析模块的类已经写好，但没有集成进 lifecycle，目前这个需求是**未落地**状态。
+
+---
+
+### 6. 中间步骤都是逻辑节点（GN config / CMake add_subdirectory）
+
+**实现情况：**
+
+* 在 CMake parser 中，`add_subdirectory()` 会显式创建 `subdirectory` 类型节点，并为其记录 `src_path`：。
+* `GraphManager.derive_asset_artifact_projection()` 内部有专门对 `subdirectory` 结点的处理逻辑：先根据 `src_path` 把目标产物挂到对应 `subdirectory` 下，补充 `contains` → `part_of` 边，再进行后续投影： 。
+  这一点与你希望的「config 这种中间状态也是节点，下游是目录文件，上游是依赖这个状态的过程」是一致的。
+
+**关键问题：**
+
+* `CMakeGraphBuilder` 在新增 target / source / external library 节点时，直接调用 `GraphManager.add_node(target_id, **node_attrs)`，但 `GraphManager.add_node` 的签名是 `(node_id, node_type, ...)`，`node_type` 是必选位置参数；
+  当前代码会因缺少第二个位置参数直接抛 `TypeError`： 。
+* 同一个文件中，多处类似错误（source_files_added / external_package_referenced 也都是只传了 `node_id` 而未传 `node_type`）： 
+
+**结论：**
+架构本身满足「中间步骤作为逻辑节点」的思想，但 CMakeGraphBuilder 的实现没有适配新 `GraphManager` API，当前是**运行即挂**。
+
+---
+
+### 7. Python + Poetry + 可混编 C/Rust/Zig/Golang 的解耦
+
+**现状：**
+
+* `pyproject.toml` 使用 Poetry，依赖只涵盖 tree-sitter / networkx / requests / pydantic 等纯 Python 库。
+* 图层通过 `GraphBackend` 抽象了一层，可以未来替换为 cgraph、igraph 或 Rust/Golang FFI：。
+* parser / dep fetcher / transaction / graph backend 的边界已经比较清晰，从 API 上看，为后续「热点模块改写成 C/Rust/Zig/Go 动态库」预留了空间。
+
+**问题：**
+
+* CLI script entrypoint 还指向旧结构：`[tool.poetry.scripts] depanalyzer = "app.run:main"`，但实际入口是 `depanalyzer/main.py` 的 `main()`：。
+
+  * 这在安装后会导致 `depanalyzer` 命令找不到 `app.run`，属于明确 bug。
+* `README.md` 描述的目录结构（`app/run.py`, `core/orchestrator.py`, `tasks/*` 等）与当前 repo 内实际代码已经完全不一致。这一部分属于文档滞后。
+
+---
+
+## 二、重大实现问题清单（建议视为 P0 / Blocking）
+
+下面这些会直接导致程序无法跑通或行为与设计严重不符。
+
+### 1. Workspace 与 Transaction 的 API 不匹配
+
+* `Workspace` 内部只存了 `_root_path`，并通过 `acquire()` 返回它，`get_root()` 读回 ；没有 `root_path` 属性。
+* 但 `Transaction._phase_detect()` 和 `_phase_parse()` 都在访问 `self.workspace.root_path`：比如 detector 构造函数里直接传 `self.workspace.root_path`，CMake parser 中也依赖 `self.workspace.root_path` 求相对路径。
+
+**后果：**
+一旦进入 DETECT / PARSE 阶段，会抛 `AttributeError: 'Workspace' object has no attribute 'root_path'`。
+
+**修复建议：**
+
+* 在 `Workspace` 中增加：
+
+```python
+@property
+def root_path(self) -> Path:
+    if self._root_path is None:
+        raise RuntimeError("Workspace not acquired. Call acquire() first.")
+    return self._root_path
+```
+
+* 并在 `_phase_acquire()` 运行完以后只通过 `self.workspace.root_path` 读，不再单独保存 `root_path` 局部变量。
+
+---
+
+### 2. Transaction.run 与 TransactionCoordinator._run_transaction_worker 的返回类型不一致
+
+* `Transaction.run()` 的 docstring 和实现都说明返回的是 `TransactionResult`：，并在内部创建 `TransactionResult(...)` 后 `return result`。
+* 但 `_run_transaction_worker()` 把 `transaction.run()` 的返回值当成 `GraphManager`，再用它计算节点数并重新构建一个 `TransactionResult`：。
+
+**后果：**
+
+* 当前代码路径是：
+
+  * Coordinator 的 worker 调用 `graph_manager = transaction.run()`；
+  * 但 `transaction.run()` 实际已经返回 `TransactionResult`，导致后面 `.node_count()` 调用直接报错。
+
+**修复建议（两选一，建议选 B）：**
+
+* **方案 A（保留旧行为）**：让 `Transaction.run()` 改回返回 `GraphManager`，并在 `_run_transaction_worker()` 内部统一构造 `TransactionResult`。
+* **方案 B（推荐）**：
+
+  * 认定 `Transaction.run()` 是**唯一**构造 `TransactionResult` 的地方；
+
+  * `_run_transaction_worker()` 改为：
+
+    ```python
+    result = transaction.run()
+    return result
+    ```
+
+  * 同时把注册 GraphRegistry / 持久化 GraphManager 的逻辑也放进 `Transaction.run()`（见后文修改计划）。
+
+目前 CLI 的 `scan_command` 已经把 `future.result()` 当成 `TransactionResult` 使用，因此**方案 B 更平滑**。
+
+---
+
+### 3. CMakeGraphBuilder 未适配新的 GraphManager.add_node / add_edge API
+
+* `GraphManager.add_node(node_id, node_type, ...)` 的第二个参数是必填位置参数 `node_type`。
+
+* 但 `CMakeGraphBuilder` 中所有 `add_node` 调用都只传了 `node_id`，后面全部用 `**node_attrs`，因此缺少 `node_type`，例如：
+
+  ```python
+  self.graph_manager.add_node(target_id, **node_attrs)
+  ```
+
+* 同理，`_handle_source_files_added/_handle_external_package_referenced` 内的 `add_node` 也是同样的问题 。
+
+**后果：**
+只要 CMake parser 发布 `CMAKE_TARGET_CREATED` 等事件，这个 hook 一执行就 `TypeError`，CMake 图完全建不起来。
+
+**修复建议：**
+
+* 所有 `add_node` 改成显式传递 node_type，例如：
+
+```python
+self.graph_manager.add_node(
+    target_id,
+    node_type=node_type,  # 或 NodeType.TARGET 之类
+    parser_name=event.source,
+    src_path=data.get("src_path"),
+    ...
+)
+```
+
+实际上因为 `GraphManager.add_node` 的第二个参数是位置参数，代码应写成：
+
+```python
+self.graph_manager.add_node(
+    target_id,
+    node_type,
+    parser_name=event.source,
+    src_path=data.get("src_path"),
+    ...
+)
+```
+
+并将原来 `node_attrs` 中的 `"node_type": node_type` 改为用 `type` 字段或直接删掉，避免重复含义。
+
+---
+
+### 4. HvigorConfigParser 仍停留在旧包结构 / 旧类型系统
+
+* 导入完全不在当前 package 树中：
+
+  ```python
+  from parsers.base import BaseParser
+  from core.dependency import DependencySpec, DependencyType
+  from core.schema import EdgeKind, NodeType
+  from runtime.eventbus import Event, EventType
+  ```
+
+* 与目前实际存在的模块完全不一致：
+
+  * 新的 BaseParser 在 `depanalyzer.parsers.base`
+  * 新 EventBus 在 `depanalyzer.runtime.eventbus`
+  * 节点与边的抽象现在在 `depanalyzer.graph.manager.NodeType/EdgeKind` 
+  * DependencySpec 已经在 `depanalyzer.parsers.base` 里重新定义
+
+**后果：**
+
+* 当前文件根本无法 import；即使你硬加一个 `parsers/__init__.py`，类型系统也会分裂成「旧 core.schema.NodeType」和「新 graph.manager.NodeType」两套，后续分析非常难以维护。
+
+**修复建议：**
+
+* 把 Hvigor parser **完全迁移到新架构**：
+
+  * import 改成：
+
+    ```python
+    from depanalyzer.parsers.base import BaseParser, DependencySpec
+    from depanalyzer.graph.manager import GraphManager, NodeType, EdgeKind
+    from depanalyzer.runtime.eventbus import Event, EventType
+    ```
+
+  * 原来的 `DependencyType` 如确有需要，可在 `DependencySpec.metadata` 中以字符串方式编码，无需单独枚举。
+
+  * 所有对 node / edge 的操作通过 `BaseParser.add_node/add_edge`，底层自然走到 `GraphManager`。
+
+  * 所有路径 ID 统一通过 `GraphManager.normalize_path()` 而不是手写字符串，这样才能和 CMake 一起走 `derive_asset_artifact_projection()` 的投影逻辑。
+
+---
+
+### 5. EcosystemRegistry 未被任何地方注册使用
+
+* 如前所述，`EcosystemRegistry` 虽然提供了 `register_ecosystem()` 等接口，但整个 repo 中没有任何实际注册调用。
+* `parsers/__init__.py` 也未按 `docs/ecosystem_architecture.md` 说明去做集中 register。
+
+**后果：**
+
+* `Transaction._phase_detect()` 中 `ecosystems = registry.list_ecosystems()` 返回空，直接跳过后续检测 / 解析流程。
+* 换句话说，当前 `scan` 命令即便修好其它 bug，也不会对项目做任何实际解析，只能完成 Acquire 阶段。
+
+**修复建议：**
+
+* 至少在一个集中入口（例如 `depanalyzer/parsers/__init__.py`）里，显式注册 cpp / hvigor 生态，例如：
+
+  ```python
+  from depanalyzer.parsers.registry import register_ecosystem
+  from depanalyzer.parsers.cpp.config_parser import CMakeParser
+  from depanalyzer.parsers.cpp.detector import CMakeDetector
+  from depanalyzer.parsers.cpp.dep_fetcher import CppDepFetcher
+  from depanalyzer.parsers.cpp.code_parser import CppCodeParser
+
+  register_ecosystem(
+      ecosystem="cpp",
+      detector_class=CMakeDetector,
+      parser_class=CMakeParser,
+      fetcher_class=CppDepFetcher,
+      code_parser_class=CppCodeParser,
+  )
+  # Hvigor 同理
+  ```
+
+* 在 `Transaction._phase_detect()` 开始前确保 `depanalyzer.parsers` 被 import 一次（例如在 CLI main 里 `import depanalyzer.parsers`）。
+
+---
+
+### 6. GraphRegistry / GlobalDAG / 资产→产物投影未接入事务生命周期
+
+* `GraphRegistry` 已定义好 graph_id → cache_path + summary 的注册接口，`GlobalDAG` 也支持 parent_graph → child_graph 的依赖边及拓扑排序 。
+* 但：
+
+  * `Transaction.run()` 没有在任何阶段向 `GraphRegistry.register()` 写入数据；
+  * `_link_dependency_graph()` 中也没有调用 GraphRegistry / GlobalDAG，只是打了一条 log。
+  * `GraphManager.derive_asset_artifact_projection()` 也没有被任何地方调用。
+
+**后果：**
+
+* CLI `scan_command` 虽然在拿到 TransactionResult 后试图从 GraphRegistry 里查 cache path：，但 Registry 里根本没有任何 graph 条目。
+* 多 GraphManager / 多 Transaction 的 Markov 式传播和「只保留一个图在内存，其他落盘」的目标，目前完全未实现。
+
+**修复建议：**见下面修改计划第 2 阶段。
+
+---
+
+### 7. CLI entrypoint & export 命令不完整
+
+* `pyproject.toml` 指定了 `depanalyzer = "app.run:main"`，但实际上并没有 `app/run.py`，真正的 CLI 入口在 `depanalyzer/main.py` 。
+* `depanalyzer/main.py` 里导入了 `from depanalyzer.cli.export import export_command`，但 repo 里目前没有 `depanalyzer/cli/export.py` 文件（搜索未命中）。
+
+**后果：**
+
+* 安装为包后运行 `depanalyzer` 会直接 import 失败；
+* 即使直接 `python -m depanalyzer.main export ...`，也会因 `export_command` 不存在而崩溃。
+
+**修复建议：**
+
+* 将 `pyproject.toml` 中脚本入口改为：
+
+  ```toml
+  [tool.poetry.scripts]
+  depanalyzer = "depanalyzer.main:main"
+  ```
+
+* 在 `depanalyzer/cli/` 下补一个最小的 `export.py`：
+
+  ```python
+  def export_command(args) -> int:
+      # TODO: 从 GraphRegistry 读取 graph 并按格式导出
+      raise NotImplementedError("Export command not implemented yet")
+  ```
+
+  至少保证 import 不会报错，再逐步实现导出逻辑。
+
+---
+
+## 三、建议的分阶段修改计划（实践指南）
+
+下面是一个开发团队可以直接照着做的路线，按优先级拆成三个阶段。每一步尽量都指向具体文件 / 方法，便于落地。
+
+---
+
+### 阶段 1：打通单仓库（无第三方）的基础流水线
+
+**目标：**
+对一个只包含 CMake + Hvigor、但不展开第三方依赖的项目，能够跑通：
+
+> Acquire → Detect → Parse(config+code) → Join → Analyze(最小) → Export(至少 dump 出 graph)
+
+**步骤：**
+
+1. **修 CLI 入口和 Workspace**
+
+   * 修改 `pyproject.toml` 的 script 为 `depanalyzer.main:main`。
+   * 在 `Workspace` 增加 `root_path` property，并在 `acquire()` 中设置 `_root_path` 后通过该 property 访问。
+   * 确认 `Transaction._phase_acquire()` 之后所有地方都通过 `self.workspace.root_path` 获取根目录。
+
+2. **修 CMakeGraphBuilder 的 add_node / add_edge 调用**
+
+   * 按前文所述，所有 `add_node` 都显式传 `node_type` 位置参数；
+   * 清理 node_attrs 中冗余的 `"node_type"` / `"id"` 字段，统一用 GraphManager 的 `type` + 额外 `name/src_path`；
+   * edge 部分已经用 `edge_kind="sources"/"link_libraries"` 等字符串，与 `derive_asset_artifact_projection()` 的预期兼容 。
+
+3. **迁移 HvigorParser 到新架构**
+
+   * 将 import 全部改到 `depanalyzer.*` 命名空间，并只使用一套 NodeType / EdgeKind / DependencySpec / EventBus：
+   * 用 `GraphManager.normalize_path()` 统一构建 `.so` 产物 ID 和 `.d.ts` 文件 ID。
+   * 保留契约注册逻辑，保证 ContractRegistry 和合同匹配 hook 能够工作。
+
+4. **显式注册 cpp / hvigor 生态**
+
+   * 在 `depanalyzer/parsers/__init__.py` 中，创建注册代码（参考上文 pseudo-code），确保至少有 `ecosystems = ["cpp", "hvigor"]`。
+   * 在 CLI main（`depanalyzer/main.py`）中，在解析子命令之前添加 `import depanalyzer.parsers` 保证注册发生。
+
+5. **修正 Transaction.run & _run_transaction_worker 协议**
+
+   * 推荐方案：`Transaction.run()` 只返回 `TransactionResult`；
+   * `_run_transaction_worker()` 直接 `return transaction.run()`，不要再假设拿到 GraphManager。
+   * CLI `scan_command` 继续按 `TransactionResult` 使用（已有逻辑即可）。
+
+6. **最小化 Export：先直接序列化 GraphManager**
+
+   * 在 `Transaction.run()` 内部，在构造 `TransactionResult` 前调用一个新的 `self._flush_graph_to_disk()`：
+
+     * 使用 `GraphManager._backend.native_graph` + networkx 的 `node_link_data` 序列化到一个 JSON 文件；
+     * 生成 cache_path（例如 `.depanalyzer_cache/graphs/{graph_id}.json`）。
+   * 当前阶段可以暂时不接入 GraphRegistry，只在 scan 命令里直接把这个文件路径告诉用户（或者直接写到 `args.output`）。
+   * 这样能保证「给定任意项目，至少能导出一份全局依赖图」。
+
+---
+
+### 阶段 2：第三方依赖、多 GraphManager + GraphRegistry + GlobalDAG
+
+**目标：**
+对带第三方依赖的项目，能做到：
+
+* 只在内存中维护一个 Transaction 的 GraphManager；
+* 其他第三方仓的图落盘 + GraphRegistry 记录；
+* 父图上只建一个 Proxy / External node 指向子图，并写入 GlobalDAG 形成包级 DAG。
+
+**步骤：**
+
+1. **实现依赖收集 `_discover_dependencies()`**
+
+   可以有两种方案，你可以择其一或两者结合：
+
+   * **基于 GraphManager 节点扫描：**
+
+     * 在 `_phase_parse()` 后，从 `GraphManager.nodes()` 中找出 `type in {"external_dep", "external_library", ...}` 的节点；
+     * 读取节点上的 `ecosystem/name/version/source_url` 信息，构造 `DependencySpec` 列表。
+   * **基于 EventBus 的 DEPENDENCY_DISCOVERED 事件：**
+
+     * 新增一个 `DependencyCollector` hook，订阅 `EventType.DEPENDENCY_DISCOVERED`，把 `spec` 追加到 `Transaction` 内部的 `_discovered_deps`。
+     * `_discover_dependencies()` 直接返回该列表。
+
+2. **写一个简单的 DependencyResolver**
+
+   * 在 `depanalyzer/runtime/dependency_resolver.py` 中实现：
+
+     ```python
+     from depanalyzer.parsers.registry import EcosystemRegistry
+
+     def resolve_dependencies(graph_manager, deps):
+         registry = EcosystemRegistry.get_instance()
+         resolved = []
+         for spec in deps:
+             fetcher_cls = registry.get_dep_fetcher(spec.ecosystem)
+             if not fetcher_cls:
+                 continue
+             fetcher = fetcher_cls(cache_root=Path(".depanalyzer_cache/deps"))
+             dep_path = fetcher.fetch(spec)
+             if dep_path:
+                 resolved.append({"name": spec.name, "source": str(dep_path)})
+         return resolved
+     ```
+
+   * `_phase_resolve_deps()` 中调用此函数，然后对返回的每个依赖创建子 `Transaction`（你当前的框架已经这么做，只是数据源为空）：。
+
+3. **实装 `_link_dependency_graph()`**
+
+   * 在父 Transaction 内部，对每一个成功的子 TransactionResult 执行：
+
+     * 在当前 `GraphManager` 上创建一个节点（类型可以用 `NodeType.PROXY` 或 `EXTERNAL_DEP`），属性包含：
+
+       * `child_graph_id`
+       * `source_path`（依赖本地路径）
+       * `ecosystem/name/version` 等。
+     * 把原来的 external library 节点（例如 `ext_lib:xxx`）连接到这个 proxy 节点。
+     * 使用 `GraphRegistry.register(child_graph_id, child_cache_path, child_summary)` 把子图的缓存路径和统计信息登记进去。
+     * 使用 `GlobalDAG.add_dependency(self.graph_id, child_graph_id)` 把关系写入全局 DAG。
+
+   * 这样父图只知道「我依赖了 graph X」，但不会把子图的节点全部 merge 进来，正好符合你「图之间通过某个节点相连，互不实质合并」的要求。
+
+4. **GraphRegistry 真正接入 Transaction.run()**
+
+   * 在 `Transaction.run()` 成功结束后：
+
+     * 调用 `GraphManager.get_summary()` 获取当前图的节点 / 边数量 + meta；
+     * 将图写入缓存文件并用 `GraphRegistry.register(self.graph_id, cache_path, summary)` 登记。
+
+5. **在 CLI export 中利用 GraphRegistry + GlobalDAG**
+
+   * `scan_command` 中拿到 `result.graph_id` 后，用 `GraphRegistry.get_cache_path()` 定位主图缓存；
+   * 如果启用了 `--with-deps` 之类的 CLI 选项，可以通过 `GlobalDAG.topological_order()` 计算处理顺序，从缓存依次加载各子图做「逆拓扑排序上的许可证传播 / 资产→产物投影」。
+
+---
+
+### 阶段 3：分析 & 资产→产物映射完善
+
+**目标：**
+在上面基础上，把你特别关心的「asset→artifact 映射」「动/静态链接」「deadcode」都接入完整 lifecycle。
+
+**步骤：**
+
+1. **在 `_phase_analyze()` 中调用分析器与投影**
+
+   * 修改 `Transaction._phase_analyze()`：
+
+     ```python
+     def _phase_analyze(self) -> None:
+         logger.info("=== Phase: %s ===", LifecyclePhase.ANALYZE)
+         self._current_phase = LifecyclePhase.ANALYZE
+
+         if not self._graph_manager:
+             logger.warning("GraphManager not initialized, skipping analyze phase")
+             return
+
+         # 1) 资产→产物投影
+         self._graph_manager.derive_asset_artifact_projection()
+
+         # 2) deadcode 分析
+         from depanalyzer.analysis.deadcode import DeadcodeAnalyzer
+         dc = DeadcodeAnalyzer(self._graph_manager)
+         dead_nodes = dc.analyze()
+         self._graph_manager.set_metadata("dead_nodes", list(dead_nodes))
+
+         # 3) 链接类型分析
+         from depanalyzer.analysis.linkage import LinkageAnalyzer
+         la = LinkageAnalyzer(self._graph_manager)
+         linkage_map = la.analyze()
+         self._graph_manager.set_metadata("linkage_map", linkage_map)
+     ```
+
+2. **完善 LinkageAnalyzer / LinkageEnrichment 的逻辑**
+
+   * 在 CMakeGraphBuilder 里已经区分 `link_libraries` 边，并携带 `over_approx` 信息；
+   * 你可以结合：
+
+     * CMake target 的 `node_type`（static/shared/module）
+     * OHOS_STL / toolchain 信息（在 LinkageEnrichment 中通过 event 或 metadata 注入）
+   * 在 `_infer_linkage_type()` 中完成真正的静/动态判断：。
+
+3. **Export 命令输出资产→产物映射**
+
+   * 在 CLI `export_command` 中，从 GraphRegistry 读取根 graph，反序列化为 NetworkX MultiDiGraph。
+   * 只输出两类节点：
+
+     * 资产：代码文件 / 资源文件（type = "asset"/"code"/"header" 等）
+     * 产物：hap/har/hsp/executable/shared_library/static_library 等
+   * 对资产节点，顺着 `part_of` / `produces` / `consumes` 等边向下找所有产物节点；形成 `{asset: [artifact...]}` 映射。
+   * 导出为 JSON / GML / DOT。
+
+---
+
+## 四、简单的开发实践指南（面向编写新生态 / 新模块的同学）
+
+最后给一个非常简短的「写新生态」 checklist：
+
+1. **Detector（轻量靶点发现）**
+
+   * 继承 `BaseDetector`，只负责扫描 workspace、返回 config 文件列表，并发布 `TARGET_DETECTED` / `MODULE_DETECTED` 事件。
+
+2. **Config Parser（复杂逻辑，建图 + 发事件）**
+
+   * 继承 `BaseParser`，在 `parse()` 里只：
+
+     * 解析 CMakeLists/hvigorfile 等配置；
+     * 用 `add_node/add_edge` 往 `GraphManager` 写结构，注意用 `normalize_path` 统一 node_id；
+     * 用 `EventBus` 发布结构化事件让 hook 消费 。
+   * 如果需要 code 级解析，重写 `discover_code_files()` 返回文件列表。
+
+3. **Code Parser（纯函数，高并发）**
+
+   * 继承 `BaseCodeParser`，实现 `parse_file(file_path) -> Dict[str, Any]`，不访问任何共享状态，只返回 includes/imports 等信息。
+   * 注册进 `EcosystemRegistry.register_code_parser()`，让 `CodeParserPool` 可以找到它。
+
+4. **DepFetcher（第三方依赖拉取）**
+
+   * 继承 `BaseDepFetcher`，实现 `can_handle()` 和 `fetch()`；内部可复用 `git_clone()` / `download_file()` / `extract_archive()` 工具 。
+
+5. **Hook（跨语言 / 跨系统关联）**
+
+   * 例如 CMakeGraphBuilder、HvigorCMakeBridge、ContractMatcher 这类 hook，全都只依赖于事件和 GraphManager，不直接和具体 parser 耦合 。
+
+---
+
+## 总结
+
+整体来看，你的新架构（Transaction + Worker + CodeParserPool + GraphManager + EventBus + ContractRegistry + GraphRegistry + GlobalDAG）非常接近你在问题里描述的目标：
+
+* 单事务中所有阶段串在一起，且每个中间步骤都能映射到 GraphManager 的节点 / 边；
+* 多事务之间通过 graph_id + registry + GlobalDAG 解耦，而不是把所有图硬合并在一起。
+
+目前主要问题是：**抽象层已经搭好，但关键几处「接线」和「API 适配」还没完成**。
+按上面三个阶段逐步修复和补全之后，这个仓库就能比较完整地满足你原始的 7 条需求 + 第三方多图 Markov 式传播的设计。
