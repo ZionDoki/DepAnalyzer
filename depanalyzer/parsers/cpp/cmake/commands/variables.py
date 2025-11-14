@@ -6,10 +6,10 @@ import logging
 from pathlib import Path
 from typing import List
 
-from parsers.cpp.cmake.commands.base import CommandHandler
-from parsers.cpp.cmake.tokens import clean_token, is_valid_dependency
-from parsers.cpp.cmake.variables import CMakeVariableResolver
-from graph.manager import GraphManager
+from depanalyzer.parsers.cpp.cmake.commands.base import CommandHandler
+from depanalyzer.parsers.cpp.cmake.tokens import clean_token, is_valid_dependency
+from depanalyzer.parsers.cpp.cmake.variables import CMakeVariableResolver
+from depanalyzer.graph.manager import GraphManager
 
 log = logging.getLogger("depanalyzer.parsers.cpp.cmake.commands.variables")
 

@@ -9,9 +9,9 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import List, Optional
 
-from graph.manager import GraphManager
-from parsers.cpp.cmake.variables import CMakeVariableResolver
-from runtime.eventbus import EventBus
+from depanalyzer.graph.manager import GraphManager
+from depanalyzer.parsers.cpp.cmake.variables import CMakeVariableResolver
+from depanalyzer.runtime.eventbus import EventBus
 
 
 class CommandHandler(ABC):
