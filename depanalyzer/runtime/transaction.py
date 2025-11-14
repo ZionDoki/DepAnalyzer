@@ -579,6 +579,75 @@ class Transaction:
             logger.info("Export to: %s", output_path)
         logger.info("Export phase not yet implemented")
 
+    def _flush_graph_to_disk(self) -> Optional[Path]:
+        """Serialize graph to disk and return cache path.
+
+        This method serializes the GraphManager to a JSON file using NetworkX's
+        node_link_data format. The graph is saved to a cache directory for later
+        retrieval.
+
+        Returns:
+            Optional[Path]: Path to the serialized graph file, or None if no graph.
+        """
+        if not self._graph_manager:
+            logger.warning("No graph manager to serialize")
+            return None
+
+        if self._graph_manager.node_count() == 0:
+            logger.info("Graph is empty, skipping serialization")
+            return None
+
+        try:
+            # Create cache directory
+            cache_dir = Path(".depanalyzer_cache") / "graphs"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+
+            # Generate cache file path
+            cache_file = cache_dir / f"{self.graph_id}.json"
+
+            # Serialize graph using NetworkX node_link_data
+            import json
+            from networkx.readwrite import node_link_data
+
+            # Get the native NetworkX graph
+            native_graph = self._graph_manager._backend.native_graph
+
+            # Convert to node-link format
+            graph_data = node_link_data(native_graph)
+
+            # Add metadata
+            graph_metadata = {
+                "graph_id": self.graph_id,
+                "transaction_id": self.transaction_id,
+                "source": self.source,
+                "node_count": self._graph_manager.node_count(),
+                "edge_count": self._graph_manager.edge_count(),
+                "timestamp": time.time(),
+            }
+
+            # Combine metadata and graph data
+            output_data = {
+                "metadata": graph_metadata,
+                "graph": graph_data,
+            }
+
+            # Write to file
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(output_data, f, indent=2)
+
+            logger.info(
+                "Graph serialized to: %s (%d nodes, %d edges)",
+                cache_file,
+                self._graph_manager.node_count(),
+                self._graph_manager.edge_count(),
+            )
+
+            return cache_file
+
+        except Exception as e:
+            logger.error("Failed to serialize graph: %s", e, exc_info=True)
+            return None
+
     def run(self, output_path: Optional[Path] = None) -> "TransactionResult":
         """Execute full transaction lifecycle.
 
@@ -623,6 +692,11 @@ class Transaction:
                 self._graph_manager = GraphManager(
                     root_path=self.workspace.root_path
                 )
+
+            # Serialize graph to disk before building result
+            cache_path = self._flush_graph_to_disk()
+            if cache_path:
+                logger.info("Graph cached at: %s", cache_path)
 
             # Build result
             result = TransactionResult(
