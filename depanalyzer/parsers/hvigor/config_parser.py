@@ -6,10 +6,9 @@ from typing import Any, Dict
 
 import json5
 
-from parsers.base import BaseParser
-from core.dependency import DependencySpec, DependencyType
-from core.schema import EdgeKind, NodeType
-from runtime.eventbus import Event, EventType
+from depanalyzer.parsers.base import BaseParser, DependencySpec
+from depanalyzer.graph.manager import GraphManager, NodeType, EdgeKind
+from depanalyzer.runtime.eventbus import Event, EventType
 from depanalyzer.graph.contract import BuildInterfaceContract, ContractType
 from depanalyzer.graph.contract_registry import ContractRegistry
 
@@ -266,9 +265,11 @@ class HvigorParser(BaseParser):
             spec = DependencySpec(
                 name=dep_name,
                 version=str(dep_version) if dep_version else "",
-                dependency_type=DependencyType.HVIGOR,
-                parser_name=self.NAME,
-                depth=0,
+                ecosystem="hvigor",
+                metadata={
+                    "parser_name": self.NAME,
+                    "depth": 0,
+                },
             )
             event = Event(
                 event_type=EventType.DEPENDENCY_DISCOVERED,
@@ -410,9 +411,11 @@ class HvigorParser(BaseParser):
             spec = DependencySpec(
                 name=lib_name,
                 version=str(lib_version) if lib_version else "",
-                dependency_type=DependencyType.HVIGOR,
-                parser_name=self.NAME,
-                depth=0,
+                ecosystem="hvigor",
+                metadata={
+                    "parser_name": self.NAME,
+                    "depth": 0,
+                },
             )
             event = Event(
                 event_type=EventType.DEPENDENCY_DISCOVERED,
