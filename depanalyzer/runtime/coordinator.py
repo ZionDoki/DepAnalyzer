@@ -66,21 +66,10 @@ def _run_transaction_worker(transaction_pickle_data: bytes) -> TransactionResult
     start_time = time.time()
 
     try:
-        # Execute transaction
-        graph_manager = transaction.run()
+        # Execute transaction - run() returns TransactionResult
+        result = transaction.run()
 
         execution_time = time.time() - start_time
-
-        # Build result
-        result = TransactionResult(
-            transaction_id=transaction.transaction_id,
-            graph_id=transaction.graph_id,
-            success=True,
-            node_count=graph_manager.node_count() if graph_manager else 0,
-            edge_count=graph_manager.edge_count() if graph_manager else 0,
-            execution_time=execution_time,
-            parent_transaction_id=transaction.parent_transaction_id,
-        )
 
         logger.info(
             "[PID %d] Transaction %s completed in %.2fs (%d nodes, %d edges)",
