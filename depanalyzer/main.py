@@ -8,6 +8,9 @@ import logging
 import sys
 from pathlib import Path
 
+# Trigger ecosystem registration by importing parsers package
+import depanalyzer.parsers  # noqa: F401
+
 from depanalyzer.cli.scan import scan_command
 from depanalyzer.cli.export import export_command
 

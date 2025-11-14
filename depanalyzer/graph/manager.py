@@ -27,6 +27,11 @@ class NodeType:
     TOOLCHAIN = "toolchain"
     PROXY = "proxy"
 
+    # Additional semantic types (aligned with core.schema)
+    CONFIG = "config"
+    EXTERNAL_LIBRARY = "external_library"
+    SUBDIRECTORY = "subdirectory"
+
     # Legacy types for backward compatibility
     CODE = "code"
     HEADER = "header"
@@ -47,6 +52,12 @@ class EdgeKind:
     LINKS = "links"
     CONTAINS = "contains"
     DECLARES = "declares"
+
+    # Additional semantic kinds (aligned with core.schema)
+    DEFINED_BY = "defined_by"
+    INCLUDE_DIRS = "include_dirs"
+    ALIAS_OF = "alias_of"
+    IMPLEMENTS_NATIVE = "implements_native"
 
     # Legacy kinds
     SOURCES = "sources"

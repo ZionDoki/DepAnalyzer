@@ -129,6 +129,13 @@ class Transaction:
         """
         if self.eventbus is None:
             self.eventbus = EventBus()
+
+            # Initialize DependencyCollector hook after eventbus is created
+            if self._dependency_collector is None:
+                from depanalyzer.hooks.dependency_collector import DependencyCollector
+                self._dependency_collector = DependencyCollector(self.eventbus)
+                logger.debug("DependencyCollector initialized")
+
         return self.eventbus
 
     def _phase_acquire(self) -> None:
