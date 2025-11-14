@@ -10,6 +10,8 @@ from parsers.base import BaseParser
 from core.dependency import DependencySpec, DependencyType
 from core.schema import EdgeKind, NodeType
 from runtime.eventbus import Event, EventType
+from depanalyzer.graph.contract import BuildInterfaceContract, ContractType
+from depanalyzer.graph.contract_registry import ContractRegistry
 
 logger = logging.getLogger("depanalyzer.parsers.hvigor.config")
 
@@ -321,6 +323,53 @@ class HvigorParser(BaseParser):
                         )
                         self.publish_parse_event(event)
                         logger.info(f"Found native bridge: {lib_name} -> {dts_id}")
+
+                        # Register consumer-side contract for cross-language matching
+                        try:
+                            registry = ContractRegistry()
+
+                            # Infer expected artifact path (consumer expects the .so file)
+                            # Typically in module/libs/{abi}/libname.so
+                            # Use multiple ABI options for broader matching
+                            for abi in ["arm64-v8a", "armeabi-v7a", "x86_64"]:
+                                expected_artifact_path = config_file.parent / "libs" / abi / f"lib{lib_name}.so"
+                                expected_artifact_id = self.graph_manager.normalize_path(
+                                    expected_artifact_path
+                                )
+
+                                # Create consumer contract
+                                contract = BuildInterfaceContract(
+                                    provider_artifact="",  # To be matched in JOIN phase
+                                    consumer_artifact=expected_artifact_id,
+                                    artifact_name=f"lib{lib_name}.so",
+                                    contract_type=ContractType.ARTIFACT_NAME,
+                                    confidence=0.0,  # Will be set during matching
+                                    evidence=[
+                                        f"hvigor_dependency:{lib_name}",
+                                        f"native_dir:{type_dir}",
+                                        f"interface:{dts_id}",
+                                    ],
+                                    interface_files=[
+                                        self.graph_manager.normalize_path(dts_abs_path)
+                                    ],
+                                    metadata={
+                                        "lib_name": lib_name,
+                                        "abi": abi,
+                                        "native_dir": str(type_dir),
+                                    },
+                                )
+                                registry.register(contract)
+                                logger.debug(
+                                    "Registered consumer contract: %s (abi=%s)",
+                                    lib_name,
+                                    abi,
+                                )
+                        except Exception as contract_err:
+                            logger.warning(
+                                "Failed to register contract for %s: %s",
+                                lib_name,
+                                contract_err,
+                            )
 
             except (OSError, ValueError) as e:
                 logger.warning(

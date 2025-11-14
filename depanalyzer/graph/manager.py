@@ -7,9 +7,10 @@ managing all nodes, edges, and metadata for that analysis session.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 
 from depanalyzer.graph.backend import GraphBackend
+from depanalyzer.utils.path_utils import normalize_node_id
 
 logger = logging.getLogger("depanalyzer.graph.manager")
 
@@ -63,17 +64,25 @@ class GraphManager:
     stores all nodes, edges, and metadata for that analysis session.
     """
 
-    def __init__(self, graph_id: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        graph_id: Optional[str] = None,
+        root_path: Optional[Union[str, Path]] = None
+    ) -> None:
         """Initialize graph manager.
 
         Args:
             graph_id: Optional graph identifier.
+            root_path: Optional root path for node ID normalization.
         """
         self.graph_id = graph_id or "default"
+        self.root_path = Path(root_path).resolve() if root_path else None
         self._backend = GraphBackend()
         self._metadata: Dict[str, Any] = {}
 
         logger.info("GraphManager initialized with ID: %s", self.graph_id)
+        if self.root_path:
+            logger.info("Root path set to: %s", self.root_path)
 
     def add_node(
         self,
@@ -146,6 +155,97 @@ class GraphManager:
             "Added edge: %s -> %s (kind=%s, key=%d)", source, target, edge_kind, key
         )
         return key
+
+    def normalize_path(self, path: Union[str, Path]) -> str:
+        """
+        Normalize a file path to standardized node ID format.
+
+        All node IDs use normalized format:
+        - Internal paths: //relative/to/root
+        - External paths: //../external/path
+
+        Args:
+            path: File path to normalize (absolute or relative)
+
+        Returns:
+            Normalized node ID string
+
+        Raises:
+            ValueError: If root_path is not set on this GraphManager
+        """
+        if not self.root_path:
+            raise ValueError(
+                "root_path must be set on GraphManager to use path normalization. "
+                "Initialize GraphManager with root_path parameter."
+            )
+        return normalize_node_id(path, self.root_path)
+
+    def add_normalized_node(
+        self,
+        path: Union[str, Path],
+        node_type: str,
+        confidence: float = 1.0,
+        over_approx: bool = False,
+        evidence: Optional[List[str]] = None,
+        **attributes: Any,
+    ) -> str:
+        """Add node with automatic path normalization.
+
+        This is a convenience method that normalizes the path before adding
+        the node. Useful for parsers working with file paths.
+
+        Args:
+            path: File path (will be normalized to node ID)
+            node_type: Node type (see NodeType constants)
+            confidence: Confidence score (0.0-1.0)
+            over_approx: Whether this is an over-approximation
+            evidence: List of evidence sources
+            **attributes: Additional node attributes
+
+        Returns:
+            Normalized node ID
+
+        Raises:
+            ValueError: If root_path is not set on this GraphManager
+        """
+        node_id = self.normalize_path(path)
+        self.add_node(node_id, node_type, confidence, over_approx, evidence, **attributes)
+        return node_id
+
+    def add_normalized_edge(
+        self,
+        source_path: Union[str, Path],
+        target_path: Union[str, Path],
+        edge_kind: str,
+        confidence: float = 1.0,
+        over_approx: bool = False,
+        evidence: Optional[List[str]] = None,
+        **attributes: Any,
+    ) -> tuple[str, str, int]:
+        """Add edge with automatic path normalization.
+
+        This is a convenience method that normalizes both paths before adding
+        the edge. Useful for parsers working with file paths.
+
+        Args:
+            source_path: Source file path (will be normalized)
+            target_path: Target file path (will be normalized)
+            edge_kind: Edge kind (see EdgeKind constants)
+            confidence: Confidence score (0.0-1.0)
+            over_approx: Whether this is an over-approximation
+            evidence: List of evidence sources
+            **attributes: Additional edge attributes
+
+        Returns:
+            Tuple of (source_id, target_id, edge_key)
+
+        Raises:
+            ValueError: If root_path is not set on this GraphManager
+        """
+        source_id = self.normalize_path(source_path)
+        target_id = self.normalize_path(target_path)
+        key = self.add_edge(source_id, target_id, edge_kind, confidence, over_approx, evidence, **attributes)
+        return (source_id, target_id, key)
 
     def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
         """Get node attributes.

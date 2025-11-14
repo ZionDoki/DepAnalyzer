@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict
+from pathlib import Path
 
 from depanalyzer.runtime.eventbus import Event, EventType, EventBus
 from depanalyzer.graph.manager import GraphManager
+from depanalyzer.graph.contract import BuildInterfaceContract, ContractType
+from depanalyzer.graph.contract_registry import ContractRegistry
 
 log = logging.getLogger("depanalyzer.hooks.cmake_graph_builder")
 
@@ -108,6 +111,69 @@ class CMakeGraphBuilder:
                 confidence=1.0,
             )
             log.debug("Created alias edge: %s -> %s", alias_edge["source"], alias_edge["target"])
+
+        # Register provider-side contract for shared libraries
+        # This enables cross-language matching with Hvigor consumers
+        if node_type == "shared_library" and data.get("origin") == "in_repo":
+            self._register_provider_contract(data, target_id)
+
+    def _register_provider_contract(self, target_data: Dict[str, Any], target_id: str) -> None:
+        """Register provider-side contract for a CMake shared library target.
+
+        Args:
+            target_data: Target data from CMAKE_TARGET_CREATED event
+            target_id: Target node identifier
+        """
+        try:
+            # Extract target name from target_id
+            # target_id format is typically: //path/to/CMakeLists.txt:target_name
+            target_name = target_id.split(":")[-1] if ":" in target_id else target_id.split("/")[-1]
+
+            # Infer artifact output path
+            # Typically: build/libname.so or lib/libname.so
+            src_path = Path(target_data.get("src_path", ""))
+            cmake_dir = src_path.parent if src_path else Path(".")
+
+            # Try common build output directories
+            for build_dir in ["build", "lib", "out", "."]:
+                artifact_path = cmake_dir / build_dir / f"lib{target_name}.so"
+                provider_artifact_id = self.graph_manager.normalize_path(artifact_path)
+
+                # Create provider contract
+                registry = ContractRegistry()
+                contract = BuildInterfaceContract(
+                    provider_artifact=provider_artifact_id,
+                    consumer_artifact="",  # To be matched in JOIN phase
+                    artifact_name=f"lib{target_name}.so",
+                    contract_type=ContractType.ARTIFACT_NAME,
+                    confidence=0.0,  # Will be set during matching
+                    evidence=[
+                        f"cmake_target:{target_name}",
+                        f"src_path:{src_path}",
+                        f"node_type:{target_data.get('node_type')}",
+                    ],
+                    impl_files=[],  # Will be populated by source file events
+                    metadata={
+                        "target_name": target_name,
+                        "target_id": target_id,
+                        "build_dir": build_dir,
+                        "linkage_kind": target_data.get("linkage_kind", "shared"),
+                    },
+                )
+                registry.register(contract)
+                log.debug(
+                    "Registered provider contract: %s (artifact=%s, build_dir=%s)",
+                    target_name,
+                    provider_artifact_id,
+                    build_dir,
+                )
+
+        except Exception as contract_err:
+            log.warning(
+                "Failed to register provider contract for %s: %s",
+                target_id,
+                contract_err,
+            )
 
     def _handle_source_files_added(self, event: Event) -> None:
         """Handle CMAKE_SOURCE_FILES_ADDED event by creating source nodes and edges.

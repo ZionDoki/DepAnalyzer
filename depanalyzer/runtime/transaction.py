@@ -220,8 +220,12 @@ class Transaction:
         # Initialize GraphManager if not already done
         if self._graph_manager is None:
             from depanalyzer.graph.manager import GraphManager
-            self._graph_manager = GraphManager(graph_id=self.graph_id)
-            logger.info("Initialized GraphManager with graph_id: %s", self.graph_id)
+            self._graph_manager = GraphManager(
+                graph_id=self.graph_id,
+                root_path=self.workspace.root_path
+            )
+            logger.info("Initialized GraphManager with graph_id: %s, root_path: %s",
+                        self.graph_id, self.workspace.root_path)
 
         if not hasattr(self, '_detected_targets') or not self._detected_targets:
             logger.info("No targets detected, skipping parse phase")
@@ -510,12 +514,48 @@ class Transaction:
         )
 
     def _phase_join(self) -> None:
-        """Phase E: Hook execution for cross-domain associations."""
+        """Phase E: Hook execution for cross-domain associations.
+
+        This phase executes all registered hooks to establish cross-language
+        and cross-ecosystem connections (e.g., Hvigor ↔ CMake).
+        """
         logger.info("=== Phase: %s ===", LifecyclePhase.JOIN)
         self._current_phase = LifecyclePhase.JOIN
 
-        # TODO: Implement hook execution
-        logger.info("Join phase not yet implemented")
+        if not self._graph_manager:
+            logger.warning("GraphManager not initialized, skipping join phase")
+            return
+
+        eventbus = self._ensure_eventbus()
+
+        # Initialize and execute hooks
+        hooks = []
+
+        # HvigorCMakeBridge hook (legacy path-based matching)
+        try:
+            from depanalyzer.hooks.hvigor_cmake_bridge import HvigorCMakeBridge
+            bridge = HvigorCMakeBridge(self._graph_manager, eventbus)
+            hooks.append(("HvigorCMakeBridge", bridge))
+        except ImportError as e:
+            logger.debug("HvigorCMakeBridge not available: %s", e)
+
+        # ContractMatcher hook (new contract-based matching)
+        try:
+            from depanalyzer.hooks.contract_matcher import ContractMatcher
+            matcher = ContractMatcher(self._graph_manager, eventbus)
+            hooks.append(("ContractMatcher", matcher))
+        except ImportError as e:
+            logger.warning("ContractMatcher not available: %s", e)
+
+        # Execute all hooks
+        for hook_name, hook in hooks:
+            try:
+                logger.info("Executing hook: %s", hook_name)
+                hook.execute()
+            except Exception as e:
+                logger.error("Hook %s failed: %s", hook_name, e, exc_info=True)
+
+        logger.info("Join phase completed with %d hooks executed", len(hooks))
 
     def _phase_analyze(self) -> None:
         """Phase F: Analysis on transaction graph."""
@@ -580,7 +620,9 @@ class Transaction:
 
             # Return graph manager (will be properly initialized in later implementation)
             if not self._graph_manager:
-                self._graph_manager = GraphManager()
+                self._graph_manager = GraphManager(
+                    root_path=self.workspace.root_path
+                )
 
             # Build result
             result = TransactionResult(
