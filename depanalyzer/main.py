@@ -106,12 +106,18 @@ def main() -> int:
         "--max-depth",
         type=int,
         default=3,
-        help="Maximum third-party dependency depth (default: 3)",
+        help="Maximum third-party dependency depth (default: 3, only when third-party dependency scanning is enabled)",
     )
     scan_parser.add_argument(
         "--max-deps",
         type=int,
-        help="Global third-party dependency limit",
+        help="Global third-party dependency limit (only when third-party dependency scanning is enabled)",
+    )
+    scan_parser.add_argument(
+        "-t",
+        "--third-party",
+        action="store_true",
+        help="Enable third-party dependency detection and recursion",
     )
     scan_parser.add_argument(
         "--no-analyze",

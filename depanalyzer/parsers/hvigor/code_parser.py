@@ -54,6 +54,7 @@ class HvigorCodeParser(BaseCodeParser):
             Dict[str, Any]: Parse result with structure:
                 {
                     "file": str,
+                    "includes": List[str],  # Resolved import paths (for graph edges)
                     "imports": List[str],  # Resolved import paths
                     "unresolved": List[str],  # Unresolved import specifiers
                     "root": str,  # "tree-sitter"
@@ -105,6 +106,7 @@ class HvigorCodeParser(BaseCodeParser):
                     unresolved_imports.append(dep_str)
 
             result["imports"] = resolved_imports
+            result["includes"] = resolved_imports
             result["unresolved"] = unresolved_imports
             result["root"] = "tree-sitter"
 

@@ -153,6 +153,13 @@ class GraphManager:
         Returns:
             int: Edge key.
         """
+        # Ensure endpoints exist so we do not end up with nodes that only have
+        # an implicit ID and no schema attributes.
+        if not self._backend.has_node(source):
+            self.add_node(source, "unknown")
+        if not self._backend.has_node(target):
+            self.add_node(target, "unknown")
+
         attrs = {
             "kind": edge_kind,
             "confidence": confidence,

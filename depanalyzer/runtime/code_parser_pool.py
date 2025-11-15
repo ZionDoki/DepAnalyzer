@@ -120,8 +120,16 @@ class CodeParserPool:
     _instance: Optional["CodeParserPool"] = None
     _initialized: bool = False
 
-    def __new__(cls):
-        """Singleton pattern implementation."""
+    def __new__(cls, *args, **kwargs):
+        """Singleton pattern implementation.
+
+        Args:
+            *args: Positional arguments (ignored for singleton construction).
+            **kwargs: Keyword arguments (ignored for singleton construction).
+
+        Returns:
+            CodeParserPool: Singleton instance.
+        """
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance

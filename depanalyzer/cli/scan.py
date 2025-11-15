@@ -54,6 +54,7 @@ def _scan_command_impl(args) -> int:
     logger.info("Output: %s", args.output)
     logger.info("Workers: %d", args.workers)
     logger.info("Max depth: %d", args.max_depth)
+    logger.info("Third-party resolution enabled: %s", getattr(args, "third_party", False))
 
     start_time = time.time()
 
@@ -93,6 +94,8 @@ def _scan_command_impl(args) -> int:
             source=args.source,
             max_workers=args.workers,
             max_dependency_depth=args.max_depth,
+            enable_dependency_resolution=getattr(args, "third_party", False),
+            max_dependencies=getattr(args, "max_deps", None),
             progress_manager=progress_manager,
         )
         logger.info("Transaction created: %s", transaction.transaction_id)

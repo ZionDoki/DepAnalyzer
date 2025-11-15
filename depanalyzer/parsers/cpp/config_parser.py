@@ -59,12 +59,14 @@ class CMakeParser(BaseParser):
         log.info("CMakeGraphBuilder hook initialized")
 
         self._init_command_handlers()
+        self._last_parsed_dir: Path | None = None
 
     def _init_command_handlers(self) -> None:
         """Initialize all command handlers."""
         # Command handlers now receive eventbus for event-driven architecture
         # They publish events instead of directly manipulating the graph
-        repo_root_str = str(self.workspace_root)
+        # Use graph_manager.root_path (scan target root) instead of workspace_root (tool directory)
+        repo_root_str = str(self.graph_manager.root_path)
         self.handlers = [
             TargetCommandHandler(repo_root_str, self.NAME, self.eventbus),
             LinkingCommandHandler(repo_root_str, self.NAME, self.eventbus),
@@ -90,7 +92,9 @@ class CMakeParser(BaseParser):
             log.warning("Failed to read %s: %s", target_path, e)
             return
 
-        variable_resolver = CMakeVariableResolver(str(self.workspace_root), target_path)
+        self._last_parsed_dir = target_path.parent.resolve()
+
+        variable_resolver = CMakeVariableResolver(str(self.graph_manager.root_path), target_path)
 
         try:
             tree = CMAKE_PARSER.parse(text)
@@ -109,6 +113,55 @@ class CMakeParser(BaseParser):
             },
         )
         self.publish_parse_event(event)
+
+    def discover_code_files(self) -> List[Path]:
+        """Discover C/C++ source and header files for the last parsed CMake target.
+
+        Args:
+            None.
+
+        Returns:
+            List[Path]: List of source code files to feed into code parsing.
+        """
+        if self._last_parsed_dir is None:
+            return []
+
+        code_files: List[Path] = []
+        try:
+            patterns = [
+                "*.c",
+                "*.cpp",
+                "*.cc",
+                "*.cxx",
+                "*.c++",
+                "*.h",
+                "*.hpp",
+                "*.hh",
+                "*.hxx",
+                "*.h++",
+            ]
+            for pattern in patterns:
+                for file_path in self._last_parsed_dir.rglob(pattern):
+                    if file_path.is_file():
+                        code_files.append(file_path)
+        except (OSError, ValueError) as exc:
+            log.warning(
+                "Failed to discover C/C++ code files under %s: %s",
+                self._last_parsed_dir,
+                exc,
+            )
+            return []
+
+        unique_files: List[Path] = []
+        seen: set[Path] = set()
+        for path in code_files:
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            unique_files.append(resolved)
+
+        return unique_files
 
     def _process_parse_tree(
         self,
@@ -178,7 +231,7 @@ class CMakeParser(BaseParser):
             sub = tokens.clean_token(args[0])
             if sub and tokens.is_valid_dependency(sub):
                 resolved_sub = variable_resolver.resolve(sub)
-                sub_path = Path(self.workspace_root) / resolved_sub
+                sub_path = Path(self.graph_manager.root_path) / resolved_sub
                 if sub_path.is_dir():
                     dir_id = f"//{resolved_sub}"
                     # Use new graph API
@@ -198,4 +251,3 @@ class CMakeParser(BaseParser):
                     cmd_name, args, file_path, shared_graph, variable_resolver
                 )
                 return
-

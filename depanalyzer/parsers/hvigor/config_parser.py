@@ -27,6 +27,24 @@ class HvigorParser(BaseParser):
 
     NAME = "hvigor"
 
+    def __init__(
+        self,
+        workspace_root: Path,
+        graph_manager: GraphManager,
+        eventbus,
+    ) -> None:
+        """Initialize Hvigor configuration parser.
+
+        Args:
+            workspace_root: Workspace root path.
+            graph_manager: Transaction graph manager.
+            eventbus: Event bus for publishing parse events.
+        Returns:
+            None.
+        """
+        super().__init__(workspace_root, graph_manager, eventbus)
+        self._last_config_result: Dict[str, Any] = {}
+
     def parse(self, target_path: Path) -> None:
         """Parse a single config file and update the graph.
 
@@ -34,6 +52,7 @@ class HvigorParser(BaseParser):
             target_path: Config file path.
         """
         parsed_data = self._parse_single_config(target_path)
+        self._last_config_result = parsed_data
         self._process_config_result(parsed_data)
 
     def _parse_single_config(self, file_path: Path) -> Dict[str, Any]:
@@ -145,6 +164,93 @@ class HvigorParser(BaseParser):
             self._process_lock_file(result, rel_path_str)
         elif result_type == "hvigor_config":
             self._process_hvigor_config(result, rel_path_str)
+
+    def discover_code_files(self) -> list[Path]:
+        """Discover ArkTS/TypeScript/JavaScript source files from config context.
+
+        Args:
+            None.
+
+        Returns:
+            list[Path]: List of source code files to feed into code parsing.
+        """
+        if not self._last_config_result:
+            return []
+
+        result_type = self._last_config_result.get("type")
+        config_file: Path = self._last_config_result.get("file")
+        if not isinstance(config_file, Path):
+            return []
+
+        code_files: list[Path] = []
+
+        try:
+            if result_type == "build_profile":
+                for module_item in self._last_config_result.get("modules", []):
+                    if isinstance(module_item, dict):
+                        module_name = module_item.get("name")
+                    else:
+                        module_name = module_item
+
+                    if not module_name or not isinstance(module_name, str):
+                        continue
+
+                    module_root = (self.workspace_root / module_name).resolve()
+                    code_files.extend(self._discover_module_code_files(module_root))
+
+            elif result_type == "module_config":
+                module_root = config_file.parent.parent.parent.resolve()
+                code_files.extend(self._discover_module_code_files(module_root))
+        except (OSError, ValueError) as exc:
+            logger.warning("Failed to discover Hvigor code files: %s", exc)
+            return []
+
+        # Deduplicate and keep only existing files
+        unique_files: list[Path] = []
+        seen: set[Path] = set()
+        for path in code_files:
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
+
+            if not resolved.is_file():
+                continue
+
+            if resolved in seen:
+                continue
+
+            seen.add(resolved)
+            unique_files.append(resolved)
+
+        return unique_files
+
+    def _discover_module_code_files(self, module_root: Path) -> list[Path]:
+        """Discover ArkTS/TS/JS files under a module root.
+
+        Args:
+            module_root: Module root directory path.
+        Returns:
+            list[Path]: Source files discovered under the module root.
+        """
+        if not module_root.is_dir():
+            return []
+
+        code_files: list[Path] = []
+        try:
+            for pattern in ("**/*.ets", "**/*.ts", "**/*.js"):
+                for file_path in module_root.rglob(pattern):
+                    if file_path.is_file():
+                        code_files.append(file_path)
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "Error while scanning module root %s for source files: %s",
+                module_root,
+                exc,
+            )
+            return []
+
+        return code_files
 
     def _process_build_profile(self, result: Dict[str, Any], config_file_id: str):
         """Process build-profile.json5 file."""

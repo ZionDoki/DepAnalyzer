@@ -45,6 +45,8 @@ class Transaction:
         parent_transaction_id: Optional[str] = None,
         transaction_id: Optional[str] = None,
         progress_manager: Optional["ProgressManager"] = None,
+        enable_dependency_resolution: bool = False,
+        max_dependencies: Optional[int] = None,
     ) -> None:
         """Initialize transaction.
 
@@ -56,6 +58,8 @@ class Transaction:
             parent_transaction_id: Optional parent transaction ID for third-party deps.
             transaction_id: Optional transaction identifier. If None, generated.
             progress_manager: Optional progress manager for live progress display.
+            enable_dependency_resolution: Whether to resolve third-party dependencies.
+            max_dependencies: Optional global limit for third-party dependencies.
         """
         self.transaction_id = transaction_id or str(uuid.uuid4())
         self.source = source
@@ -63,6 +67,8 @@ class Transaction:
         self.max_workers = max_workers
         self.max_dependency_depth = max_dependency_depth
         self.parent_transaction_id = parent_transaction_id
+        self.enable_dependency_resolution = enable_dependency_resolution
+        self.max_dependencies = max_dependencies
 
         # Core components (will be initialized in __setstate__ for deserialization)
         self.workspace = Workspace(source)
@@ -359,8 +365,16 @@ class Transaction:
                             "error": str(e)
                         }
 
+                # Use a stable, path-specific task_id to avoid deduplicating
+                # different config files that share the same file name
+                try:
+                    rel_path = target_path.relative_to(self.workspace.root_path)
+                    task_suffix = str(rel_path).replace("\\", "/")
+                except ValueError:
+                    task_suffix = str(target_path).replace("\\", "/")
+
                 task = Task(
-                    task_id=f"parse_{ecosystem}_{target_path.name}",
+                    task_id=f"parse_{ecosystem}_{task_suffix}",
                     func=parse_task,
                     priority=TaskPriority.NORMAL,
                 )
@@ -493,14 +507,19 @@ class Transaction:
         )
 
         # Add include/import edges
-        includes = parse_result.get("includes", [])
+        includes = parse_result.get("includes")
+        if includes is None:
+            includes = parse_result.get("imports", [])
+
         for include_path in includes:
-            include_node_id = str(include_path) if isinstance(include_path, Path) else include_path
+            include_node_id = (
+                str(include_path) if isinstance(include_path, Path) else include_path
+            )
             self._graph_manager.add_edge(
                 file_node_id,
                 include_node_id,
                 "includes",
-                path=include_node_id
+                path=include_node_id,
             )
 
     def _phase_resolve_deps(self) -> None:
@@ -510,6 +529,10 @@ class Transaction:
         """
         logger.info("=== Phase: %s ===", LifecyclePhase.RESOLVE_DEPS)
         self._current_phase = LifecyclePhase.RESOLVE_DEPS
+
+        if not self.enable_dependency_resolution:
+            logger.info("Dependency resolution is disabled for this transaction, skipping phase")
+            return
 
         # Check if we've reached max depth
         if self.max_dependency_depth <= 0:
@@ -524,6 +547,14 @@ class Transaction:
             return
 
         logger.info("Found %d dependencies to resolve", len(dep_specs))
+
+        if self.max_dependencies is not None and len(dep_specs) > self.max_dependencies:
+            logger.info(
+                "Applying max dependency limit: %d of %d",
+                self.max_dependencies,
+                len(dep_specs),
+            )
+            dep_specs = dep_specs[: self.max_dependencies]
 
         # Start progress tracking for this phase
         phase_id = None
@@ -578,6 +609,8 @@ class Transaction:
                 max_workers=self.max_workers,
                 max_dependency_depth=self.max_dependency_depth - 1,
                 parent_transaction_id=self.transaction_id,
+                enable_dependency_resolution=self.enable_dependency_resolution,
+                max_dependencies=self.max_dependencies,
             )
 
             future = coordinator.submit(child_tx)
@@ -1071,13 +1104,36 @@ class Transaction:
 
             # Serialize graph using NetworkX node_link_data
             import json
+            from networkx import MultiDiGraph
             from networkx.readwrite import node_link_data
 
-            # Get the native NetworkX graph
+            from depanalyzer.graph.schema_utils import canonicalize_edge, canonicalize_node
+
+            # Build an export-only graph with canonical IDs and schemas
             native_graph = self._graph_manager._backend.native_graph
+            export_graph = MultiDiGraph()
+
+            node_id_map: Dict[str, str] = {}
+
+            # Normalize nodes
+            for raw_id, attrs in native_graph.nodes(data=True):
+                canonical_id, canonical_attrs = canonicalize_node(
+                    str(raw_id),
+                    attrs or {},
+                    self._graph_manager.root_path,
+                )
+                node_id_map[str(raw_id)] = canonical_id
+                export_graph.add_node(canonical_id, **canonical_attrs)
+
+            # Normalize edges
+            for u, v, key, attrs in native_graph.edges(data=True, keys=True):
+                source_id = node_id_map.get(str(u), str(u))
+                target_id = node_id_map.get(str(v), str(v))
+                canonical_attrs = canonicalize_edge(attrs or {})
+                export_graph.add_edge(source_id, target_id, **canonical_attrs)
 
             # Convert to node-link format
-            graph_data = node_link_data(native_graph, edges="links")
+            graph_data = node_link_data(export_graph, edges="links")
 
             # Add metadata
             graph_metadata = {
