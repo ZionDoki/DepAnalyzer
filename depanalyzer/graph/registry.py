@@ -69,6 +69,20 @@ class GraphRegistry:
             "Graph registry initialized at: %s (PID: %d)", self.cache_root, os.getpid()
         )
 
+    @classmethod
+    def get_instance(cls, cache_root: Optional[Path] = None) -> "GraphRegistry":
+        """Get the singleton GraphRegistry instance.
+
+        Args:
+            cache_root: Optional cache root directory (only used on first initialization).
+
+        Returns:
+            GraphRegistry: The singleton instance.
+        """
+        if cls._instance is None:
+            cls(cache_root=cache_root)
+        return cls._instance
+
     def _load_registry(self) -> None:
         """Load registry from disk."""
         if self._registry_file.exists():

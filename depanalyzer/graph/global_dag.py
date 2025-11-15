@@ -5,7 +5,7 @@ at the package level, without including intra-transaction nodes.
 """
 
 import logging
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 import networkx as nx
 
@@ -17,12 +17,40 @@ class GlobalDAG:
 
     Tracks which transactions depend on which other transactions,
     enabling topological ordering and cycle detection.
+
+    Singleton pattern ensures all transactions share the same DAG instance.
     """
+
+    _instance: Optional["GlobalDAG"] = None
+    _initialized: bool = False
+
+    def __new__(cls) -> "GlobalDAG":
+        """Singleton pattern for global DAG.
+
+        Returns:
+            GlobalDAG: Singleton instance.
+        """
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
 
     def __init__(self) -> None:
         """Initialize global DAG."""
+        if GlobalDAG._initialized:
+            return
+
         self._dag = nx.DiGraph()
+        GlobalDAG._initialized = True
         logger.info("Global DAG initialized")
+
+    @classmethod
+    def get_instance(cls) -> "GlobalDAG":
+        """Get the singleton GlobalDAG instance.
+
+        Returns:
+            GlobalDAG: The singleton instance.
+        """
+        return cls()
 
     def add_dependency(self, parent_graph_id: str, child_graph_id: str) -> None:
         """Add dependency edge from parent to child transaction.
@@ -59,6 +87,27 @@ class GlobalDAG:
         if not self._dag.has_node(graph_id):
             return set()
         return set(self._dag.successors(graph_id))
+
+    def get_transitive_dependencies(self, graph_id: str) -> Set[str]:
+        """Get all transitive dependencies (direct + indirect) of a transaction.
+
+        Args:
+            graph_id: Transaction graph ID.
+
+        Returns:
+            Set[str]: Set of all dependent graph IDs (transitive closure).
+        """
+        if not self._dag.has_node(graph_id):
+            return set()
+
+        try:
+            # Use NetworkX descendants to get all reachable nodes
+            return nx.descendants(self._dag, graph_id)
+        except nx.NetworkXError as e:
+            logger.warning(
+                "Failed to compute transitive dependencies for %s: %s", graph_id, e
+            )
+            return set()
 
     def get_dependents(self, graph_id: str) -> Set[str]:
         """Get direct dependents of a transaction.

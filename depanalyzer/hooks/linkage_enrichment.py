@@ -73,7 +73,7 @@ class LinkageEnrichment:
             return "unknown"
 
         # Get target node attributes
-        target_attrs = self.graph_manager.get_node_attributes(target)
+        target_attrs = self.graph_manager.get_node(target)
         if not target_attrs:
             return "unknown"
 
