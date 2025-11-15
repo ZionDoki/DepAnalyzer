@@ -7,11 +7,13 @@ active tasks, and phase execution tracking.
 import logging
 import threading
 import time
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, Deque
 
-from rich.console import Console, Group
+from rich.console import Console, Group, RenderableType
+from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import (
@@ -29,6 +31,75 @@ from rich.text import Text
 from depanalyzer.runtime.lifecycle import LifecyclePhase
 
 logger = logging.getLogger("depanalyzer.runtime.progress")
+
+
+class LogBuffer:
+    """Thread-safe buffer for log messages to display in Live context.
+
+    Stores recent log messages that will be displayed above the progress bar.
+    """
+
+    def __init__(self, max_lines: int = 10):
+        """Initialize log buffer.
+
+        Args:
+            max_lines: Maximum number of log lines to keep.
+        """
+        self.max_lines = max_lines
+        self._buffer: Deque[str] = deque(maxlen=max_lines)
+        self._lock = threading.Lock()
+
+    def add(self, message: str) -> None:
+        """Add a log message to the buffer.
+
+        Args:
+            message: Log message to add.
+        """
+        with self._lock:
+            self._buffer.append(message)
+
+    def get_lines(self) -> list[str]:
+        """Get all buffered log lines.
+
+        Returns:
+            List of log messages.
+        """
+        with self._lock:
+            return list(self._buffer)
+
+    def clear(self) -> None:
+        """Clear all buffered messages."""
+        with self._lock:
+            self._buffer.clear()
+
+
+class LogBufferHandler(logging.Handler):
+    """Logging handler that writes to a LogBuffer.
+
+    This handler captures log messages and adds them to a buffer
+    for display in the Live context, preventing log/progress conflicts.
+    """
+
+    def __init__(self, log_buffer: LogBuffer):
+        """Initialize handler.
+
+        Args:
+            log_buffer: LogBuffer to write messages to.
+        """
+        super().__init__()
+        self.log_buffer = log_buffer
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Emit a log record to the buffer.
+
+        Args:
+            record: Log record to emit.
+        """
+        try:
+            message = self.format(record)
+            self.log_buffer.add(message)
+        except Exception:
+            self.handleError(record)
 
 
 @dataclass
@@ -97,7 +168,11 @@ class ProgressManager:
         """
         self.enabled = enabled
         self.live_panel_enabled = live_panel and enabled
-        self.console = console or Console()
+        # Use stderr for Console to align with logging conventions
+        self.console = console or Console(stderr=True)
+
+        # Log buffer for integrated display
+        self.log_buffer = LogBuffer(max_lines=15)
 
         # Thread safety
         self._lock = threading.Lock()
@@ -299,63 +374,53 @@ class ProgressManager:
                 self._metrics.edge_count = edge_count
 
     def _build_live_panel(self) -> Panel:
-        """Build live display panel with metrics and active tasks.
+        """Build compact live display panel with metrics and active tasks.
 
         Returns:
             Panel: Rich panel with transaction status.
         """
         with self._lock:
-            # Build metrics table
-            metrics_table = Table.grid(padding=(0, 2))
-            metrics_table.add_column(style="cyan", justify="right")
-            metrics_table.add_column(style="white")
-
+            # Build compact metrics as single line
+            metrics_parts = []
             if self._metrics:
-                metrics_table.add_row(
-                    "Graph ID:",
-                    Text(self._metrics.graph_id[:12] + "...", style="yellow"),
+                metrics_parts.append(
+                    f"[cyan]Nodes:[/cyan] [magenta]{self._metrics.node_count:,}[/magenta]"
                 )
-                metrics_table.add_row(
-                    "Source:",
-                    Text(self._metrics.source[-40:], style="green"),
+                metrics_parts.append(
+                    f"[cyan]Edges:[/cyan] [magenta]{self._metrics.edge_count:,}[/magenta]"
                 )
-                metrics_table.add_row(
-                    "Nodes:",
-                    Text(f"{self._metrics.node_count:,}", style="magenta"),
-                )
-                metrics_table.add_row(
-                    "Edges:",
-                    Text(f"{self._metrics.edge_count:,}", style="magenta"),
-                )
-                metrics_table.add_row(
-                    "Elapsed:",
-                    Text(f"{self._metrics.elapsed:.1f}s", style="blue"),
+                metrics_parts.append(
+                    f"[cyan]Time:[/cyan] [blue]{self._metrics.elapsed:.1f}s[/blue]"
                 )
 
-            # Build active tasks panel
+            metrics_line = "  ".join(metrics_parts) if metrics_parts else "[dim]Initializing...[/dim]"
+
+            # Build active tasks (compact, max 3)
             active_tasks_text = Text()
             if self._active_tasks:
-                for task in list(self._active_tasks)[:5]:  # Show max 5
+                tasks = list(self._active_tasks)[:3]  # Show max 3
+                for task in tasks:
                     active_tasks_text.append(f"→ {task}\n", style="dim cyan")
+                if len(self._active_tasks) > 3:
+                    active_tasks_text.append(
+                        f"... and {len(self._active_tasks) - 3} more",
+                        style="dim yellow"
+                    )
             else:
                 active_tasks_text.append("(no active tasks)", style="dim")
 
-            # Combine into group
+            # Combine into compact group
             group = Group(
-                Panel(
-                    metrics_table, title="[bold]Metrics[/bold]", border_style="blue"
-                ),
-                Panel(
-                    active_tasks_text,
-                    title="[bold]Active Tasks[/bold]",
-                    border_style="green",
-                ),
+                Text(metrics_line, justify="left"),
+                Text(),  # Empty line
+                active_tasks_text,
             )
 
             return Panel(
                 group,
-                title="[bold yellow]Transaction Progress[/bold yellow]",
+                title="[bold yellow]Progress[/bold yellow]",
                 border_style="yellow",
+                padding=(0, 1),  # Minimal padding
             )
 
     def _update_live_display(self) -> None:
@@ -363,8 +428,25 @@ class ProgressManager:
         while not self._stop_event.is_set():
             try:
                 if self._live and self._progress:
+                    # Build complete display: logs + progress + metrics
                     with self._lock:
+                        # Get recent log lines
+                        log_lines = self.log_buffer.get_lines()
+                        log_text = Text()
+                        if log_lines:
+                            for line in log_lines[-10:]:  # Show last 10 lines
+                                log_text.append(line + "\n")
+                        else:
+                            log_text.append("[dim]No recent logs[/dim]\n")
+
+                        # Build complete renderable with logs on top
                         renderable = Group(
+                            Panel(
+                                log_text,
+                                title="[bold cyan]Recent Logs[/bold cyan]",
+                                border_style="cyan",
+                                padding=(0, 1),
+                            ),
                             self._progress,
                             self._build_live_panel(),
                         )
@@ -379,6 +461,8 @@ class ProgressManager:
     def live_display(self):
         """Context manager for live progress display.
 
+        Progress bar is displayed at the bottom while logs scroll above.
+
         Yields:
             ProgressManager: Self for chaining.
         """
@@ -388,16 +472,24 @@ class ProgressManager:
 
         try:
             if self.live_panel_enabled:
-                # Live panel with auto-refresh
-                renderable = Group(
+                # Create initial display with log area
+                initial_renderable = Group(
+                    Panel(
+                        Text("[dim]No recent logs[/dim]"),
+                        title="[bold cyan]Recent Logs[/bold cyan]",
+                        border_style="cyan",
+                        padding=(0, 1),
+                    ),
                     self._progress,
                     self._build_live_panel(),
                 )
 
+                # Use Live with vertical overflow to allow content to scroll
                 with Live(
-                    renderable,
+                    initial_renderable,
                     console=self.console,
                     refresh_per_second=4,
+                    transient=False,  # Keep display after exit
                 ) as live:
                     self._live = live
                     self._stop_event.clear()

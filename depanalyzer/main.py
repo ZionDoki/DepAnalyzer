@@ -7,6 +7,12 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
+
+from rich.console import Console
+from rich.logging import RichHandler
+
+logger = logging.getLogger("depanalyzer.cli")
 
 # Trigger ecosystem registration by importing parsers package
 import depanalyzer.parsers  # noqa: F401
@@ -14,20 +20,32 @@ import depanalyzer.parsers  # noqa: F401
 from depanalyzer.cli.scan import scan_command
 from depanalyzer.cli.export import export_command
 
-logger = logging.getLogger("depanalyzer.cli")
 
-
-def setup_logging(verbose: bool = False) -> None:
-    """Setup logging configuration.
+def setup_logging(verbose: bool = False, console: Optional[Console] = None) -> None:
+    """Setup logging configuration with Rich integration.
 
     Args:
         verbose: Enable verbose logging.
+        console: Rich Console instance for coordinated output (optional).
     """
     level = logging.DEBUG if verbose else logging.INFO
+
+    # Create RichHandler for coordinated output with progress display
+    handler = RichHandler(
+        console=console,
+        show_time=True,
+        show_path=False,
+        markup=False,
+        rich_tracebacks=True,
+        tracebacks_show_locals=verbose,
+        log_time_format="[%H:%M:%S]",
+    )
+
+    # Configure root logger
     logging.basicConfig(
         level=level,
-        format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s",
-        datefmt="%H:%M:%S",
+        format="[%(name)s] [%(levelname)s] %(message)s",
+        handlers=[handler],
     )
 
 
@@ -37,6 +55,16 @@ def main() -> int:
     Returns:
         int: Exit code.
     """
+    # Verify ecosystem registration (only in main process)
+    from depanalyzer.parsers.registry import EcosystemRegistry
+    _registry = EcosystemRegistry.get_instance()
+    _ecosystems = _registry.list_ecosystems()
+    if not _ecosystems:
+        logger.warning("⚠ WARNING: No ecosystems were registered during startup!")
+        logger.warning("Please check for import errors above. Scan command will not work.")
+    else:
+        logger.info("✓ Successfully loaded %d ecosystem(s): %s", len(_ecosystems), ", ".join(_ecosystems))
+
     parser = argparse.ArgumentParser(
         description="Depanalyzer - Dependency Analysis Tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,

@@ -14,6 +14,7 @@ class HvigorDetector(BaseDetector):
     """Detector for HVigor/ArkTS project configuration files."""
 
     NAME = "hvigor"
+    ECOSYSTEM = "hvigor"
     TARGET_PATTERNS = [
         "**/build-profile.json5",
         "**/oh-package.json5",

@@ -5,6 +5,7 @@ Transaction instances in parallel across multiple processes, avoiding Python's G
 """
 
 import logging
+import multiprocessing
 import os
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -180,8 +181,14 @@ class TransactionCoordinator:
 
         # Ensure executor is created
         if self._executor is None:
-            self._executor = ProcessPoolExecutor(max_workers=self.max_processes)
-            logger.info("Process pool executor started with %d workers", self.max_processes)
+            # Use explicit 'spawn' context for Windows compatibility
+            # On Unix, this is harmless; on Windows, it's required to avoid bootstrap errors
+            mp_context = multiprocessing.get_context('spawn')
+            self._executor = ProcessPoolExecutor(
+                max_workers=self.max_processes,
+                mp_context=mp_context,
+            )
+            logger.info("Process pool executor started with %d workers (spawn context)", self.max_processes)
 
         # Serialize transaction
         try:

@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from depanalyzer.runtime.coordinator import TransactionCoordinator
-from depanalyzer.runtime.progress import ProgressManager
+from depanalyzer.runtime.progress import ProgressManager, LogBufferHandler
 from depanalyzer.runtime.transaction import Transaction
 
 logger = logging.getLogger("depanalyzer.cli.scan")
@@ -15,6 +15,33 @@ logger = logging.getLogger("depanalyzer.cli.scan")
 
 def scan_command(args) -> int:
     """Execute scan command.
+
+    Args:
+        args: Parsed command-line arguments.
+
+    Returns:
+        int: Exit code.
+    """
+    # Add a top-level exception handler to catch ANY unhandled exceptions
+    import sys
+    import traceback
+
+    try:
+        return _scan_command_impl(args)
+    except Exception as e:
+        # Print to stderr directly to ensure it's visible even if logging is broken
+        print(f"\n{'=' * 70}", file=sys.stderr)
+        print(f"FATAL ERROR in scan_command:", file=sys.stderr)
+        print(f"{'=' * 70}", file=sys.stderr)
+        print(f"Exception: {e}", file=sys.stderr)
+        print(f"\nTraceback:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        print(f"{'=' * 70}\n", file=sys.stderr)
+        return 1
+
+
+def _scan_command_impl(args) -> int:
+    """Internal implementation of scan command.
 
     Args:
         args: Parsed command-line arguments.
@@ -37,26 +64,63 @@ def scan_command(args) -> int:
         live_panel=True,
     )
 
+    # Reconfigure logging to use LogBuffer for coordinated output
+    # This prevents logger output from interfering with progress display
+    if progress_enabled:
+        root_logger = logging.getLogger()
+        # Remove existing handlers
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+
+        # Add LogBufferHandler to capture logs in progress display
+        buffer_handler = LogBufferHandler(progress_manager.log_buffer)
+        buffer_handler.setFormatter(
+            logging.Formatter("[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
+        )
+        buffer_handler.setLevel(logging.DEBUG)  # Ensure handler captures all logs
+        root_logger.addHandler(buffer_handler)
+        root_logger.setLevel(logging.DEBUG)  # Ensure root logger passes all logs
+
     try:
         # Create coordinator with process pool
+        logger.info("Creating TransactionCoordinator...")
         coordinator = TransactionCoordinator.get_instance()
+        logger.info("TransactionCoordinator created successfully")
 
         # Create and submit transaction to process pool
+        logger.info("Creating transaction...")
         transaction = Transaction(
             source=args.source,
             max_workers=args.workers,
             max_dependency_depth=args.max_depth,
             progress_manager=progress_manager,
         )
+        logger.info("Transaction created: %s", transaction.transaction_id)
 
         # Use progress manager's live display context
+        logger.info("Starting live display...")
         with progress_manager.live_display():
             logger.info("Submitting transaction %s to process pool", transaction.transaction_id)
-            future = coordinator.submit(transaction)
+            try:
+                future = coordinator.submit(transaction)
+                logger.info("Transaction submitted successfully")
+            except Exception as e:
+                logger.error("Failed to submit transaction: %s", e, exc_info=True)
+                return 1
 
-            # Wait for transaction to complete
+            # Wait for transaction to complete (with timeout)
             logger.info("Waiting for transaction to complete...")
-            result = future.result()
+            try:
+                result = future.result(timeout=300)  # 5 minute timeout
+                logger.info("Transaction completed, processing result...")
+            except TimeoutError:
+                logger.error("Transaction timed out after 300 seconds")
+                logger.error("This usually indicates the subprocess is stuck or crashed")
+                logger.error("Check the logs above for any error messages")
+                return 1
+            except Exception as e:
+                logger.error("Transaction failed with exception: %s", e, exc_info=True)
+                return 1
 
         if not result.success:
             logger.error("Transaction failed: %s", result.error)
@@ -123,8 +187,15 @@ def scan_command(args) -> int:
         # Stop progress manager
         progress_manager.stop()
 
-        # Ensure cleanup
+        # Ensure cleanup of coordinator
         try:
             TransactionCoordinator.get_instance().shutdown(wait=False)
+        except:
+            pass
+
+        # Ensure cleanup of GraphRegistry manager
+        try:
+            from depanalyzer.graph.registry import GraphRegistry
+            GraphRegistry.shutdown()
         except:
             pass

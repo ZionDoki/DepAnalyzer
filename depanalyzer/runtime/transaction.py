@@ -182,6 +182,7 @@ class Transaction:
 
         # Get all registered detector classes
         ecosystems = registry.list_ecosystems()
+        logger.info("Registered ecosystems in registry: %s", ecosystems)
         if not ecosystems:
             logger.warning("No ecosystems registered, skipping detection")
             return
@@ -229,8 +230,13 @@ class Transaction:
             )
             worker.enqueue(task)
 
+        # Log task count before execution
+        task_count = len(worker._queue)
+        logger.info("Enqueued %d detection tasks for execution", task_count)
+
         # Execute all detection tasks and collect results
         results = worker.run_all()
+        logger.info("Detection tasks completed: %d results received", len(results))
 
         # Process results and store detected targets
         completed_count = 0
@@ -1117,6 +1123,14 @@ class Transaction:
         """
         # Import here to avoid circular dependency
         from depanalyzer.runtime.coordinator import TransactionResult
+
+        # CRITICAL: Force ecosystem registration in subprocess
+        # This ensures that ecosystems are registered even when running in a subprocess
+        import depanalyzer.parsers  # noqa: F401
+        from depanalyzer.parsers.registry import EcosystemRegistry
+        registry = EcosystemRegistry.get_instance()
+        ecosystems = registry.list_ecosystems()
+        logger.info("[PID %d] Available ecosystems in this process: %s", os.getpid(), ecosystems)
 
         self._start_time = time.time()
         logger.info(

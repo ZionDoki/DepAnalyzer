@@ -54,11 +54,10 @@ class HvigorParser(BaseParser):
                     **config.get("dependencies", {}),
                     **config.get("devDependencies", {}),
                 }
-                # Store dependency list with version info
+                # Store dependency list with version info (including file: dependencies)
                 result["dependencies"] = [
                     {"name": name, "version": version}
                     for name, version in all_deps.items()
-                    if not (isinstance(version, str) and version.startswith("file:"))
                 ]
 
                 native_deps = {
@@ -78,19 +77,32 @@ class HvigorParser(BaseParser):
                 )
             elif file_path.name == "oh-package-lock.json5":
                 result["type"] = "lock_file"
-                # ohpm lock v3 commonly uses packages/specifiers
+                # ohpm lock v3 uses packages/specifiers structure
                 deps_list = []
-                # Legacy structure (dependencies)
+
+                # Legacy structure (lockfileVersion < 3: dependencies)
                 deps_legacy = config.get("dependencies", {}) or {}
                 for name, info in deps_legacy.items():
                     ver = info.get("version") if isinstance(info, dict) else ""
-                    deps_list.append({"name": name, "version": ver})
-                # New structure (packages)
-                for _, info in (config.get("packages", {}) or {}).items():
+                    deps_list.append({"name": name, "version": ver, "registry_type": "ohpm"})
+
+                # New structure (lockfileVersion 3: packages)
+                packages = config.get("packages", {}) or {}
+                for package_key, info in packages.items():
+                    if not isinstance(info, dict):
+                        continue
+
                     name = info.get("name")
                     ver = info.get("version")
+                    registry_type = info.get("registryType", "ohpm")
+
                     if name:
-                        deps_list.append({"name": name, "version": ver})
+                        deps_list.append({
+                            "name": name,
+                            "version": ver,
+                            "registry_type": registry_type,
+                        })
+
                 result["external_dependencies"] = deps_list
 
             elif file_path.name == "hvigor-config.json5":
@@ -228,6 +240,37 @@ class HvigorParser(BaseParser):
         """Process oh-package.json5 dependencies."""
         config_file = result.get("file")
 
+        # Determine owning module from config file path
+        # oh-package.json5 files can be at:
+        # - project root: <root>/oh-package.json5 -> no owning module
+        # - module level: <root>/<module>/oh-package.json5 -> module:<module>
+        owning_module_id = None
+        try:
+            rel_to_root = config_file.relative_to(self.workspace_root)
+            parts = rel_to_root.parts
+            if len(parts) == 1:
+                # Root level oh-package.json5
+                owning_module_id = None
+            elif len(parts) >= 2:
+                # Module level: parts[0] is the module name
+                module_name = parts[0]
+                owning_module_id = f"module:{module_name}"
+
+                # Link module to its config file
+                self.add_edge(
+                    source=owning_module_id,
+                    target=config_file_id,
+                    edge_kind=EdgeKind.DEFINED_BY,
+                    parser_name=self.NAME,
+                )
+                logger.debug(
+                    "Linked module %s to config %s",
+                    owning_module_id,
+                    config_file_id,
+                )
+        except ValueError:
+            pass
+
         # Process regular dependencies
         deps = result.get("dependencies", [])
         for dep in deps:
@@ -241,45 +284,83 @@ class HvigorParser(BaseParser):
             if not dep_name:
                 continue
 
-            # Create external library node
-            if dep_version and dep_version != "":
-                lib_id = f"ext_lib:{dep_name}@{dep_version}"
+            # Check if this is a local (file:) dependency
+            is_local = isinstance(dep_version, str) and dep_version.startswith("file:")
+
+            if is_local:
+                # Local dependency - reference to another module or local package
+                # Extract the target module name from the dependency name (e.g., @sj/ffmpeg -> ffmpeg)
+                target_module_name = dep_name.split("/")[-1] if "/" in dep_name else dep_name
+                target_module_id = f"module:{target_module_name}"
+
+                # Create edge from owning module to target module
+                if owning_module_id:
+                    self.add_edge(
+                        source=owning_module_id,
+                        target=target_module_id,
+                        edge_kind=EdgeKind.DEPENDS_ON,
+                        parser_name=self.NAME,
+                    )
+                    logger.debug(
+                        "Created local dependency edge: %s -> %s",
+                        owning_module_id,
+                        target_module_id,
+                    )
             else:
-                lib_id = f"ext_lib:{dep_name}"
+                # External dependency
+                if dep_version and dep_version != "":
+                    lib_id = f"ext_lib:{dep_name}@{dep_version}"
+                else:
+                    lib_id = f"ext_lib:{dep_name}"
 
-            self.add_node(
-                node_id=lib_id,
-                node_type=NodeType.EXTERNAL_LIBRARY,
-                label=lib_id,
-                src_path="N/A",
-                name=dep_name,
-                version=str(dep_version) if dep_version else None,
-                parser_name=self.NAME,
-                origin="external",
-                provenance="ohpm_package",
-                declared_via="oh-package.json5",
-                confidence=0.9,
-            )
+                self.add_node(
+                    node_id=lib_id,
+                    node_type=NodeType.EXTERNAL_LIBRARY,
+                    label=lib_id,
+                    src_path="N/A",
+                    name=dep_name,
+                    version=str(dep_version) if dep_version else None,
+                    parser_name=self.NAME,
+                    origin="external",
+                    provenance="ohpm_package",
+                    declared_via="oh-package.json5",
+                    confidence=0.9,
+                    ecosystem="hvigor",
+                )
 
-            # Publish dependency discovered event
-            spec = DependencySpec(
-                name=dep_name,
-                version=str(dep_version) if dep_version else "",
-                ecosystem="hvigor",
-                metadata={
-                    "parser_name": self.NAME,
-                    "depth": 0,
-                },
-            )
-            event = Event(
-                event_type=EventType.DEPENDENCY_DISCOVERED,
-                source=self.NAME,
-                data={
-                    "spec": spec,
-                    "source_file": str(config_file),
-                },
-            )
-            self.publish_parse_event(event)
+                # Create edge from owning module to external library
+                if owning_module_id:
+                    self.add_edge(
+                        source=owning_module_id,
+                        target=lib_id,
+                        edge_kind=EdgeKind.DEPENDS_ON,
+                        parser_name=self.NAME,
+                    )
+                    logger.debug(
+                        "Created external dependency edge: %s -> %s",
+                        owning_module_id,
+                        lib_id,
+                    )
+
+                # Publish dependency discovered event
+                spec = DependencySpec(
+                    name=dep_name,
+                    version=str(dep_version) if dep_version else "",
+                    ecosystem="hvigor",
+                    metadata={
+                        "parser_name": self.NAME,
+                        "depth": 0,
+                    },
+                )
+                event = Event(
+                    event_type=EventType.DEPENDENCY_DISCOVERED,
+                    source=self.NAME,
+                    data={
+                        "spec": spec,
+                        "source_file": str(config_file),
+                    },
+                )
+                self.publish_parse_event(event)
 
         # Process native dependencies (for native bridge detection)
         native_deps = result.get("native_dependencies", {})
@@ -381,12 +462,31 @@ class HvigorParser(BaseParser):
 
     def _process_lock_file(self, result: Dict[str, Any], config_file_id: str):
         """Process oh-package-lock.json5 file."""
+        config_file = result.get("file")
+
+        # Determine owning module from lock file path (same logic as oh-package.json5)
+        owning_module_id = None
+        try:
+            rel_to_root = config_file.relative_to(self.workspace_root)
+            parts = rel_to_root.parts
+            if len(parts) >= 2:
+                module_name = parts[0]
+                owning_module_id = f"module:{module_name}"
+        except ValueError:
+            pass
+
         for dep in result.get("external_dependencies", []):
             lib_name = dep.get("name")
             if not lib_name:
                 continue
 
             lib_version = dep.get("version")
+            registry_type = dep.get("registry_type", "ohpm")
+
+            # Skip local dependencies - they're handled by oh-package.json5
+            if registry_type == "local":
+                continue
+
             lib_id = (
                 f"ext_lib:{lib_name}@{lib_version}"
                 if lib_version
@@ -405,7 +505,22 @@ class HvigorParser(BaseParser):
                 provenance="ohpm_lock",
                 declared_via="oh-package-lock.json5",
                 confidence=1.0,
+                ecosystem="hvigor",
             )
+
+            # Create edge from owning module to external library
+            if owning_module_id:
+                self.add_edge(
+                    source=owning_module_id,
+                    target=lib_id,
+                    edge_kind=EdgeKind.DEPENDS_ON,
+                    parser_name=self.NAME,
+                )
+                logger.debug(
+                    "Created lock file dependency edge: %s -> %s",
+                    owning_module_id,
+                    lib_id,
+                )
 
             # Publish dependency event
             spec = DependencySpec(
@@ -415,6 +530,7 @@ class HvigorParser(BaseParser):
                 metadata={
                     "parser_name": self.NAME,
                     "depth": 0,
+                    "registry_type": registry_type,
                 },
             )
             event = Event(

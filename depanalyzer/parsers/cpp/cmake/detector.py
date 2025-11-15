@@ -14,6 +14,7 @@ class CMakeDetector(BaseDetector):
     """Detector for CMake configuration files."""
 
     NAME = "cmake"
+    ECOSYSTEM = "cpp"
     TARGET_PATTERNS = [
         "**/CMakeLists.txt",
         "**/*.cmake",

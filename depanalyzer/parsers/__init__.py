@@ -21,9 +21,9 @@ try:
     from depanalyzer.parsers.cpp.code_parser import CppCodeParser
 
     _CPP_AVAILABLE = True
-    logger.debug("CPP ecosystem components imported successfully")
+    logger.debug("✓ CPP ecosystem components imported successfully")
 except ImportError as e:
-    logger.error("CPP ecosystem imports failed: %s", e, exc_info=True)
+    logger.error("❌ CPP ecosystem imports failed: %s", e, exc_info=True)
     logger.error(
         "CPP ecosystem will not be available. "
         "Please ensure all dependencies are installed (tree-sitter, tree-sitter-cmake, etc.)"
@@ -39,9 +39,9 @@ try:
     from depanalyzer.parsers.hvigor.code_parser import HvigorCodeParser
 
     _HVIGOR_AVAILABLE = True
-    logger.debug("Hvigor ecosystem components imported successfully")
+    logger.debug("✓ Hvigor ecosystem components imported successfully")
 except ImportError as e:
-    logger.error("Hvigor ecosystem imports failed: %s", e, exc_info=True)
+    logger.error("❌ Hvigor ecosystem imports failed: %s", e, exc_info=True)
     logger.error(
         "Hvigor ecosystem will not be available. "
         "Please ensure all dependencies are installed (json5, requests, packaging, etc.)"

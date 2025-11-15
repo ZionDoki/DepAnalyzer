@@ -55,9 +55,12 @@ class GraphRegistry:
 
         # Initialize manager for shared state
         if GraphRegistry._manager is None:
-            GraphRegistry._manager = multiprocessing.Manager()
+            # Use explicit 'spawn' context for Windows compatibility
+            # On Unix, this is harmless; on Windows, it's required to avoid bootstrap errors
+            mp_context = multiprocessing.get_context('spawn')
+            GraphRegistry._manager = mp_context.Manager()
             GraphRegistry._lock = GraphRegistry._manager.Lock()
-            logger.info("Initialized multiprocessing Manager for shared state")
+            logger.info("Initialized multiprocessing Manager for shared state (spawn context)")
 
         self.cache_root = cache_root or Path(".depanalyzer_cache/graphs")
         self.cache_root.mkdir(parents=True, exist_ok=True)
@@ -99,17 +102,24 @@ class GraphRegistry:
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("Failed to load registry: %s", e)
 
-    def _save_registry(self) -> None:
-        """Save registry to disk with file locking for multi-process safety."""
+    def _save_registry_unlocked(self) -> None:
+        """Save registry to disk without acquiring lock (internal use only).
+
+        Caller must hold the lock before calling this method.
+        """
         try:
-            with GraphRegistry._lock:
-                # Convert manager dict to regular dict for JSON serialization
-                registry_data = dict(self._registry)
-                with open(self._registry_file, "w", encoding="utf-8") as f:
-                    json.dump(registry_data, f, indent=2, ensure_ascii=False)
+            # Convert manager dict to regular dict for JSON serialization
+            registry_data = dict(self._registry)
+            with open(self._registry_file, "w", encoding="utf-8") as f:
+                json.dump(registry_data, f, indent=2, ensure_ascii=False)
             logger.debug("Registry saved with %d entries", len(self._registry))
         except OSError as e:
             logger.error("Failed to save registry: %s", e)
+
+    def _save_registry(self) -> None:
+        """Save registry to disk with file locking for multi-process safety."""
+        with GraphRegistry._lock:
+            self._save_registry_unlocked()
 
     def register(
         self,
@@ -129,7 +139,8 @@ class GraphRegistry:
                 "cache_path": str(cache_path),
                 "summary": summary,
             }
-            self._save_registry()
+            # Use unlocked version since we already hold the lock
+            self._save_registry_unlocked()
             logger.info("Registered graph: %s (PID: %d)", graph_id, os.getpid())
 
     def get_entry(self, graph_id: str) -> Optional[Dict[str, Any]]:
@@ -197,7 +208,8 @@ class GraphRegistry:
         """Clear registry (for testing)."""
         with GraphRegistry._lock:
             self._registry.clear()
-            self._save_registry()
+            # Use unlocked version since we already hold the lock
+            self._save_registry_unlocked()
             logger.warning("Registry cleared")
 
     @classmethod
