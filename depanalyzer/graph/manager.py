@@ -269,6 +269,17 @@ class GraphManager:
         """
         return self._backend.get_node_data(node_id)
 
+    def get_node_attributes(self, node_id: str) -> Optional[Dict[str, Any]]:
+        """Get node attributes (alias for get_node).
+
+        Args:
+            node_id: Node identifier.
+
+        Returns:
+            Optional[Dict[str, Any]]: Node attributes or None.
+        """
+        return self.get_node(node_id)
+
     def has_node(self, node_id: str) -> bool:
         """Check if node exists.
 
