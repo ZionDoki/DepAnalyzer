@@ -31,8 +31,11 @@ class GraphRegistry:
     _lock: Optional[Any] = None  # multiprocessing.Lock type
     _initialized: bool = False
 
-    def __new__(cls) -> "GraphRegistry":
+    def __new__(cls, cache_root: Optional[Path] = None) -> "GraphRegistry":
         """Singleton pattern for global registry.
+
+        Args:
+            cache_root: Optional cache root directory (ignored, passed to __init__).
 
         Returns:
             GraphRegistry: Singleton instance.

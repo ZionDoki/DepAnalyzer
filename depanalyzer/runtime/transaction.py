@@ -20,6 +20,7 @@ from depanalyzer.runtime.workspace import Workspace
 
 if TYPE_CHECKING:
     from depanalyzer.runtime.coordinator import TransactionResult
+    from depanalyzer.runtime.progress import ProgressManager
 
 logger = logging.getLogger("depanalyzer.transaction")
 
@@ -43,6 +44,7 @@ class Transaction:
         max_dependency_depth: int = 3,
         parent_transaction_id: Optional[str] = None,
         transaction_id: Optional[str] = None,
+        progress_manager: Optional["ProgressManager"] = None,
     ) -> None:
         """Initialize transaction.
 
@@ -53,6 +55,7 @@ class Transaction:
             max_dependency_depth: Maximum third-party dependency depth.
             parent_transaction_id: Optional parent transaction ID for third-party deps.
             transaction_id: Optional transaction identifier. If None, generated.
+            progress_manager: Optional progress manager for live progress display.
         """
         self.transaction_id = transaction_id or str(uuid.uuid4())
         self.source = source
@@ -65,6 +68,9 @@ class Transaction:
         self.workspace = Workspace(source)
         self.worker: Optional[Worker] = None
         self.eventbus: Optional[EventBus] = None
+
+        # Progress tracking
+        self._progress_manager = progress_manager
 
         # Will be initialized during run
         self._graph_manager = None
@@ -91,6 +97,7 @@ class Transaction:
         state["eventbus"] = None
         state["_graph_manager"] = None
         state["_dependency_collector"] = None
+        state["_progress_manager"] = None  # Progress manager is not serializable
         return state
 
     def __setstate__(self, state: dict) -> None:
@@ -143,6 +150,15 @@ class Transaction:
         logger.info("=== Phase: %s ===", LifecyclePhase.ACQUIRE)
         self._current_phase = LifecyclePhase.ACQUIRE
 
+        # Start progress tracking for this phase
+        phase_id = None
+        if self._progress_manager:
+            phase_id = self._progress_manager.start_phase(
+                phase=LifecyclePhase.ACQUIRE,
+                total=1,
+                description="Acquiring source code",
+            )
+
         root_path = self.workspace.acquire()
         logger.info("Workspace acquired at: %s", root_path)
 
@@ -150,6 +166,10 @@ class Transaction:
         if not self.graph_id:
             self.graph_id = f"graph_{self.workspace.get_signature()}"
             logger.info("Generated graph_id: %s", self.graph_id)
+
+        # Complete phase
+        if self._progress_manager and phase_id:
+            self._progress_manager.complete_phase(phase_id)
 
     def _phase_detect(self) -> None:
         """Phase B: Parallel detection of targets."""
@@ -167,6 +187,15 @@ class Transaction:
             return
 
         logger.info("Running detectors for %d ecosystems", len(ecosystems))
+
+        # Start progress tracking for this phase
+        phase_id = None
+        if self._progress_manager:
+            phase_id = self._progress_manager.start_phase(
+                phase=LifecyclePhase.DETECT,
+                total=len(ecosystems),
+                description=f"Detecting targets ({len(ecosystems)} ecosystems)",
+            )
 
         # Store detected targets for parse phase
         self._detected_targets: Dict[str, List[Path]] = {}
@@ -204,6 +233,7 @@ class Transaction:
         results = worker.run_all()
 
         # Process results and store detected targets
+        completed_count = 0
         for task_id, result in results.items():
             if result.success and result.result:
                 ecosystem = result.result.get("ecosystem")
@@ -212,9 +242,23 @@ class Transaction:
                     self._detected_targets[ecosystem] = targets
                     logger.info("Stored %d targets for ecosystem: %s", len(targets), ecosystem)
 
+            completed_count += 1
+            # Update progress after each ecosystem
+            if self._progress_manager and phase_id:
+                total_targets = sum(len(targets) for targets in self._detected_targets.values())
+                self._progress_manager.update_phase(
+                    phase_id,
+                    completed=completed_count,
+                    description=f"Detected {total_targets} targets from {completed_count}/{len(ecosystems)} ecosystems",
+                )
+
         total_targets = sum(len(targets) for targets in self._detected_targets.values())
         logger.info("Detection phase completed: %d ecosystems, %d total targets",
                     len(self._detected_targets), total_targets)
+
+        # Complete phase
+        if self._progress_manager and phase_id:
+            self._progress_manager.complete_phase(phase_id)
 
     def _phase_parse(self) -> None:
         """Phase C: Parallel parsing of detected targets.
@@ -249,6 +293,20 @@ class Transaction:
 
         from depanalyzer.parsers.registry import EcosystemRegistry
         registry = EcosystemRegistry.get_instance()
+
+        # Calculate total targets for progress tracking
+        total_targets = sum(len(targets) for targets in self._detected_targets.values())
+
+        # Start progress tracking for this phase
+        phase_id = None
+        if self._progress_manager:
+            # Initial estimate: config files + potential code files
+            estimated_total = total_targets * 10  # Rough estimate
+            phase_id = self._progress_manager.start_phase(
+                phase=LifecyclePhase.PARSE,
+                total=estimated_total,
+                description=f"Parsing {total_targets} config files",
+            )
 
         # Stage 1: Config parsing
         logger.info("=== Stage 1: Config Parsing ===")
@@ -305,8 +363,10 @@ class Transaction:
         # Execute all config parsing tasks
         results = worker.run_all()
 
-        # Collect discovered code files
+        # Collect discovered code files and update progress
+        config_parsed = 0
         for task_id, result in results.items():
+            config_parsed += 1
             if result.success and result.result:
                 ecosystem = result.result.get("ecosystem")
                 code_files = result.result.get("code_files", [])
@@ -314,6 +374,14 @@ class Transaction:
                     if ecosystem not in code_files_to_parse:
                         code_files_to_parse[ecosystem] = []
                     code_files_to_parse[ecosystem].extend(code_files)
+
+            # Update progress after each config file
+            if self._progress_manager and phase_id:
+                self._progress_manager.update_phase(
+                    phase_id,
+                    completed=config_parsed,
+                    description=f"Parsed {config_parsed}/{total_targets} config files",
+                )
 
         total_config_success = sum(1 for r in results.values() if r.success)
         total_code_files = sum(len(files) for files in code_files_to_parse.values())
@@ -323,9 +391,27 @@ class Transaction:
         # Stage 2: Code parsing
         if not code_files_to_parse:
             logger.info("No code files to parse, skipping Stage 2")
+            if self._progress_manager and phase_id:
+                self._progress_manager.complete_phase(phase_id)
             return
 
         logger.info("=== Stage 2: Code Parsing ===")
+
+        # Update progress total with actual code file count
+        if self._progress_manager and phase_id:
+            self._progress_manager.update_phase(
+                phase_id,
+                completed=config_parsed,
+                description=f"Parsing {total_code_files} code files (Stage 2/2)",
+            )
+            # Reset total to reflect actual count
+            phase_id_tmp = phase_id
+            phase_id = self._progress_manager.start_phase(
+                phase=LifecyclePhase.PARSE,
+                total=total_code_files,
+                description=f"Parsing {total_code_files} code files",
+            )
+            self._progress_manager.complete_phase(phase_id_tmp)
 
         from depanalyzer.runtime.code_parser_pool import CodeParserPool
         from concurrent.futures import as_completed
@@ -352,16 +438,29 @@ class Transaction:
         for file_path, parse_result in code_results.items():
             if parse_result.get("skipped"):
                 skipped += 1
-                continue
             elif parse_result.get("error"):
                 failed += 1
                 logger.warning("Code parsing failed for %s: %s",
                              file_path, parse_result.get("error"))
-                continue
+            else:
+                # Add code file node and dependencies to graph
+                self._process_code_parse_result(file_path, parse_result)
+                successful += 1
 
-            # Add code file node and dependencies to graph
-            self._process_code_parse_result(file_path, parse_result)
-            successful += 1
+            # Update progress after each code file
+            total_processed = successful + skipped + failed
+            if self._progress_manager and phase_id:
+                self._progress_manager.update_phase(
+                    phase_id,
+                    completed=total_processed,
+                    description=f"Parsed {total_processed}/{total_code_files} code files ({successful} ok, {failed} failed)",
+                )
+                # Update graph metrics
+                if self._graph_manager:
+                    self._progress_manager.update_metrics(
+                        node_count=self._graph_manager.node_count(),
+                        edge_count=self._graph_manager.edge_count(),
+                    )
 
         logger.info("Stage 2 completed: %d successful, %d skipped, %d failed",
                    successful, skipped, failed)
@@ -420,6 +519,15 @@ class Transaction:
 
         logger.info("Found %d dependencies to resolve", len(dep_specs))
 
+        # Start progress tracking for this phase
+        phase_id = None
+        if self._progress_manager:
+            phase_id = self._progress_manager.start_phase(
+                phase=LifecyclePhase.RESOLVE_DEPS,
+                total=len(dep_specs),
+                description=f"Resolving {len(dep_specs)} dependencies",
+            )
+
         # Resolve dependencies (fetch to local paths)
         from depanalyzer.runtime.dependency_resolver import resolve_dependencies
 
@@ -433,6 +541,8 @@ class Transaction:
 
         if not successful_deps:
             logger.warning("No dependencies were successfully fetched")
+            if self._progress_manager and phase_id:
+                self._progress_manager.complete_phase(phase_id)
             return
 
         logger.info(
@@ -506,11 +616,24 @@ class Transaction:
                     "Failed to get result for child transaction %s: %s", child_tx_id, e
                 )
 
+            # Update progress after each dependency
+            if self._progress_manager and phase_id:
+                total_processed = completed_count + failed_count
+                self._progress_manager.update_phase(
+                    phase_id,
+                    completed=total_processed,
+                    description=f"Resolved {total_processed}/{len(futures)} dependencies ({completed_count} ok, {failed_count} failed)",
+                )
+
         logger.info(
             "Dependency resolution completed: %d succeeded, %d failed",
             completed_count,
             failed_count,
         )
+
+        # Complete phase
+        if self._progress_manager and phase_id:
+            self._progress_manager.complete_phase(phase_id)
 
     def _discover_dependencies(self) -> List["DependencySpec"]:
         """Discover dependencies from the current graph.
@@ -695,15 +818,43 @@ class Transaction:
         except ImportError as e:
             logger.warning("ContractMatcher not available: %s", e)
 
+        # Start progress tracking for this phase
+        phase_id = None
+        if self._progress_manager:
+            phase_id = self._progress_manager.start_phase(
+                phase=LifecyclePhase.JOIN,
+                total=len(hooks),
+                description=f"Executing {len(hooks)} hooks",
+            )
+
         # Execute all hooks
+        executed_count = 0
         for hook_name, hook in hooks:
             try:
                 logger.info("Executing hook: %s", hook_name)
+                if self._progress_manager and phase_id:
+                    self._progress_manager.add_active_task(f"Hook: {hook_name}")
+
                 hook.execute()
+                executed_count += 1
+
+                if self._progress_manager and phase_id:
+                    self._progress_manager.remove_active_task(f"Hook: {hook_name}")
+                    self._progress_manager.update_phase(
+                        phase_id,
+                        completed=executed_count,
+                        description=f"Executed {executed_count}/{len(hooks)} hooks",
+                    )
             except Exception as e:
                 logger.error("Hook %s failed: %s", hook_name, e, exc_info=True)
+                if self._progress_manager and phase_id:
+                    self._progress_manager.remove_active_task(f"Hook: {hook_name}")
 
         logger.info("Join phase completed with %d hooks executed", len(hooks))
+
+        # Complete phase
+        if self._progress_manager and phase_id:
+            self._progress_manager.complete_phase(phase_id)
 
     def _phase_analyze(self) -> None:
         """Phase F: Analysis on transaction graph."""
@@ -714,17 +865,42 @@ class Transaction:
             logger.warning("GraphManager not initialized, skipping analyze phase")
             return
 
+        # Start progress tracking for this phase (3 steps)
+        phase_id = None
+        if self._progress_manager:
+            phase_id = self._progress_manager.start_phase(
+                phase=LifecyclePhase.ANALYZE,
+                total=3,
+                description="Running analysis",
+            )
+
         # 1. Derive asset->artifact projection
         logger.info("Deriving asset-to-artifact projection")
         try:
+            if self._progress_manager and phase_id:
+                self._progress_manager.add_active_task("Asset-artifact projection")
+
             self._graph_manager.derive_asset_artifact_projection()
             logger.info("Asset-to-artifact projection completed")
+
+            if self._progress_manager and phase_id:
+                self._progress_manager.remove_active_task("Asset-artifact projection")
+                self._progress_manager.update_phase(
+                    phase_id,
+                    completed=1,
+                    description="Completed projection (1/3)",
+                )
         except Exception as e:
             logger.error("Failed to derive asset-artifact projection: %s", e, exc_info=True)
+            if self._progress_manager and phase_id:
+                self._progress_manager.remove_active_task("Asset-artifact projection")
 
         # 2. Deadcode analysis
         logger.info("Running deadcode analysis")
         try:
+            if self._progress_manager and phase_id:
+                self._progress_manager.add_active_task("Deadcode analysis")
+
             from depanalyzer.analysis.deadcode import DeadcodeAnalyzer
 
             dc_analyzer = DeadcodeAnalyzer(self._graph_manager)
@@ -733,12 +909,25 @@ class Transaction:
             # Store results in graph metadata
             self._graph_manager.set_metadata("dead_nodes", list(dead_nodes))
             logger.info("Identified %d dead nodes", len(dead_nodes))
+
+            if self._progress_manager and phase_id:
+                self._progress_manager.remove_active_task("Deadcode analysis")
+                self._progress_manager.update_phase(
+                    phase_id,
+                    completed=2,
+                    description=f"Identified {len(dead_nodes)} dead nodes (2/3)",
+                )
         except Exception as e:
             logger.error("Deadcode analysis failed: %s", e, exc_info=True)
+            if self._progress_manager and phase_id:
+                self._progress_manager.remove_active_task("Deadcode analysis")
 
         # 3. Linkage type analysis
         logger.info("Running linkage analysis")
         try:
+            if self._progress_manager and phase_id:
+                self._progress_manager.add_active_task("Linkage analysis")
+
             from depanalyzer.analysis.linkage import LinkageAnalyzer
 
             linkage_analyzer = LinkageAnalyzer(self._graph_manager)
@@ -747,10 +936,24 @@ class Transaction:
             # Store results in graph metadata
             self._graph_manager.set_metadata("linkage_map", linkage_map)
             logger.info("Analyzed %d linkage edges", len(linkage_map))
+
+            if self._progress_manager and phase_id:
+                self._progress_manager.remove_active_task("Linkage analysis")
+                self._progress_manager.update_phase(
+                    phase_id,
+                    completed=3,
+                    description=f"Analyzed {len(linkage_map)} linkage edges (3/3)",
+                )
         except Exception as e:
             logger.error("Linkage analysis failed: %s", e, exc_info=True)
+            if self._progress_manager and phase_id:
+                self._progress_manager.remove_active_task("Linkage analysis")
 
         logger.info("Analysis phase completed")
+
+        # Complete phase
+        if self._progress_manager and phase_id:
+            self._progress_manager.complete_phase(phase_id)
 
     def _phase_export(self, output_path: Optional[Path] = None) -> None:
         """Phase G: Export results.
@@ -765,9 +968,21 @@ class Transaction:
             logger.warning("No graph manager to export")
             return
 
+        # Start progress tracking for this phase
+        phase_id = None
+        if self._progress_manager:
+            phase_id = self._progress_manager.start_phase(
+                phase=LifecyclePhase.EXPORT,
+                total=1,
+                description="Exporting results",
+            )
+
         # Export to user-specified path if provided
         if output_path:
             try:
+                if self._progress_manager and phase_id:
+                    self._progress_manager.add_active_task("Exporting graph")
+
                 import json
                 from networkx.readwrite import node_link_data
 
@@ -779,7 +994,7 @@ class Transaction:
                 native_graph = self._graph_manager._backend.native_graph
 
                 # Convert to node-link format
-                graph_data = node_link_data(native_graph)
+                graph_data = node_link_data(native_graph, edges="links")
 
                 # Add metadata
                 graph_metadata = {
@@ -807,10 +1022,20 @@ class Transaction:
                     self._graph_manager.node_count(),
                     self._graph_manager.edge_count(),
                 )
+
+                if self._progress_manager and phase_id:
+                    self._progress_manager.remove_active_task("Exporting graph")
+
             except Exception as e:
                 logger.error("Failed to export graph to %s: %s", output_path, e)
+                if self._progress_manager and phase_id:
+                    self._progress_manager.remove_active_task("Exporting graph")
 
         logger.info("Export phase completed")
+
+        # Complete phase
+        if self._progress_manager and phase_id:
+            self._progress_manager.complete_phase(phase_id)
 
     def _flush_graph_to_disk(self) -> Optional[Path]:
         """Serialize graph to disk and return cache path.
@@ -846,7 +1071,7 @@ class Transaction:
             native_graph = self._graph_manager._backend.native_graph
 
             # Convert to node-link format
-            graph_data = node_link_data(native_graph)
+            graph_data = node_link_data(native_graph, edges="links")
 
             # Add metadata
             graph_metadata = {
@@ -901,6 +1126,13 @@ class Transaction:
             self.source,
         )
 
+        # Start transaction progress tracking
+        if self._progress_manager:
+            self._progress_manager.start_transaction(
+                graph_id=self.graph_id or "unknown",
+                source=self.source,
+            )
+
         try:
             # Ensure worker and eventbus are initialized
             self._ensure_worker()
@@ -947,6 +1179,13 @@ class Transaction:
                     summary=summary,
                 )
                 logger.info("Registered graph %s in GraphRegistry", self.graph_id)
+
+            # Update final metrics
+            if self._progress_manager and self._graph_manager:
+                self._progress_manager.update_metrics(
+                    node_count=self._graph_manager.node_count(),
+                    edge_count=self._graph_manager.edge_count(),
+                )
 
             # Build result
             result = TransactionResult(

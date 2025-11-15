@@ -90,6 +90,11 @@ def main() -> int:
         action="store_true",
         help="Skip analysis phase",
     )
+    scan_parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable progress display",
+    )
 
     # Export command
     export_parser = subparsers.add_parser(
