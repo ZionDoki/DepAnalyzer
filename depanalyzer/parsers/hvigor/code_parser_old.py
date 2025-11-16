@@ -10,8 +10,8 @@ from tree_sitter import Language, Parser, Query, QueryCursor
 # TODO: This parser uses old architecture and needs migration
 # Updated to use new package structure (depanalyzer.*)
 from depanalyzer.parsers.base import BaseCodeParser
-from depanalyzer.core.identifiers import normalize_node_id, make_external_id
-from depanalyzer.core.schema import edge_attrs
+from depanalyzer.graph.identifiers import normalize_node_id, make_external_id
+from depanalyzer.graph.schema import edge_attrs
 from depanalyzer.graph.manager import GraphManager, EdgeKind, NodeType
 
 logger = logging.getLogger("depanalyzer.parsers.hvigor.code")

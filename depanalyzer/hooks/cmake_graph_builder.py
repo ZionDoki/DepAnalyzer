@@ -12,7 +12,8 @@ from typing import Any, Dict
 from pathlib import Path
 
 from depanalyzer.runtime.eventbus import Event, EventType, EventBus
-from depanalyzer.graph.manager import GraphManager
+from depanalyzer.graph.manager import GraphManager, NodeType, EdgeKind
+from depanalyzer.graph.schema import NodeSpec, EdgeSpec
 from depanalyzer.graph.contract import BuildInterfaceContract, ContractType
 from depanalyzer.graph.contract_registry import ContractRegistry
 
@@ -77,31 +78,42 @@ class CMakeGraphBuilder:
         target_id = data["target_id"]
         node_type = data["node_type"]
 
-        # Create target node
-        # Extract confidence for add_node position parameter
+        # Create target node using the unified NodeSpec schema
         confidence = data.get("confidence", 1.0)
 
-        # Build attributes dict (excluding node_type and confidence which are position params)
-        node_attrs = {
-            "parser_name": event.source,
-            "src_path": data.get("src_path"),
-            "id": target_id,
+        try:
+            ntype = NodeType(node_type)
+        except ValueError:
+            ntype = NodeType.TARGET
+
+        attrs: Dict[str, Any] = {
             "origin": data.get("origin", "in_repo"),
             "provenance": data.get("provenance", "cmake_add_target"),
             "declared_via": data.get("declared_via"),
         }
-
-        # Add optional attributes
         if data.get("imported") is not None:
-            node_attrs["imported"] = data["imported"]
+            attrs["imported"] = data["imported"]
         if data.get("linkage_kind"):
-            node_attrs["linkage_kind"] = data["linkage_kind"]
+            attrs["linkage_kind"] = data["linkage_kind"]
         if data.get("alias_of"):
-            node_attrs["alias_of"] = data["alias_of"]
+            attrs["alias_of"] = data["alias_of"]
 
-        # Call add_node with node_type as second position parameter
-        self.graph_manager.add_node(target_id, node_type, confidence=confidence, **node_attrs)
-        log.debug("Created target node: %s (type=%s)", target_id, node_type)
+        node_spec = NodeSpec(
+            id=target_id,
+            type=ntype,
+            label=target_id,
+            src_path=data.get("src_path"),
+            parser_name=event.source,
+            confidence=confidence,
+            attrs=attrs,
+        )
+        self.graph_manager.add_node(
+            node_spec.id,
+            node_spec.type.value,
+            confidence=node_spec.confidence,
+            **node_spec.to_backend_attrs(),
+        )
+        log.debug("Created target node: %s (type=%s)", target_id, ntype.value)
 
         # Handle alias edge if present
         if data.get("alias_edge"):
@@ -109,7 +121,7 @@ class CMakeGraphBuilder:
             self.graph_manager.add_edge(
                 alias_edge["source"],
                 alias_edge["target"],
-                edge_kind=alias_edge["edge_kind"],
+                edge_kind=EdgeKind.ALIAS_OF.value,
                 parser_name=event.source,
                 confidence=1.0,
             )
@@ -191,22 +203,34 @@ class CMakeGraphBuilder:
 
         for source_data in source_files:
             source_id = source_data["source_id"]
-            node_type = source_data.get("node_type", "code")
+            node_type = source_data.get("node_type", NodeType.CODE.value)
 
-            # Create source node with node_type as position parameter
-            self.graph_manager.add_node(
-                source_id,
-                node_type,
-                confidence=confidence,
-                parser_name=event.source,
+            try:
+                ntype = NodeType(node_type)
+            except ValueError:
+                ntype = NodeType.CODE
+
+            node_spec = NodeSpec(
                 id=source_id,
+                type=ntype,
+                label=source_id,
+                src_path=None,
+                parser_name=event.source,
+                confidence=confidence,
+                attrs={"id": source_id},
+            )
+            self.graph_manager.add_node(
+                node_spec.id,
+                node_spec.type.value,
+                confidence=node_spec.confidence,
+                **node_spec.to_backend_attrs(),
             )
 
-            # Create source edge
+            # Create source edge using the canonical kind
             self.graph_manager.add_edge(
                 target_id,
                 source_id,
-                edge_kind="sources",
+                edge_kind=EdgeKind.SOURCES.value,
                 parser_name=event.source,
                 confidence=confidence,
             )
@@ -251,35 +275,101 @@ class CMakeGraphBuilder:
         existing_dirs = data.get("existing_include_dirs", [])
 
         # Merge include directories (deduplicate)
-        merged_dirs = []
+        merged_dirs: list[str] = []
         seen = set()
 
-        # Add existing dirs first
         if isinstance(existing_dirs, list):
             for d in existing_dirs:
                 if isinstance(d, str) and d not in seen:
                     merged_dirs.append(d)
                     seen.add(d)
 
-        # Add new dirs
         for d in new_dirs:
-            if d not in seen:
+            if isinstance(d, str) and d not in seen:
                 merged_dirs.append(d)
                 seen.add(d)
 
-        # Ensure node exists (create placeholder if needed)
+        # Ensure target node exists (create placeholder if needed)
         if not self.graph_manager.has_node(target_id):
-            self.graph_manager.add_node(
-                target_id,
-                "artifact",
-                confidence=0.8,
-                parser_name=event.source,
+            node_spec = NodeSpec(
                 id=target_id,
+                type=NodeType.TARGET,
+                label=target_id,
+                parser_name=event.source,
+                confidence=0.8,
+                provisional=True,
+                attrs={"id": target_id},
             )
+            self.graph_manager.add_node_spec(node_spec)
 
-        # Update include_dirs attribute using the new API
+        # Create a BUILD_CONFIG node representing this include_dirs configuration
+        config_id = f"{target_id}:include_dirs"
+        config_spec = NodeSpec(
+            id=config_id,
+            type=NodeType.BUILD_CONFIG,
+            label=f"{target_id}#include_dirs",
+            parser_name=event.source,
+            confidence=data.get("confidence", 1.0),
+            attrs={
+                "config_kind": "include_dirs",
+                "include_dirs": merged_dirs,
+                "declared_via": "target_include_directories",
+            },
+        )
+        self.graph_manager.add_node_spec(config_spec)
+
+        # Link target -> BUILD_CONFIG
+        config_edge = EdgeSpec(
+            source=target_id,
+            target=config_id,
+            kind=EdgeKind.DEFINED_BY,
+            parser_name=event.source,
+        )
+        self.graph_manager.add_edge_spec(config_edge)
+
+        # Optionally: model include directories as SUBDIRECTORY nodes when
+        # root_path is known, and connect BUILD_CONFIG -> SUBDIRECTORY via
+        # INCLUDE_DIRS edges.
+        root_path = self.graph_manager.root_path
+        if root_path is not None:
+            for rel_dir in merged_dirs:
+                try:
+                    abs_dir = (root_path / rel_dir).resolve()
+                except Exception:
+                    continue
+
+                try:
+                    dir_id = self.graph_manager.normalize_path(abs_dir)
+                except Exception:
+                    dir_id = f"//{rel_dir.lstrip('/')}"
+
+                if not self.graph_manager.has_node(dir_id):
+                    dir_spec = NodeSpec(
+                        id=dir_id,
+                        type=NodeType.SUBDIRECTORY,
+                        label=rel_dir,
+                        src_path=str(abs_dir),
+                        parser_name=event.source,
+                    )
+                    self.graph_manager.add_node_spec(dir_spec)
+
+                dir_edge = EdgeSpec(
+                    source=config_id,
+                    target=dir_id,
+                    kind=EdgeKind.INCLUDE_DIRS,
+                    parser_name=event.source,
+                )
+                self.graph_manager.add_edge_spec(dir_edge)
+
+        # Keep target-level include_dirs attribute for compatibility with
+        # existing projection logic.
         self.graph_manager.update_node_attribute(target_id, "include_dirs", merged_dirs)
-        log.debug("Updated include_dirs for %s (%d total dirs)", target_id, len(merged_dirs))
+        log.debug(
+            "Updated include_dirs for %s (%d total dirs) via BUILD_CONFIG %s",
+            target_id,
+            len(merged_dirs),
+            config_id,
+        )
 
     def _handle_external_package_referenced(self, event: Event) -> None:
         """Handle CMAKE_EXTERNAL_PACKAGE_REFERENCED event by creating external library node.
@@ -289,32 +379,42 @@ class CMakeGraphBuilder:
         """
         data = event.data
         lib_id = data["lib_id"]
-        node_type = data.get("node_type", "external_library")
+        node_type = data.get("node_type", NodeType.EXTERNAL_LIBRARY.value)
 
-        # Create external library node
-        # Extract confidence for position parameter
+        try:
+            ntype = NodeType(node_type)
+        except ValueError:
+            ntype = NodeType.EXTERNAL_LIBRARY
+
         confidence = data.get("confidence", 1.0)
 
-        # Build attributes dict (excluding node_type and confidence which are position params)
-        node_attrs = {
-            "parser_name": event.source,
-            "id": lib_id,
+        attrs: Dict[str, Any] = {
             "origin": data.get("origin", "external"),
             "provenance": data.get("provenance"),
             "declared_via": data.get("declared_via"),
             "name": data.get("name"),
         }
-
-        # Add optional attributes
         if data.get("version"):
-            node_attrs["version"] = data["version"]
+            attrs["version"] = data["version"]
         if data.get("required") is not None:
-            node_attrs["required"] = data["required"]
+            attrs["required"] = data["required"]
         if data.get("git_repository"):
-            node_attrs["git_repository"] = data["git_repository"]
+            attrs["git_repository"] = data["git_repository"]
         if data.get("git_tag"):
-            node_attrs["git_tag"] = data["git_tag"]
+            attrs["git_tag"] = data["git_tag"]
 
-        # Call add_node with node_type as second position parameter
-        self.graph_manager.add_node(lib_id, node_type, confidence=confidence, **node_attrs)
+        node_spec = NodeSpec(
+            id=lib_id,
+            type=ntype,
+            label=lib_id,
+            parser_name=event.source,
+            confidence=confidence,
+            attrs=attrs,
+        )
+        self.graph_manager.add_node(
+            node_spec.id,
+            node_spec.type.value,
+            confidence=node_spec.confidence,
+            **node_spec.to_backend_attrs(),
+        )
         log.debug("Created external library node: %s", lib_id)

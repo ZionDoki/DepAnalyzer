@@ -75,7 +75,12 @@ class CppCodeParser(BaseCodeParser):
                     "root": str,  # "tree-sitter" or "regex"
                 }
         """
-        result = {"file": str(file_path)}
+        # Include minimal metadata so downstream code can specialize handling
+        result: Dict[str, Any] = {
+            "file": str(file_path),
+            "ecosystem": self.ECOSYSTEM,
+            "parser_name": self.NAME,
+        }
 
         try:
             raw = file_path.read_bytes()
@@ -91,24 +96,53 @@ class CppCodeParser(BaseCodeParser):
                 parser = Parser(C_LANGUAGE)
                 tree = parser.parse(raw)
                 query = Query(C_LANGUAGE, INCLUDE_QUERY)
-                cursor = QueryCursor(query)
 
-                for match in cursor.matches(tree.root_node):
-                    captures = match[1]  # dict: {'capture_name': [nodes]}
-                    for capture_name, nodes in captures.items():
-                        if capture_name == "path":
-                            for node in nodes:
-                                try:
-                                    text = node.text.decode("utf8").strip('"<>')
-                                    if text:
-                                        includes.append(text)
-                                except UnicodeDecodeError:
-                                    continue
+                # Compatibility with different tree-sitter Python bindings.
+                # Prefer the legacy QueryCursor.captures() path (returns a
+                # capture-name keyed mapping in this codebase), and fall back
+                # to Query.captures(...) if available.
+                try:
+                    cursor = QueryCursor(query)
+                    capture_dict = cursor.captures(tree.root_node)
+
+                    path_nodes = []
+                    if isinstance(capture_dict, dict):
+                        path_nodes = capture_dict.get("path", [])
+                    else:
+                        # Some bindings return an iterable of (node, capture_name)
+                        for node, capture_name in capture_dict:
+                            if capture_name == "path":
+                                path_nodes.append(node)
+
+                    for node in path_nodes:
+                        try:
+                            text = node.text.decode("utf8").strip('"<>')
+                            if text:
+                                includes.append(text)
+                        except UnicodeDecodeError:
+                            continue
+
+                except AttributeError:
+                    # Fallback to Query.captures API if Cursor.captures is not
+                    # available in the installed tree-sitter bindings.
+                    for node, capture_name in query.captures(tree.root_node):
+                        if capture_name != "path":
+                            continue
+                        try:
+                            text = node.text.decode("utf8").strip('"<>')
+                            if text:
+                                includes.append(text)
+                        except UnicodeDecodeError:
+                            continue
 
                 result["root"] = "tree-sitter"
-                logger.debug("Parsed %s with tree-sitter: %d includes", file_path.name, len(includes))
+                logger.debug(
+                    "Parsed %s with tree-sitter: %d includes",
+                    file_path.name,
+                    len(includes),
+                )
 
-            except (ValueError, TypeError, RuntimeError) as exc:
+            except (ValueError, TypeError, RuntimeError, AttributeError) as exc:
                 logger.debug(
                     "tree-sitter parse failed for %s: %s, falling back to regex",
                     file_path,

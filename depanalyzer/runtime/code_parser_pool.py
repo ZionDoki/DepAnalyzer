@@ -92,6 +92,13 @@ def _code_worker_dispatch(task_data: Tuple[str, str]) -> Dict[str, Any]:
     # Parse the file
     try:
         result = parser.parse_file(file_path)
+
+        # Best-effort enrichment of result payload for downstream consumers
+        if isinstance(result, dict):
+            # Ensure original file path is present
+            result.setdefault("file", file_path_str)
+            # Propagate ecosystem so Transaction can specialize handling
+            result.setdefault("ecosystem", ecosystem)
         return result
     except Exception as e:
         logger.error(f"[PID {os.getpid()}] Failed to parse {file_path}: {e}")

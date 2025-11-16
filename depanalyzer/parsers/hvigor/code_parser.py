@@ -60,7 +60,12 @@ class HvigorCodeParser(BaseCodeParser):
                     "root": str,  # "tree-sitter"
                 }
         """
-        result = {"file": str(file_path)}
+        # Basic metadata used by downstream graph construction
+        result: Dict[str, Any] = {
+            "file": str(file_path),
+            "ecosystem": self.ECOSYSTEM,
+            "parser_name": self.NAME,
+        }
 
         if not _TREE_SITTER_AVAILABLE or TS_LANGUAGE is None:
             return {
@@ -81,16 +86,41 @@ class HvigorCodeParser(BaseCodeParser):
 
             # Query for import/export statements
             query = Query(TS_LANGUAGE, IMPORT_QUERY)
-            cursor = QueryCursor(query)
-            capture_dict = cursor.captures(tree.root_node)
 
             import_specifiers: Set[str] = set()
 
-            # Extract import specifiers
-            if "path" in capture_dict:
-                for node in capture_dict["path"]:
-                    dep_str = node.text.decode("utf8").strip("\"'")
-                    # Skip @ohos system imports
+            # Extract import specifiers from all captures named "path".
+            # Prefer the legacy QueryCursor.captures(...) code path used in
+            # the original implementation, and fall back to Query.captures(...)
+            # when available.
+            try:
+                cursor = QueryCursor(query)
+                capture_dict = cursor.captures(tree.root_node)
+
+                path_nodes = []
+                if isinstance(capture_dict, dict):
+                    path_nodes = capture_dict.get("path", [])
+                else:
+                    for node, capture_name in capture_dict:
+                        if capture_name == "path":
+                            path_nodes.append(node)
+
+                for node in path_nodes:
+                    try:
+                        dep_str = node.text.decode("utf8").strip("\"'")
+                    except UnicodeDecodeError:
+                        continue
+                    if not dep_str.startswith("@ohos"):
+                        import_specifiers.add(dep_str)
+
+            except AttributeError:
+                for node, capture_name in query.captures(tree.root_node):
+                    if capture_name != "path":
+                        continue
+                    try:
+                        dep_str = node.text.decode("utf8").strip("\"'")
+                    except UnicodeDecodeError:
+                        continue
                     if not dep_str.startswith("@ohos"):
                         import_specifiers.add(dep_str)
 
@@ -119,7 +149,7 @@ class HvigorCodeParser(BaseCodeParser):
 
             return result
 
-        except (TypeError, ValueError, RuntimeError) as exc:
+        except (TypeError, ValueError, RuntimeError, AttributeError) as exc:
             logger.error("tree-sitter parse failed for %s: %s", file_path, exc)
             return {**result, "error": str(exc)}
 

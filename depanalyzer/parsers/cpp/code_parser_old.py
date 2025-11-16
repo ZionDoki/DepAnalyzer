@@ -15,7 +15,7 @@ from typing import List
 from depanalyzer.parsers.base import BaseParser
 from depanalyzer.graph.manager import GraphManager, EdgeKind, NodeType
 from depanalyzer.runtime.eventbus import Event, EventType
-from depanalyzer.core.identifiers import (
+from depanalyzer.graph.identifiers import (
     make_file_id,
     make_include_placeholder_id,
     make_system_header_id,

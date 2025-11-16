@@ -8,6 +8,7 @@ import json5
 
 from depanalyzer.parsers.base import BaseParser, DependencySpec
 from depanalyzer.graph.manager import GraphManager, NodeType, EdgeKind
+from depanalyzer.graph.schema import NodeSpec, EdgeSpec
 from depanalyzer.runtime.eventbus import Event, EventType
 from depanalyzer.graph.contract import BuildInterfaceContract, ContractType
 from depanalyzer.graph.contract_registry import ContractRegistry
@@ -142,15 +143,16 @@ class HvigorParser(BaseParser):
 
         rel_path_str = str(config_file.relative_to(self.workspace_root))
 
-        # Create config file node
-        self.add_node(
-            node_id=rel_path_str,
-            node_type=NodeType.CONFIG,
+        # Create config file node using the unified schema
+        config_spec = NodeSpec(
+            id=rel_path_str,
+            type=NodeType.CONFIG,
             label=rel_path_str,
             src_path=str(config_file.resolve()),
             name=config_file.name,
             parser_name=self.NAME,
         )
+        self.graph_manager.add_node_spec(config_spec)
 
         result_type = result.get("type")
 
@@ -266,25 +268,29 @@ class HvigorParser(BaseParser):
             module_id = f"module:{module_name}"
             module_root = Path(self.workspace_root) / module_name
 
-            self.add_node(
-                node_id=module_id,
-                node_type=NodeType.MODULE,
+            module_spec = NodeSpec(
+                id=module_id,
+                type=NodeType.MODULE,
                 label=module_id,
                 src_path=str(module_root.resolve()),
                 name=module_name,
                 parser_name=self.NAME,
-                origin="in_repo",
-                provenance="build_profile",
-                declared_via="build-profile.json5",
                 confidence=1.0,
+                attrs={
+                    "origin": "in_repo",
+                    "provenance": "build_profile",
+                    "declared_via": "build-profile.json5",
+                },
             )
+            self.graph_manager.add_node_spec(module_spec)
 
-            self.add_edge(
+            edge_spec = EdgeSpec(
                 source=module_id,
                 target=config_file_id,
-                edge_kind=EdgeKind.DEFINED_BY,
+                kind=EdgeKind.DEFINED_BY,
                 parser_name=self.NAME,
             )
+            self.graph_manager.add_edge_spec(edge_spec)
 
             # Publish event for hooks
             event = Event(
@@ -309,25 +315,29 @@ class HvigorParser(BaseParser):
         module_id = f"module:{module_name}"
         module_root = config_file.parent.parent.parent
 
-        self.add_node(
-            node_id=module_id,
-            node_type=NodeType.MODULE,
+        module_spec = NodeSpec(
+            id=module_id,
+            type=NodeType.MODULE,
             label=module_id,
             src_path=str(module_root.resolve()),
             name=module_name,
             parser_name=self.NAME,
-            origin="in_repo",
-            provenance="module_config",
-            declared_via="module.json5",
             confidence=1.0,
+            attrs={
+                "origin": "in_repo",
+                "provenance": "module_config",
+                "declared_via": "module.json5",
+            },
         )
+        self.graph_manager.add_node_spec(module_spec)
 
-        self.add_edge(
+        edge_spec = EdgeSpec(
             source=module_id,
             target=config_file_id,
-            edge_kind=EdgeKind.DEFINED_BY,
+            kind=EdgeKind.DEFINED_BY,
             parser_name=self.NAME,
         )
+        self.graph_manager.add_edge_spec(edge_spec)
 
         # Publish event for hooks
         event = Event(
@@ -362,13 +372,39 @@ class HvigorParser(BaseParser):
                 module_name = parts[0]
                 owning_module_id = f"module:{module_name}"
 
+                # Ensure owning module node exists with correct type.
+                existing = self.graph_manager.get_node(owning_module_id)
+                if existing is None:
+                    module_root = (self.workspace_root / module_name).resolve()
+                    module_spec = NodeSpec(
+                        id=owning_module_id,
+                        type=NodeType.MODULE,
+                        label=owning_module_id,
+                        src_path=str(module_root),
+                        name=module_name,
+                        parser_name=self.NAME,
+                        confidence=0.9,
+                        attrs={
+                            "origin": "in_repo",
+                            "provenance": "package_config",
+                            "declared_via": "oh-package.json5",
+                        },
+                    )
+                    self.graph_manager.add_node_spec(module_spec)
+                elif existing.get("type") != NodeType.MODULE.value:
+                    # Upgrade placeholder/unknown nodes to proper module type
+                    self.graph_manager.update_node_attribute(
+                        owning_module_id, "type", NodeType.MODULE
+                    )
+
                 # Link module to its config file
-                self.add_edge(
+                edge_spec = EdgeSpec(
                     source=owning_module_id,
                     target=config_file_id,
-                    edge_kind=EdgeKind.DEFINED_BY,
+                    kind=EdgeKind.DEFINED_BY,
                     parser_name=self.NAME,
                 )
+                self.graph_manager.add_edge_spec(edge_spec)
                 logger.debug(
                     "Linked module %s to config %s",
                     owning_module_id,
@@ -399,14 +435,39 @@ class HvigorParser(BaseParser):
                 target_module_name = dep_name.split("/")[-1] if "/" in dep_name else dep_name
                 target_module_id = f"module:{target_module_name}"
 
+                # Ensure target module node exists so it does not stay as type=unknown
+                target_existing = self.graph_manager.get_node(target_module_id)
+                if target_existing is None:
+                    target_root = (self.workspace_root / target_module_name).resolve()
+                    target_spec = NodeSpec(
+                        id=target_module_id,
+                        type=NodeType.MODULE,
+                        label=target_module_id,
+                        src_path=str(target_root),
+                        name=target_module_name,
+                        parser_name=self.NAME,
+                        confidence=0.8,
+                        attrs={
+                            "origin": "in_repo",
+                            "provenance": "package_dependencies",
+                            "declared_via": "oh-package.json5",
+                        },
+                    )
+                    self.graph_manager.add_node_spec(target_spec)
+                elif target_existing.get("type") != NodeType.MODULE.value:
+                    self.graph_manager.update_node_attribute(
+                        target_module_id, "type", NodeType.MODULE
+                    )
+
                 # Create edge from owning module to target module
                 if owning_module_id:
-                    self.add_edge(
+                    edge_spec = EdgeSpec(
                         source=owning_module_id,
                         target=target_module_id,
-                        edge_kind=EdgeKind.DEPENDS_ON,
+                        kind=EdgeKind.DEPENDS_ON,
                         parser_name=self.NAME,
                     )
+                    self.graph_manager.add_edge_spec(edge_spec)
                     logger.debug(
                         "Created local dependency edge: %s -> %s",
                         owning_module_id,
@@ -419,29 +480,34 @@ class HvigorParser(BaseParser):
                 else:
                     lib_id = f"ext_lib:{dep_name}"
 
-                self.add_node(
-                    node_id=lib_id,
-                    node_type=NodeType.EXTERNAL_LIBRARY,
+                # Do not set a fake src_path to avoid bogus path normalization.
+                # External libraries are modeled as logical nodes only.
+                lib_spec = NodeSpec(
+                    id=lib_id,
+                    type=NodeType.EXTERNAL_LIBRARY,
                     label=lib_id,
-                    src_path="N/A",
                     name=dep_name,
-                    version=str(dep_version) if dep_version else None,
                     parser_name=self.NAME,
-                    origin="external",
-                    provenance="ohpm_package",
-                    declared_via="oh-package.json5",
                     confidence=0.9,
-                    ecosystem="hvigor",
+                    attrs={
+                        "version": str(dep_version) if dep_version else None,
+                        "origin": "external",
+                        "provenance": "ohpm_package",
+                        "declared_via": "oh-package.json5",
+                        "ecosystem": "hvigor",
+                    },
                 )
+                self.graph_manager.add_node_spec(lib_spec)
 
                 # Create edge from owning module to external library
                 if owning_module_id:
-                    self.add_edge(
+                    edge_spec = EdgeSpec(
                         source=owning_module_id,
                         target=lib_id,
-                        edge_kind=EdgeKind.DEPENDS_ON,
+                        kind=EdgeKind.DEPENDS_ON,
                         parser_name=self.NAME,
                     )
+                    self.graph_manager.add_edge_spec(edge_spec)
                     logger.debug(
                         "Created external dependency edge: %s -> %s",
                         owning_module_id,
@@ -485,18 +551,21 @@ class HvigorParser(BaseParser):
                         dts_id = str(dts_abs_path.relative_to(self.workspace_root))
 
                         # Create .d.ts node
-                        self.add_node(
-                            node_id=dts_id,
-                            node_type="code",
+                        dts_spec = NodeSpec(
+                            id=dts_id,
+                            type=NodeType.CODE,
                             label=dts_id,
                             src_path=str(dts_abs_path),
                             name=Path(dts_id).name,
                             parser_name=self.NAME,
-                            origin="in_repo",
-                            provenance="ohpm_native_types",
-                            declared_via="oh-package.json5",
                             confidence=0.9,
+                            attrs={
+                                "origin": "in_repo",
+                                "provenance": "ohpm_native_types",
+                                "declared_via": "oh-package.json5",
+                            },
                         )
+                        self.graph_manager.add_node_spec(dts_spec)
 
                         # Publish native bridge discovery event
                         event = Event(

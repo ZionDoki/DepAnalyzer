@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
-from depanalyzer.core.identifiers import normalize_node_id
+from depanalyzer.graph.identifiers import normalize_node_id
 from depanalyzer.parsers.cpp.cmake.commands.base import CommandHandler
 from depanalyzer.parsers.cpp.cmake.tokens import (
     clean_token,

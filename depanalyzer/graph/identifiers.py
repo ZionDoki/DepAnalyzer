@@ -1,17 +1,13 @@
 """Identifier helpers for graph node IDs.
 
-Provides a single place to construct canonical node identifiers used across
-parsers. This avoids ad‑hoc formats (e.g. "//external:*", "//system:*",
-"//include:*", "//path:target") diverging between modules.
-
-Public helpers here are intentionally small, explicit, and typed. Parsers
-should prefer these helpers rather than assembling strings directly.
+This module replaces the legacy `depanalyzer.core.identifiers` and provides
+a single place to construct canonical node identifiers used across parsers.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 
 def _normalize_node_id_impl(
@@ -27,18 +23,30 @@ def _normalize_node_id_impl(
     Returns:
         Canonical ID like `//relative/path` or `//relative/path:target`.
     """
-    repo_path = Path(repo_root)
+    repo_path = Path(repo_root).resolve()
+    file_path = Path(file_path).resolve()
+
     try:
+        # Try to make path relative to repo_root
         rel_path = file_path.relative_to(repo_path)
         base_id = f"//{rel_path.as_posix()}"
         return f"{base_id}:{target_name}" if target_name else base_id
     except ValueError:
-        # File is outside the repo, mark as external
-        base_id = f"//external:{file_path.as_posix()}"
-        return f"{base_id}:{target_name}" if target_name else base_id
+        # File is outside the repo
+        try:
+            # Try to make path relative to parent of repo_root (matches utils/path_utils.py)
+            parent_rel = file_path.relative_to(repo_path.parent)
+            base_id = f"//../{parent_rel.as_posix()}"
+            return f"{base_id}:{target_name}" if target_name else base_id
+        except ValueError:
+            # Path is completely external, use just filename as fallback
+            base_id = f"//external/{file_path.name}"
+            return f"{base_id}:{target_name}" if target_name else base_id
 
 
-def normalize_node_id(file_path: Path | str, repo_root: str, target_name: Optional[str] = None) -> str:
+def normalize_node_id(
+    file_path: Union[Path, str], repo_root: str, target_name: Optional[str] = None
+) -> str:
     """Return canonical file or target ID.
 
     Args:
@@ -89,7 +97,9 @@ def make_include_placeholder_id(include_name: str) -> str:
     return f"//include:{include_name}"
 
 
-def make_file_id(file_path: Path | str, repo_root: str, target_name: Optional[str] = None) -> str:
+def make_file_id(
+    file_path: Union[Path, str], repo_root: str, target_name: Optional[str] = None
+) -> str:
     """Create a canonical file or target ID.
 
     Args:

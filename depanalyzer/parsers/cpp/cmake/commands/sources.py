@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from typing import List
 
-from depanalyzer.core.identifiers import normalize_node_id
+from depanalyzer.graph.identifiers import normalize_node_id
 from depanalyzer.parsers.cpp.cmake.commands.base import CommandHandler
 from depanalyzer.parsers.cpp.cmake.tokens import clean_token, CMAKE_VAR_PATTERN
 from depanalyzer.parsers.cpp.cmake.variables import CMakeVariableResolver
@@ -91,12 +91,9 @@ class SourcesCommandHandler(CommandHandler):
                     p = cmake_dir / resolved
                 # Compute a stable node id even when file does not yet exist
                 try:
-                    repo = Path(self.repo_root).resolve()
+                    # Use normalize_node_id for consistent path handling
                     pr = p.resolve()
-                    if pr.is_relative_to(repo):
-                        source_id = f"//{pr.relative_to(repo).as_posix()}"
-                    else:
-                        source_id = f"//external:{pr.as_posix()}"
+                    source_id = normalize_node_id(pr, self.repo_root)
                 except (OSError, RuntimeError, ValueError):
                     # Fall back to a repo-relative label if possible
                     try:

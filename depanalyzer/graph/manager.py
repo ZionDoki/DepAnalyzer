@@ -10,62 +10,17 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 
 from depanalyzer.graph.backend import GraphBackend
+from depanalyzer.graph.schema import (
+    EdgeKind,
+    EdgeSpec,
+    NodeSpec,
+    NodeType,
+    validate_edge,
+    validate_node,
+)
 from depanalyzer.utils.path_utils import normalize_node_id
 
 logger = logging.getLogger("depanalyzer.graph.manager")
-
-
-class NodeType:
-    """Node type constants."""
-
-    ASSET = "asset"
-    PROCESS = "process"
-    TARGET = "target"
-    ARTIFACT = "artifact"
-    BUILD_CONFIG = "build_config"
-    EXTERNAL_DEP = "external_dep"
-    TOOLCHAIN = "toolchain"
-    PROXY = "proxy"
-
-    # Additional semantic types (aligned with core.schema)
-    CONFIG = "config"
-    EXTERNAL_LIBRARY = "external_library"
-    SUBDIRECTORY = "subdirectory"
-
-    # Legacy types for backward compatibility
-    CODE = "code"
-    HEADER = "header"
-    PROJECT_HEADER = "project_header"
-    SYSTEM_HEADER = "system_header"
-    SHARED_LIBRARY = "shared_library"
-    STATIC_LIBRARY = "static_library"
-    EXECUTABLE = "executable"
-    MODULE = "module"
-
-
-class EdgeKind:
-    """Edge kind constants."""
-
-    CONSUMES = "consumes"
-    PRODUCES = "produces"
-    DEPENDS_ON = "depends_on"
-    LINKS = "links"
-    CONTAINS = "contains"
-    DECLARES = "declares"
-
-    # Additional semantic kinds (aligned with core.schema)
-    DEFINED_BY = "defined_by"
-    INCLUDE_DIRS = "include_dirs"
-    ALIAS_OF = "alias_of"
-    IMPLEMENTS_NATIVE = "implements_native"
-
-    # Legacy kinds
-    SOURCES = "sources"
-    INCLUDE = "include"
-    IMPORT = "import"
-    PART_OF = "part_of"
-    AFFECTS = "affects"
-    LINK_LIBRARIES = "link_libraries"
 
 
 class GraphManager:
@@ -118,16 +73,43 @@ class GraphManager:
             logger.debug("Node %s already exists, skipping", node_id)
             return
 
-        attrs = {
-            "type": node_type,
-            "confidence": confidence,
-            "over_approx": over_approx,
-            **({"evidence": evidence} if evidence else {}),
-            **attributes,
-        }
+        # Map legacy string/enum node_type into NodeType.
+        try:
+            ntype = NodeType(node_type)
+        except ValueError:
+            logger.debug("Unknown node type %s for %s, using UNKNOWN", node_type, node_id)
+            ntype = NodeType.UNKNOWN
 
-        self._backend.add_node(node_id, **attrs)
-        logger.debug("Added node: %s (type=%s)", node_id, node_type)
+        attrs = dict(attributes)
+        if evidence:
+            attrs.setdefault("evidence", evidence)
+
+        spec = NodeSpec(
+            id=node_id,
+            type=ntype,
+            confidence=confidence,
+            over_approx=over_approx,
+            label=attrs.pop("label", None),
+            src_path=attrs.get("src_path") or attrs.get("path"),
+            path=attrs.get("path"),
+            name=attrs.get("name"),
+            parser_name=attrs.get("parser_name"),
+            attrs=attrs,
+        )
+        self.add_node_spec(spec)
+
+    def add_node_spec(self, spec: NodeSpec) -> None:
+        """Add a node described by a NodeSpec.
+
+        This is the preferred entry point for new code constructing nodes.
+        """
+        if self._backend.has_node(spec.id):
+            logger.debug("Node %s already exists, skipping", spec.id)
+            return
+
+        validate_node(spec, self.root_path)
+        self._backend.add_node(spec.id, **spec.to_backend_attrs())
+        logger.debug("Added node: %s (type=%s)", spec.id, spec.type.value)
 
     def add_edge(
         self,
@@ -153,24 +135,72 @@ class GraphManager:
         Returns:
             int: Edge key.
         """
+        # Map legacy string kind into EdgeKind enum when possible.
+        try:
+            kind = EdgeKind(edge_kind)
+        except ValueError:
+            logger.debug(
+                "Unknown edge kind %s for %s -> %s, defaulting to depends_on",
+                edge_kind,
+                source,
+                target,
+            )
+            kind = EdgeKind.DEPENDS_ON
+
+        attrs = dict(attributes)
+        if evidence:
+            attrs.setdefault("evidence", evidence)
+
+        spec = EdgeSpec(
+            source=source,
+            target=target,
+            kind=kind,
+            confidence=confidence,
+            over_approx=over_approx,
+            parser_name=attrs.get("parser_name"),
+            attrs=attrs,
+        )
+        return self.add_edge_spec(spec)
+
+    def add_edge_spec(self, spec: EdgeSpec) -> int:
+        """Add an edge described by an EdgeSpec.
+
+        This is the preferred entry point for new code constructing edges.
+        """
         # Ensure endpoints exist so we do not end up with nodes that only have
         # an implicit ID and no schema attributes.
-        if not self._backend.has_node(source):
-            self.add_node(source, "unknown")
-        if not self._backend.has_node(target):
-            self.add_node(target, "unknown")
+        if not self._backend.has_node(spec.source):
+            provisional_node = NodeSpec(
+                id=spec.source,
+                type=NodeType.UNKNOWN,
+                provisional=True,
+                attrs={},
+            )
+            validate_node(provisional_node, self.root_path)
+            self._backend.add_node(spec.source, **provisional_node.to_backend_attrs())
 
-        attrs = {
-            "kind": edge_kind,
-            "confidence": confidence,
-            "over_approx": over_approx,
-            **({"evidence": evidence} if evidence else {}),
-            **attributes,
-        }
+        if not self._backend.has_node(spec.target):
+            provisional_node = NodeSpec(
+                id=spec.target,
+                type=NodeType.UNKNOWN,
+                provisional=True,
+                attrs={},
+            )
+            validate_node(provisional_node, self.root_path)
+            self._backend.add_node(spec.target, **provisional_node.to_backend_attrs())
 
-        key = self._backend.add_edge(source, target, **attrs)
+        validate_edge(spec)
+        key = self._backend.add_edge(
+            spec.source,
+            spec.target,
+            **spec.to_backend_attrs(),
+        )
         logger.debug(
-            "Added edge: %s -> %s (kind=%s, key=%d)", source, target, edge_kind, key
+            "Added edge: %s -> %s (kind=%s, key=%d)",
+            spec.source,
+            spec.target,
+            spec.kind.value,
+            key,
         )
         return key
 

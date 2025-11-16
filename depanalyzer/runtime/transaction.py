@@ -497,30 +497,227 @@ class Transaction:
         if not self._graph_manager:
             return
 
-        # Add file node
-        file_node_id = str(file_path)
-        self._graph_manager.add_node(
-            file_node_id,
-            "code_file",
-            path=str(file_path),
-            name=file_path.name
+        from depanalyzer.graph.manager import EdgeKind, NodeType
+        from depanalyzer.graph.schema import NodeSpec, EdgeSpec
+        from depanalyzer.graph.identifiers import (
+            make_include_placeholder_id,
+            make_system_header_id,
         )
 
-        # Add include/import edges
+        ecosystem = parse_result.get("ecosystem")
+        parser_name = parse_result.get("parser_name") or (
+            f"{ecosystem}_code" if ecosystem else "code_parser"
+        )
+
+        # Normalize file node ID to //relative form when possible
+        try:
+            if self._graph_manager.root_path:
+                file_node_id = self._graph_manager.normalize_path(file_path)
+            else:
+                file_node_id = str(file_path)
+        except Exception:
+            file_node_id = str(file_path)
+
+        # Ensure file node exists as a CODE node using the structured schema.
+        if not self._graph_manager.has_node(file_node_id):
+            file_spec = NodeSpec(
+                id=file_node_id,
+                type=NodeType.CODE,
+                src_path=str(file_path.resolve()),
+                path=str(file_path),
+                name=file_path.name,
+                parser_name=parser_name,
+            )
+            self._graph_manager.add_node_spec(file_spec)
+
+        # Determine dependencies from parse result
         includes = parse_result.get("includes")
         if includes is None:
             includes = parse_result.get("imports", [])
 
+        # C/C++ ecosystem: map includes to headers with canonical IDs, using CMake
+        # configuration (target membership + include_dirs) as the primary source
+        # of truth.
+        if ecosystem == "cpp":
+            system_headers = {
+                # C standard headers
+                "stdio.h",
+                "stdlib.h",
+                "string.h",
+                "stdint.h",
+                "unistd.h",
+                "fcntl.h",
+                "sys/stat.h",
+                "errno.h",
+                # C++ standard library headers commonly seen in native code
+                "cstring",
+                "cstdint",
+            }
+
+            # Discover owning targets and their include_dirs from the skeleton graph
+            owning_targets: list[str] = []
+            include_dirs_for_targets: dict[str, list[str]] = {}
+            if self._graph_manager:
+                graph = self._graph_manager._backend.native_graph  # type: ignore[attr-defined]
+                nodes_data = dict(graph.nodes(data=True))
+
+                for u, v, ed in graph.in_edges(file_node_id, data=True):
+                    kind = ed.get("kind") or ed.get("label") or ed.get("type")
+                    if kind == EdgeKind.SOURCES.value or kind == "sources":
+                        owning_targets.append(u)
+
+                for tgt in owning_targets:
+                    nd = nodes_data.get(tgt, {}) or {}
+                    incs = nd.get("include_dirs") or []
+                    if isinstance(incs, list):
+                        # Normalize to posix-style repo-relative paths
+                        include_dirs_for_targets[tgt] = [
+                            i.replace("\\", "/").lstrip("/")
+                            for i in incs
+                            if isinstance(i, str)
+                        ]
+
+            repo_root = getattr(self.workspace, "root_path", None)
+
+            for include_path in includes:
+                include_str = (
+                    str(include_path).replace("\\", "/")
+                    if not isinstance(include_path, Path)
+                    else str(include_path).replace("\\", "/")
+                )
+
+                # 1) System headers (independent of build config)
+                if include_str.startswith("/") or include_str in system_headers:
+                    header_id = make_system_header_id(include_str)
+                    header_type = NodeType.SYSTEM_HEADER
+                    header_src: Path | None = None
+                else:
+                    header_id = None
+                    header_type = NodeType.CODE
+                    header_src = None
+
+                    # 2) Language-level relative includes: resolve against source dir
+                    try:
+                        candidate = (file_path.parent / include_str).resolve()
+                    except (OSError, ValueError):
+                        candidate = None
+
+                    if candidate and candidate.is_file():
+                        header_src = candidate
+                    else:
+                        # 3) Use CMake include_dirs as the primary configuration-driven
+                        # search space for project headers.
+                        if isinstance(repo_root, Path):
+                            for tgt, inc_dirs in include_dirs_for_targets.items():
+                                for inc in inc_dirs:
+                                    base_dir = (repo_root / inc).resolve()
+                                    cand = (base_dir / include_str).resolve()
+                                    if cand.is_file():
+                                        header_src = cand
+                                        break
+                                if header_src:
+                                    break
+
+                    # 4) Still not resolved: fall back to a project-relative
+                    # include placeholder and let later projection logic
+                    # (include_dir_resolve) decide where it lands.
+                    if header_src is None:
+                        header_id = make_include_placeholder_id(include_str)
+                        header_type = NodeType.PROJECT_HEADER
+
+                # Derive header_id for resolved headers when src_path is known
+                if header_id is None and header_src is not None:
+                    try:
+                        if self._graph_manager.root_path:
+                            header_id = self._graph_manager.normalize_path(header_src)
+                        else:
+                            header_id = str(header_src)
+                    except Exception:
+                        header_id = str(header_src)
+
+                # Ensure header node exists with proper type
+                if not self._graph_manager.has_node(header_id):
+                    header_spec = NodeSpec(
+                        id=header_id,
+                        type=header_type,
+                        src_path=str(header_src) if header_src is not None else None,
+                        name=include_str.split("/")[-1],
+                        parser_name=parser_name,
+                    )
+                    self._graph_manager.add_node_spec(header_spec)
+
+                # Connect code file -> header with semantic "include" edge
+                edge_spec = EdgeSpec(
+                    source=file_node_id,
+                    target=header_id,
+                    kind=EdgeKind.INCLUDE,
+                    parser_name=parser_name,
+                )
+                self._graph_manager.add_edge_spec(edge_spec)
+
+            return
+
+        # Hvigor/ArkTS ecosystem: treat results as import relationships
+        if ecosystem == "hvigor":
+            for include_path in includes:
+                if isinstance(include_path, Path):
+                    target_path = include_path
+                    target_path_str = str(include_path)
+                else:
+                    target_path = Path(str(include_path))
+                    target_path_str = str(include_path)
+
+                try:
+                    if self._graph_manager.root_path and target_path.is_absolute():
+                        include_node_id = self._graph_manager.normalize_path(
+                            target_path
+                        )
+                    elif self._graph_manager.root_path:
+                        include_node_id = self._graph_manager.normalize_path(
+                            (file_path.parent / target_path).resolve()
+                        )
+                    else:
+                        include_node_id = target_path_str
+                except Exception:
+                    include_node_id = target_path_str
+
+                if not self._graph_manager.has_node(include_node_id):
+                    # Treat imported ArkTS/TS/JS as code nodes
+                    include_spec = NodeSpec(
+                        id=include_node_id,
+                        type=NodeType.CODE,
+                        path=target_path_str,
+                        src_path=str(target_path.resolve())
+                        if target_path.exists()
+                        else target_path_str,
+                        name=target_path.name,
+                        parser_name=parser_name,
+                    )
+                    self._graph_manager.add_node_spec(include_spec)
+
+                edge_spec = EdgeSpec(
+                    source=file_node_id,
+                    target=include_node_id,
+                    kind=EdgeKind.IMPORT,
+                    parser_name=parser_name,
+                )
+                self._graph_manager.add_edge_spec(edge_spec)
+
+            return
+
+        # Fallback for other ecosystems: keep behavior but standardize edge kind
         for include_path in includes:
             include_node_id = (
                 str(include_path) if isinstance(include_path, Path) else include_path
             )
-            self._graph_manager.add_edge(
-                file_node_id,
-                include_node_id,
-                "includes",
-                path=include_node_id,
+            edge_spec = EdgeSpec(
+                source=file_node_id,
+                target=include_node_id,
+                kind=EdgeKind.INCLUDE,
+                parser_name=parser_name,
+                attrs={"path": include_node_id},
             )
+            self._graph_manager.add_edge_spec(edge_spec)
 
     def _phase_resolve_deps(self) -> None:
         """Phase D: Unified dependency resolution.
