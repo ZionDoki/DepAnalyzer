@@ -6,6 +6,7 @@ Language‑specific code and config parsers are registered from here.
 import logging
 
 from depanalyzer.parsers.registry import register_ecosystem
+from depanalyzer.runtime.ecosystem_config_registry import EcosystemConfigRegistry
 
 logger = logging.getLogger("depanalyzer.parsers")
 
@@ -19,6 +20,7 @@ try:
     from depanalyzer.parsers.cpp.config_parser import CMakeParser
     from depanalyzer.parsers.cpp.dep_fetcher import CppDepFetcher
     from depanalyzer.parsers.cpp.code_parser import CppCodeParser
+    from depanalyzer.parsers.cpp.linker import CppLinker
 
     _CPP_AVAILABLE = True
     logger.debug("✓ CPP ecosystem components imported successfully")
@@ -37,6 +39,7 @@ try:
     from depanalyzer.parsers.hvigor.config_parser import HvigorParser
     from depanalyzer.parsers.hvigor.dep_fetcher import HvigorDepFetcher
     from depanalyzer.parsers.hvigor.code_parser import HvigorCodeParser
+    from depanalyzer.parsers.hvigor.linker import HvigorLinker
 
     _HVIGOR_AVAILABLE = True
     logger.debug("✓ Hvigor ecosystem components imported successfully")
@@ -53,12 +56,21 @@ except ImportError as e:
 # Register CPP ecosystem (CMake-based)
 if _CPP_AVAILABLE:
     try:
+        from depanalyzer.parsers.cpp.config_model import CppEcosystemConfig
+
         register_ecosystem(
             ecosystem="cpp",
             detector_class=CMakeDetector,
             parser_class=CMakeParser,
             fetcher_class=CppDepFetcher,
             code_parser_class=CppCodeParser,
+            linker_class=CppLinker,
+        )
+        # Register ecosystem configuration factory so that user-provided
+        # TOML/JSON config under [ecosystems.cpp.*] can be parsed into
+        # a strongly-typed configuration object.
+        EcosystemConfigRegistry.register_config_factory(
+            "cpp", CppEcosystemConfig.from_dict
         )
         logger.info("✓ Successfully registered CPP ecosystem (CMake-based)")
         _registered_ecosystems.append("cpp")
@@ -69,12 +81,18 @@ if _CPP_AVAILABLE:
 # Register Hvigor ecosystem (OpenHarmony)
 if _HVIGOR_AVAILABLE:
     try:
+        from depanalyzer.parsers.hvigor.config_model import HvigorEcosystemConfig
+
         register_ecosystem(
             ecosystem="hvigor",
             detector_class=HvigorDetector,
             parser_class=HvigorParser,
             fetcher_class=HvigorDepFetcher,
             code_parser_class=HvigorCodeParser,
+            linker_class=HvigorLinker,
+        )
+        EcosystemConfigRegistry.register_config_factory(
+            "hvigor", HvigorEcosystemConfig.from_dict
         )
         logger.info("✓ Successfully registered Hvigor ecosystem (OpenHarmony)")
         _registered_ecosystems.append("hvigor")
@@ -144,5 +162,6 @@ if _HVIGOR_AVAILABLE:
             "HvigorParser",
             "HvigorDepFetcher",
             "HvigorCodeParser",
+            "HvigorLinker",
         ]
     )

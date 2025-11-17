@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from depanalyzer.graph.manager import GraphManager
+from depanalyzer.graph.linking import LinkClass
 from depanalyzer.runtime.eventbus import Event, EventBus
 
 logger = logging.getLogger("depanalyzer.parsers.base")
@@ -28,7 +29,12 @@ class BaseDetector(ABC):
     NAME: str = "base"
     ECOSYSTEM: str = "base"  # Ecosystem identifier (cpp, hvigor, npm, etc.)
 
-    def __init__(self, workspace_root: Path, eventbus: EventBus) -> None:
+    def __init__(
+        self,
+        workspace_root: Path,
+        eventbus: EventBus,
+        config: Optional[Any] = None,
+    ) -> None:
         """Initialize detector.
 
         Args:
@@ -37,6 +43,9 @@ class BaseDetector(ABC):
         """
         self.workspace_root = workspace_root
         self.eventbus = eventbus
+        # Optional per‑ecosystem configuration slice, provided by the
+        # transaction's GraphBuildConfig.detect.for_ecosystem().
+        self.config = config
         logger.debug("Detector %s (%s) initialized", self.NAME, self.ECOSYSTEM)
 
     @abstractmethod
@@ -72,6 +81,7 @@ class BaseParser(ABC):
         workspace_root: Path,
         graph_manager: GraphManager,
         eventbus: EventBus,
+        config: Optional[Any] = None,
     ) -> None:
         """Initialize parser.
 
@@ -83,6 +93,9 @@ class BaseParser(ABC):
         self.workspace_root = workspace_root
         self.graph_manager = graph_manager
         self.eventbus = eventbus
+        # Optional per‑ecosystem configuration slice, provided by the
+        # transaction's GraphBuildConfig.parser.for_ecosystem().
+        self.config = config
         logger.debug("Parser %s (%s) initialized", self.NAME, self.ECOSYSTEM)
 
     @abstractmethod
@@ -135,6 +148,41 @@ class BaseParser(ABC):
             List[Path]: List of source code files to parse. Empty list means no code parsing needed.
         """
         return []
+
+
+class BaseLinker(ABC):
+    """Base class for per-ecosystem linkers.
+
+    Linkers operate on the already-populated transaction graph and
+    derive configuration- or ecosystem-driven relationships, such as:
+    - module→code membership
+    - module/shared_library→native target wiring
+    - cross-ecosystem bridges based on build contracts
+
+    They are invoked after all parsers have run, typically during the
+    JOIN phase of a transaction.
+    """
+
+    ECOSYSTEM: str = "base"
+
+    def __init__(self, graph_manager: GraphManager, config: Optional[Any] = None) -> None:
+        """Initialize linker with graph manager.
+
+        Args:
+            graph_manager: Transaction graph manager.
+        """
+        self.graph_manager = graph_manager
+        # Optional per‑ecosystem configuration slice for linkers.
+        self.config = config
+
+    @abstractmethod
+    def link(self) -> None:
+        """Apply linking logic to the current graph.
+
+        Implementations should be idempotent and robust to partial
+        graphs, as they may be executed in different analysis setups.
+        """
+        raise NotImplementedError
 
 
 class BaseCodeParser(ABC):
@@ -420,4 +468,3 @@ class BaseDepFetcher(ABC):
         except Exception as e:
             logger.error("Failed to extract archive %s: %s", archive_path, e)
             return False
-

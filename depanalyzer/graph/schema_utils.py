@@ -112,16 +112,30 @@ def canonicalize_node(
     if "src_path" not in new_attrs and isinstance(new_attrs.get("path"), str):
         new_attrs["src_path"] = new_attrs["path"]
 
-    # Derive normalized path and GN-style ID if possible
-    normalized = _derive_normalized_path(raw_id, new_attrs, root_path)
-    if normalized:
-        canonical_id = _gn_style_id(normalized)
+    # Derive canonical identifier.
+    #
+    # There are two broad categories of IDs:
+    # 1) Path-based IDs, which should be normalized relative to root_path
+    #    (e.g. file/config/module paths).
+    # 2) Logical IDs that are not filesystem paths, such as external library
+    #    identifiers (ext_lib:pkg@version). These must NOT be treated as paths
+    #    or they will accidentally pick up process working directories.
+    if raw_id.startswith("ext_lib:"):
+        # External library nodes are modeled as logical identifiers. For export
+        # purposes we wrap them in a //-style prefix so they live in the same
+        # namespace as other node IDs, but we avoid any filesystem-based
+        # normalization.
+        canonical_id = f"//{raw_id}"
     else:
-        canonical_id = raw_id
+        # Default: best-effort path normalization where applicable.
+        normalized = _derive_normalized_path(raw_id, new_attrs, root_path)
+        if normalized:
+            canonical_id = _gn_style_id(normalized)
+        else:
+            canonical_id = raw_id
 
-    # Derive label from canonical ID if not explicitly set
-    if "label" not in new_attrs or not new_attrs["label"]:
-        new_attrs["label"] = canonical_id
+    # Always derive label from canonical ID so id/label stay in sync in exports.
+    new_attrs["label"] = canonical_id
 
     # Best-effort name default for file-like nodes
     if "name" not in new_attrs or not new_attrs["name"]:

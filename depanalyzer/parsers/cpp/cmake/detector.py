@@ -26,10 +26,24 @@ class CMakeDetector(BaseDetector):
         Returns:
             List of detected CMake file paths.
         """
-        detected = []
+        detected: List[Path] = []
+
+        cfg = getattr(self, "config", None)
+        ignore_build_dirs = bool(getattr(cfg, "ignore_build_dirs", False)) if cfg else False
+        ignore_third_party_dirs = bool(getattr(cfg, "ignore_third_party_dirs", False)) if cfg else False
 
         for pattern in self.TARGET_PATTERNS:
-            files = list(self.workspace_root.rglob(pattern))
+            files: List[Path] = []
+            for file_path in self.workspace_root.rglob(pattern):
+                parts = set(file_path.parts)
+                if ignore_build_dirs and "build" in parts:
+                    continue
+                if ignore_third_party_dirs and (
+                    "third_party" in parts or "3rdparty" in parts or "third-party" in parts
+                ):
+                    continue
+                files.append(file_path)
+
             detected.extend(files)
 
             # Publish detection events for each found file

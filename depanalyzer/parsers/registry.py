@@ -11,6 +11,7 @@ from depanalyzer.parsers.base import (
     BaseCodeParser,
     BaseDepFetcher,
     BaseDetector,
+    BaseLinker,
     BaseParser,
 )
 
@@ -39,6 +40,9 @@ class EcosystemRegistry:
 
         # ecosystem -> DepFetcher class
         self._dep_fetchers: Dict[str, Type[BaseDepFetcher]] = {}
+
+        # ecosystem -> Linker class
+        self._linkers: Dict[str, Type[BaseLinker]] = {}
 
         logger.info("Ecosystem registry initialized")
 
@@ -137,6 +141,24 @@ class EcosystemRegistry:
             "Registered code_parser for '%s': %s", ecosystem, code_parser_class.__name__
         )
 
+    def register_linker(self, ecosystem: str, linker_class: Type[BaseLinker]) -> None:
+        """Register a linker for an ecosystem.
+
+        Args:
+            ecosystem: Ecosystem identifier.
+            linker_class: Linker class to register.
+        """
+        if ecosystem in self._linkers:
+            logger.warning(
+                "Overwriting existing linker for ecosystem '%s': %s -> %s",
+                ecosystem,
+                self._linkers[ecosystem].__name__,
+                linker_class.__name__,
+            )
+
+        self._linkers[ecosystem] = linker_class
+        logger.info("Registered linker for '%s': %s", ecosystem, linker_class.__name__)
+
     def register_ecosystem(
         self,
         ecosystem: str,
@@ -144,6 +166,7 @@ class EcosystemRegistry:
         parser_class: Type[BaseParser],
         fetcher_class: Type[BaseDepFetcher],
         code_parser_class: Optional[Type[BaseCodeParser]] = None,
+        linker_class: Optional[Type[BaseLinker]] = None,
     ) -> None:
         """Register all components for an ecosystem at once.
 
@@ -159,6 +182,8 @@ class EcosystemRegistry:
         self.register_dep_fetcher(ecosystem, fetcher_class)
         if code_parser_class is not None:
             self.register_code_parser(ecosystem, code_parser_class)
+        if linker_class is not None:
+            self.register_linker(ecosystem, linker_class)
         logger.info("Registered complete ecosystem: %s", ecosystem)
 
     def get_detector(self, ecosystem: str) -> Optional[Type[BaseDetector]]:
@@ -204,6 +229,17 @@ class EcosystemRegistry:
             Optional[Type[BaseCodeParser]]: CodeParser class or None if not found.
         """
         return self._code_parsers.get(ecosystem)
+
+    def get_linker(self, ecosystem: str) -> Optional[Type[BaseLinker]]:
+        """Get linker class for an ecosystem.
+
+        Args:
+            ecosystem: Ecosystem identifier.
+
+        Returns:
+            Optional[Type[BaseLinker]]: Linker class or None if not found.
+        """
+        return self._linkers.get(ecosystem)
 
     def list_ecosystems(self) -> List[str]:
         """List all registered ecosystems.
@@ -260,6 +296,7 @@ def register_ecosystem(
     parser_class: Type[BaseParser],
     fetcher_class: Type[BaseDepFetcher],
     code_parser_class: Optional[Type[BaseCodeParser]] = None,
+    linker_class: Optional[Type[BaseLinker]] = None,
 ) -> None:
     """Register all components for an ecosystem.
 
@@ -274,5 +311,10 @@ def register_ecosystem(
     """
     registry = EcosystemRegistry.get_instance()
     registry.register_ecosystem(
-        ecosystem, detector_class, parser_class, fetcher_class, code_parser_class
+        ecosystem,
+        detector_class,
+        parser_class,
+        fetcher_class,
+        code_parser_class=code_parser_class,
+        linker_class=linker_class,
     )

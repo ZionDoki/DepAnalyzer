@@ -31,6 +31,15 @@ def export_command(args) -> int:
         output_path = Path(args.output)
         export_format = getattr(args, "format", "json")
         with_deps = getattr(args, "with_deps", False)
+        work_dir_arg = getattr(args, "work_dir", None)
+
+        # Determine where graphs are stored on disk
+        if work_dir_arg:
+            work_dir = Path(work_dir_arg).expanduser().resolve()
+            graphs_root = work_dir / "graphs"
+            logger.info("Using work directory for graphs: %s", graphs_root)
+        else:
+            graphs_root = Path(".depanalyzer_cache/graphs")
 
         logger.info("Exporting graph: %s", graph_id)
         logger.info("Output path: %s", output_path)
@@ -38,7 +47,7 @@ def export_command(args) -> int:
         logger.info("Include dependencies: %s", with_deps)
 
         # Get graph registry
-        registry = GraphRegistry.get_instance()
+        registry = GraphRegistry.get_instance(cache_root=graphs_root)
 
         # Get main graph cache path
         cache_path = registry.get_cache_path(graph_id)
@@ -56,7 +65,7 @@ def export_command(args) -> int:
 
         # If --with-deps is enabled, load all dependency graphs
         if with_deps:
-            global_dag = GlobalDAG.get_instance()
+            global_dag = GlobalDAG.get_instance(cache_dir=graphs_root)
 
             # Get dependency graphs in topological order
             try:
@@ -77,9 +86,12 @@ def export_command(args) -> int:
             except Exception as e:
                 logger.warning("Failed to get dependency graphs: %s", e)
 
+        # Determine path to GlobalDAG (if present)
+        global_dag_path = graphs_root / "global_dag.json"
+
         # Load and combine graphs
         if export_format == "json":
-            result = _export_json(graphs_to_export, output_path)
+            result = _export_json(graphs_to_export, output_path, global_dag_path)
         elif export_format == "asset_artifact":
             # Special format for asset->artifact mapping
             result = _export_asset_artifact_mapping(graphs_to_export, output_path)
@@ -243,7 +255,11 @@ def _export_asset_artifact_mapping(graphs: List[dict], output_path: Path) -> boo
         return False
 
 
-def _export_json(graphs: List[dict], output_path: Path) -> bool:
+def _export_json(
+    graphs: List[dict],
+    output_path: Path,
+    global_dag_path: Path | None = None,
+) -> bool:
     """Export graphs to JSON format.
 
     Args:
@@ -276,6 +292,19 @@ def _export_json(graphs: List[dict], output_path: Path) -> bool:
             "graphs": all_graphs,
             "graph_count": len(all_graphs),
         }
+
+        # Optionally embed GlobalDAG information for cross-graph dependencies
+        if global_dag_path is not None and global_dag_path.exists():
+            try:
+                with open(global_dag_path, "r", encoding="utf-8") as f:
+                    dag_data = json.load(f)
+                output_data["global_dag"] = dag_data
+            except Exception as dag_err:
+                logger.warning(
+                    "Failed to load GlobalDAG from %s: %s",
+                    global_dag_path,
+                    dag_err,
+                )
 
         # Write to file
         with open(output_path, "w", encoding="utf-8") as f:

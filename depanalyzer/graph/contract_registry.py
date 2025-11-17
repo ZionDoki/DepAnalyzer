@@ -9,6 +9,7 @@ from collections import defaultdict
 import threading
 
 from depanalyzer.graph.contract import BuildInterfaceContract, ContractType
+from depanalyzer.runtime.graph_config import ContractMatchConfig
 
 
 class ContractRegistry:
@@ -117,7 +118,10 @@ class ContractRegistry:
         """Get all registered contracts."""
         return self._contracts.copy()
 
-    def match_contracts(self) -> List[BuildInterfaceContract]:
+    def match_contracts(
+        self,
+        config: Optional[ContractMatchConfig] = None,
+    ) -> List[BuildInterfaceContract]:
         """
         Match incomplete contracts to form complete provider-consumer pairs.
 
@@ -131,6 +135,9 @@ class ContractRegistry:
         """
         matched: List[BuildInterfaceContract] = []
 
+        # Decide which matching strategies are enabled.
+        cfg = config or ContractMatchConfig()
+
         # Collect all incomplete contracts
         providers = [c for c in self._contracts if c.is_provider_only]
         consumers = [c for c in self._contracts if c.is_consumer_only]
@@ -143,25 +150,26 @@ class ContractRegistry:
         used_consumers = set()
 
         # Strategy 1: Artifact name matching
-        for consumer in consumers:
-            if id(consumer) in used_consumers:
-                continue
-
-            for provider in self._artifact_name_providers.get(consumer.artifact_name, []):
-                if id(provider) in used_providers:
-                    continue
-                if not provider.is_provider_only:
+        if cfg.enable_artifact_name:
+            for consumer in consumers:
+                if id(consumer) in used_consumers:
                     continue
 
-                # Found a match by artifact name
-                try:
-                    merged = consumer.merge_with(provider)
-                    matched.append(merged)
-                    used_providers.add(id(provider))
-                    used_consumers.add(id(consumer))
-                    break
-                except ValueError:
-                    continue
+                for provider in self._artifact_name_providers.get(consumer.artifact_name, []):
+                    if id(provider) in used_providers:
+                        continue
+                    if not provider.is_provider_only:
+                        continue
+
+                    # Found a match by artifact name
+                    try:
+                        merged = consumer.merge_with(provider)
+                        matched.append(merged)
+                        used_providers.add(id(provider))
+                        used_consumers.add(id(consumer))
+                        break
+                    except ValueError:
+                        continue
 
         # Sort by confidence (descending)
         matched.sort(key=lambda c: c.confidence, reverse=True)

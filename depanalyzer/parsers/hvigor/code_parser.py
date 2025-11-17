@@ -42,6 +42,30 @@ class HvigorCodeParser(BaseCodeParser):
     ECOSYSTEM = "hvigor"
     CODE_GLOBS = ["**/*.ets", "**/*.ts", "**/*.js"]
 
+    def __init__(self, config: Optional[Any] = None) -> None:
+        """Initialize Hvigor code parser.
+
+        Args:
+            config: Optional configuration slice controlling parser behaviour.
+        """
+        # NOTE: Code parsers are designed to be effectively stateless when
+        # used from the process pool. We only keep simple, immutable config
+        # such as numeric limits.
+        self._config = config
+        max_levels = 8
+        if config is not None:
+            try:
+                # Support both dataclass-style objects and plain dicts.
+                value = getattr(config, "max_import_ancestor_levels", None)
+                if value is None and isinstance(config, dict):
+                    value = config.get("max_import_ancestor_levels")
+                if isinstance(value, int) and value > 0:
+                    max_levels = value
+            except Exception:
+                # Fall back to compiled default on any error
+                pass
+        self._max_ancestor_levels = max_levels
+
     def parse_file(self, file_path: Path) -> Dict[str, Any]:
         """Parse an ArkTS/TypeScript file to extract imports.
 
@@ -167,22 +191,67 @@ class HvigorCodeParser(BaseCodeParser):
         if import_spec.startswith(("./", "../")):
             base_path = (source_file.parent / import_spec).resolve()
         else:
-            # Absolute/module imports (resolve from project root)
-            # Note: In process pool, we don't have access to repo_root
-            # So we resolve relative to source file's parent as best effort
+            # Absolute/module imports.
+            #
+            # In the worker process we do not know the repository root, so we:
+            # 1) First try resolving relative to the current file's directory.
+            # 2) If that fails, conservatively walk up ancestor directories and
+            #    try "<ancestor>/<import_spec>".
+            #
+            # This mirrors the old implementation that resolved absolute paths
+            # from the repo root and significantly reduces "false isolated"
+            # ArkTS nodes in monorepo-style layouts.
             base_path = source_file.parent / import_spec
 
-        # Try with common extensions
-        for ext in [".ets", ".ts", ".js"]:
+        exts = [".ets", ".ts", ".js"]
+
+        # Try with common extensions relative to the chosen base path
+        for ext in exts:
             candidate = base_path.with_suffix(ext)
             if candidate.is_file():
                 return candidate
 
         # Try as directory with index file
         if base_path.is_dir():
-            for ext in [".ets", ".ts", ".js"]:
+            for ext in exts:
                 index_file = base_path / f"index{ext}"
                 if index_file.is_file():
                     return index_file
+
+            # Fallback for "module-like" imports in monorepos:
+        # if the specifier looks path-like (contains a slash or explicit
+        # extension) and is not an external package (e.g. @ohos/...), walk
+        # up the ancestor chain and search there. This helps resolve imports
+        # such as "entry/src/common/util" that are effectively rooted at the
+        # project root or module root.
+        if (
+            not import_spec.startswith("@")
+            and ("/" in import_spec or import_spec.endswith(tuple(exts)))
+        ):
+            current = source_file.parent
+            # Cap the number of levels we walk to avoid traversing the whole
+            # filesystem hierarchy in deeply nested setups.
+            max_levels = getattr(self, "_max_ancestor_levels", 8)
+            levels = 0
+            while True:
+                parent = current.parent
+                if parent == current or levels >= max_levels:
+                    break
+                # Try resolving from this ancestor
+                ancestor_base = (parent / import_spec).resolve()
+
+                for ext in exts:
+                    candidate = ancestor_base.with_suffix(ext)
+                    if candidate.is_file():
+                        return candidate
+
+                if ancestor_base.is_dir():
+                    for ext in exts:
+                        index_file = ancestor_base / f"index{ext}"
+                        if index_file.is_file():
+                            return index_file
+
+                current = parent
+                levels += 1
 
         return None

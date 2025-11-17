@@ -21,7 +21,7 @@ logger = logging.getLogger("depanalyzer.runtime.code_parser_pool")
 _CODE_PARSER_CACHE: Dict[str, Any] = {}
 
 
-def _get_code_parser(ecosystem: str):
+def _get_code_parser(ecosystem: str, config: Any | None = None):
     """Get or create cached code parser instance for worker process.
 
     Reuses parser instances within worker processes to avoid repeated
@@ -45,9 +45,20 @@ def _get_code_parser(ecosystem: str):
                 logger.warning(f"No code parser registered for ecosystem: {ecosystem}")
                 return None
 
-            # Instantiate and cache
-            _CODE_PARSER_CACHE[ecosystem] = parser_class()
-            logger.debug(f"[PID {os.getpid()}] Cached code parser for ecosystem: {ecosystem}")
+            # Instantiate and cache; prefer passing through configuration
+            # when provided and the parser supports it.
+            try:
+                if config is not None:
+                    _CODE_PARSER_CACHE[ecosystem] = parser_class(config=config)
+                else:
+                    _CODE_PARSER_CACHE[ecosystem] = parser_class()
+            except TypeError:
+                # Fallback for parsers that do not accept a config argument
+                _CODE_PARSER_CACHE[ecosystem] = parser_class()
+
+            logger.debug(
+                "[PID %d] Cached code parser for ecosystem: %s", os.getpid(), ecosystem
+            )
 
         except Exception as e:
             logger.error(f"Failed to create code parser for {ecosystem}: {e}")
@@ -56,7 +67,7 @@ def _get_code_parser(ecosystem: str):
     return _CODE_PARSER_CACHE[ecosystem]
 
 
-def _code_worker_dispatch(task_data: Tuple[str, str]) -> Dict[str, Any]:
+def _code_worker_dispatch(task_data: Tuple[str, str, Any | None]) -> Dict[str, Any]:
     """Worker process task dispatcher function.
 
     This function is the entry point for worker processes. It must be a
@@ -68,11 +79,11 @@ def _code_worker_dispatch(task_data: Tuple[str, str]) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Parse result or skip/error result.
     """
-    file_path_str, ecosystem = task_data
+    file_path_str, ecosystem, config = task_data
     file_path = Path(file_path_str)
 
     # Get cached parser instance for this worker process
-    parser = _get_code_parser(ecosystem)
+    parser = _get_code_parser(ecosystem, config=config)
 
     if parser is None:
         return {
@@ -193,7 +204,7 @@ class CodeParserPool:
             logger.info("Process pool executor started with %d workers", self.max_workers)
         return self._executor
 
-    def submit_file(self, file_path: Path, ecosystem: str) -> Future:
+    def submit_file(self, file_path: Path, ecosystem: str, config: Any | None = None) -> Future:
         """Submit a single file for parsing.
 
         Args:
@@ -205,7 +216,9 @@ class CodeParserPool:
         """
         executor = self._ensure_executor()
 
-        future = executor.submit(_code_worker_dispatch, (str(file_path), ecosystem))
+        future = executor.submit(
+            _code_worker_dispatch, (str(file_path), ecosystem, config)
+        )
 
         logger.debug(
             "Submitted file for parsing: %s (ecosystem: %s)", file_path, ecosystem
@@ -214,7 +227,7 @@ class CodeParserPool:
         return future
 
     def submit_batch(
-        self, file_paths: List[Path], ecosystem: str
+        self, file_paths: List[Path], ecosystem: str, config: Any | None = None
     ) -> List[Tuple[Path, Future]]:
         """Submit multiple files for parsing in batch.
 
@@ -227,9 +240,11 @@ class CodeParserPool:
         """
         executor = self._ensure_executor()
 
-        futures = []
+        futures: List[Tuple[Path, Future]] = []
         for file_path in file_paths:
-            future = executor.submit(_code_worker_dispatch, (str(file_path), ecosystem))
+            future = executor.submit(
+                _code_worker_dispatch, (str(file_path), ecosystem, config)
+            )
             futures.append((file_path, future))
 
         logger.info(

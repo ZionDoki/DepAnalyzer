@@ -19,6 +19,7 @@ import depanalyzer.parsers  # noqa: F401
 
 from depanalyzer.cli.scan import scan_command
 from depanalyzer.cli.export import export_command
+from depanalyzer.cli.scancode import scancode_command
 
 
 def setup_logging(verbose: bool = False, console: Optional[Console] = None) -> None:
@@ -95,6 +96,14 @@ def main() -> int:
         help="Output graph file (.json, .gml, or .dot)",
     )
     scan_parser.add_argument(
+        "--cache-dir",
+        help=(
+            "Base directory for scan cache. Graphs and sources for the scanned "
+            "project will be stored under <cache-dir>/<source_stem>/{graphs,sources}. "
+            "Defaults to .dep_cache in the current working directory."
+        ),
+    )
+    scan_parser.add_argument(
         "-w",
         "--workers",
         type=int,
@@ -125,9 +134,13 @@ def main() -> int:
         help="Skip analysis phase",
     )
     scan_parser.add_argument(
-        "--no-progress",
-        action="store_true",
-        help="Disable progress display",
+        "-c",
+        "--config",
+        help=(
+            "Optional graph-build configuration. Can be a path to a TOML/JSON "
+            "file (e.g. config.toml, config.json) or an inline TOML/JSON "
+            "string. When omitted, built-in defaults are used."
+        ),
     )
 
     # Export command
@@ -146,6 +159,14 @@ def main() -> int:
         help="Output file",
     )
     export_parser.add_argument(
+        "--work-dir",
+        help=(
+            "Base directory where graphs were stored during scan "
+            "(expects graphs under <work-dir>/graphs). "
+            "If not provided, defaults to .depanalyzer_cache/graphs."
+        ),
+    )
+    export_parser.add_argument(
         "-f",
         "--format",
         choices=["json", "gml", "dot", "asset_artifact"],
@@ -156,6 +177,38 @@ def main() -> int:
         "--with-deps",
         action="store_true",
         help="Include dependency graphs in export",
+    )
+
+    # ScanCode license command
+    scancode_parser = subparsers.add_parser(
+        "scancode",
+        help="Run ScanCode on cached graphs and build license expression map",
+    )
+    scancode_parser.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        help="Output JSON file containing {graph_id: {node_id: license_expression}}",
+    )
+    scancode_parser.add_argument(
+        "--cache-dir",
+        help=(
+            "Cache directory where graphs were stored during scan "
+            "(expects graphs under <cache-dir>/graphs). "
+            "Typically the same <cache-dir>/<source_stem> used with the scan command. "
+            "If not provided, defaults to .dep_cache."
+        ),
+    )
+    scancode_parser.add_argument(
+        "-t",
+        "--third-party",
+        action="store_true",
+        help="Include third-party dependency graphs in ScanCode scanning",
+    )
+    scancode_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force re-scan even if cached license maps exist",
     )
 
     # Query command (placeholder)
@@ -188,6 +241,8 @@ def main() -> int:
         return scan_command(args)
     elif args.command == "export":
         return export_command(args)
+    elif args.command == "scancode":
+        return scancode_command(args)
     elif args.command == "query":
         logger.error("Query command not yet implemented")
         return 1

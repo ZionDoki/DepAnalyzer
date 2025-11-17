@@ -47,6 +47,11 @@ class NodeType(str, Enum):
     EXECUTABLE = "executable"
     ASSET = "asset"
 
+    # OpenHarmony packaging types
+    HAP = "hap"
+    HAR = "har"
+    HSP = "hsp"
+
     # Fallback for places that still don't set a concrete type.
     UNKNOWN = "unknown"
 

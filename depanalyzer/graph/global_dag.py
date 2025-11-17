@@ -43,7 +43,9 @@ class GlobalDAG:
         """Initialize global DAG.
 
         Args:
-            cache_dir: Directory for DAG persistence. Defaults to .depanalyzer_cache/graphs
+            cache_dir: Directory for DAG persistence. Defaults to .depanalyzer_cache/graphs.
+                Only used on first initialization; subsequent calls reuse the
+                existing instance and ignore this parameter.
         """
         if GlobalDAG._initialized:
             return
@@ -63,13 +65,17 @@ class GlobalDAG:
         logger.info("Global DAG initialized (cache: %s)", self._dag_file)
 
     @classmethod
-    def get_instance(cls) -> "GlobalDAG":
+    def get_instance(cls, cache_dir: Optional[Path] = None) -> "GlobalDAG":
         """Get the singleton GlobalDAG instance.
+
+        Args:
+            cache_dir: Optional directory for DAG persistence. Only used on
+                first initialization; later calls reuse existing instance.
 
         Returns:
             GlobalDAG: The singleton instance.
         """
-        return cls()
+        return cls(cache_dir=cache_dir)
 
     def _save(self) -> None:
         """Save DAG to disk."""
@@ -131,13 +137,46 @@ class GlobalDAG:
         self._dag.add_edge(parent_graph_id, child_graph_id)
         logger.debug("Added dependency: %s -> %s", parent_graph_id, child_graph_id)
 
-        # Check for cycles
+        # Check for cycles and log full cycle path when detected
         if not nx.is_directed_acyclic_graph(self._dag):
             logger.warning(
                 "Cycle detected in global DAG involving %s and %s",
                 parent_graph_id,
                 child_graph_id,
             )
+
+            # Attempt to extract and log the complete cycle chain for diagnostics.
+            try:
+                raw_cycle = nx.find_cycle(self._dag, source=parent_graph_id)
+
+                if raw_cycle:
+                    # raw_cycle is a list of edges: (u, v) or (u, v, orientation)
+                    cycle_nodes = []
+
+                    for edge in raw_cycle:
+                        # Support both 2-tuple and 3-tuple formats
+                        u = edge[0]
+                        v = edge[1]
+
+                        if not cycle_nodes:
+                            cycle_nodes.append(u)
+                        cycle_nodes.append(v)
+
+                    # Normalize cycle so it explicitly shows the closing edge
+                    if cycle_nodes and cycle_nodes[0] != cycle_nodes[-1]:
+                        cycle_nodes.append(cycle_nodes[0])
+
+                    cycle_repr = " -> ".join(cycle_nodes)
+                    logger.warning(
+                        "Global DAG cycle path: %s",
+                        cycle_repr,
+                    )
+            except Exception as cycle_err:
+                # Cycle introspection is best-effort only and must not break execution.
+                logger.debug(
+                    "Failed to compute full cycle path for GlobalDAG: %s",
+                    cycle_err,
+                )
 
         # Persist to disk after adding dependency
         self._save()

@@ -5,10 +5,11 @@ import logging
 import shutil
 import time
 from pathlib import Path
+from typing import Optional
 
 from depanalyzer.runtime.coordinator import TransactionCoordinator
-from depanalyzer.runtime.progress import ProgressManager, LogBufferHandler
 from depanalyzer.runtime.transaction import Transaction
+from depanalyzer.runtime.config_loader import load_graph_build_config
 
 logger = logging.getLogger("depanalyzer.cli.scan")
 
@@ -51,38 +52,57 @@ def _scan_command_impl(args) -> int:
     """
     logger.info("=== Depanalyzer Scan ===")
     logger.info("Source: %s", args.source)
-    logger.info("Output: %s", args.output)
+    output = getattr(args, "output", None)
+    cache_dir_arg = getattr(args, "cache_dir", None)
+    third_party_enabled = getattr(args, "third_party", False)
+    if output:
+        logger.info("Output: %s", output)
+    if cache_dir_arg:
+        logger.info("Cache dir: %s", cache_dir_arg)
     logger.info("Workers: %d", args.workers)
     logger.info("Max depth: %d", args.max_depth)
-    logger.info("Third-party resolution enabled: %s", getattr(args, "third_party", False))
+    logger.info("Third-party resolution enabled: %s", third_party_enabled)
 
     start_time = time.time()
 
-    # Create progress manager
-    progress_enabled = not getattr(args, 'no_progress', False)
-    progress_manager = ProgressManager(
-        enabled=progress_enabled,
-        live_panel=True,
-    )
+    # Resolve work directory and derived cache roots, if provided
+    from pathlib import Path as _Path
 
-    # Reconfigure logging to use LogBuffer for coordinated output
-    # This prevents logger output from interfering with progress display
-    if progress_enabled:
-        root_logger = logging.getLogger()
-        # Remove existing handlers
-        for handler in root_logger.handlers[:]:
-            root_logger.removeHandler(handler)
+    sources_root: Optional[_Path] = None
+    graphs_root: Optional[_Path] = None
+    workspace_cache_root: Optional[_Path] = None
 
-        # Add LogBufferHandler to capture logs in progress display
-        buffer_handler = LogBufferHandler(progress_manager.log_buffer)
-        buffer_handler.setFormatter(
-            logging.Formatter("[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
+    # Derive cache directory layout:
+    # base_cache_dir / <source_stem> / {sources, graphs}
+    try:
+        base_cache_dir = (
+            _Path(cache_dir_arg).expanduser().resolve()
+            if cache_dir_arg
+            else _Path(".dep_cache").resolve()
         )
-        buffer_handler.setLevel(logging.DEBUG)  # Ensure handler captures all logs
-        root_logger.addHandler(buffer_handler)
-        root_logger.setLevel(logging.DEBUG)  # Ensure root logger passes all logs
+    except Exception as e:
+        logger.error("Failed to resolve cache-dir %s: %s", cache_dir_arg, e)
+        return 1
+
+    source_stem = _Path(args.source).stem
+    cache_root = base_cache_dir / source_stem
+
+    sources_root = cache_root / "sources"
+    graphs_root = cache_root / "graphs"
+    workspace_cache_root = sources_root / "workspaces"
 
     try:
+        sources_root.mkdir(parents=True, exist_ok=True)
+        graphs_root.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        logger.error("Failed to initialize cache subdirectories under %s: %s", cache_root, e)
+        return 1
+
+    try:
+        # Load graph-build configuration (TOML/JSON or inline string) if provided
+        config_arg = getattr(args, "config", None)
+        graph_build_config = load_graph_build_config(config_arg)
+
         # Create coordinator with process pool
         logger.info("Creating TransactionCoordinator...")
         coordinator = TransactionCoordinator.get_instance()
@@ -96,34 +116,34 @@ def _scan_command_impl(args) -> int:
             max_dependency_depth=args.max_depth,
             enable_dependency_resolution=getattr(args, "third_party", False),
             max_dependencies=getattr(args, "max_deps", None),
-            progress_manager=progress_manager,
+            graph_cache_root=graphs_root,
+            dep_cache_root=sources_root,
+            workspace_cache_root=workspace_cache_root,
+            graph_build_config=graph_build_config,
         )
         logger.info("Transaction created: %s", transaction.transaction_id)
 
-        # Use progress manager's live display context
-        logger.info("Starting live display...")
-        with progress_manager.live_display():
-            logger.info("Submitting transaction %s to process pool", transaction.transaction_id)
-            try:
-                future = coordinator.submit(transaction)
-                logger.info("Transaction submitted successfully")
-            except Exception as e:
-                logger.error("Failed to submit transaction: %s", e, exc_info=True)
-                return 1
+        logger.info("Submitting transaction %s to process pool", transaction.transaction_id)
+        try:
+            future = coordinator.submit(transaction)
+            logger.info("Transaction submitted successfully")
+        except Exception as e:
+            logger.error("Failed to submit transaction: %s", e, exc_info=True)
+            return 1
 
-            # Wait for transaction to complete (with timeout)
-            logger.info("Waiting for transaction to complete...")
-            try:
-                result = future.result(timeout=300)  # 5 minute timeout
-                logger.info("Transaction completed, processing result...")
-            except TimeoutError:
-                logger.error("Transaction timed out after 300 seconds")
-                logger.error("This usually indicates the subprocess is stuck or crashed")
-                logger.error("Check the logs above for any error messages")
-                return 1
-            except Exception as e:
-                logger.error("Transaction failed with exception: %s", e, exc_info=True)
-                return 1
+        # Wait for transaction to complete (with timeout)
+        logger.info("Waiting for transaction to complete...")
+        try:
+            result = future.result(timeout=300)  # 5 minute timeout
+            logger.info("Transaction completed, processing result...")
+        except TimeoutError:
+            logger.error("Transaction timed out after 300 seconds")
+            logger.error("This usually indicates the subprocess is stuck or crashed")
+            logger.error("Check the logs above for any error messages")
+            return 1
+        except Exception as e:
+            logger.error("Transaction failed with exception: %s", e, exc_info=True)
+            return 1
 
         if not result.success:
             logger.error("Transaction failed: %s", result.error)
@@ -141,39 +161,143 @@ def _scan_command_impl(args) -> int:
         # Get graph from registry for export
         from depanalyzer.graph.registry import GraphRegistry
 
-        registry = GraphRegistry()
+        registry = GraphRegistry.get_instance(cache_root=graphs_root)
         cache_path = registry.get_cache_path(result.graph_id)
 
         if cache_path:
             logger.info("Graph cached at: %s", cache_path)
 
-            # Export graph to user-specified output path
-            output_path = Path(args.output)
-            try:
-                # Create output directory if needed
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-
-                # Copy cached graph to output location
-                shutil.copy2(cache_path, output_path)
-                logger.info("Graph exported to: %s", output_path)
-
-                # Also log summary information
+            # If an explicit output path was provided, write graph there.
+            # When third-party resolution is enabled (-t), export a merged
+            # graph that includes all dependency graphs.
+            if output:
+                output_path = Path(output)
                 try:
-                    with open(cache_path, "r", encoding="utf-8") as f:
-                        graph_data = json.load(f)
-                        metadata = graph_data.get("metadata", {})
-                        logger.info(
-                            "Export summary: %d nodes, %d edges, source: %s",
-                            metadata.get("node_count", 0),
-                            metadata.get("edge_count", 0),
-                            metadata.get("source", "unknown"),
-                        )
-                except Exception as e:
-                    logger.debug("Could not read graph metadata: %s", e)
+                    # Create output directory if needed
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
 
+                    if third_party_enabled:
+                        from depanalyzer.graph.merge import merge_graph_with_dependencies
+
+                        graphs_root_path = graphs_root or Path(".depanalyzer_cache/graphs")
+                        merged_data = merge_graph_with_dependencies(
+                            result.graph_id,
+                            cache_root=graphs_root_path,
+                        )
+
+                        with output_path.open("w", encoding="utf-8") as f:
+                            json.dump(merged_data, f, indent=2)
+
+                        meta = merged_data.get("metadata", {})
+                        logger.info(
+                            "Merged graph exported to: %s (%d nodes, %d edges)",
+                            output_path,
+                            meta.get("node_count", 0),
+                            meta.get("edge_count", 0),
+                        )
+                    else:
+                        # Copy cached main graph to output location
+                        shutil.copy2(cache_path, output_path)
+                        logger.info("Graph exported to: %s", output_path)
+
+                        # Also log summary information
+                        try:
+                            with cache_path.open("r", encoding="utf-8") as f:
+                                graph_data = json.load(f)
+                                metadata = graph_data.get("metadata", {})
+                                logger.info(
+                                    "Export summary: %d nodes, %d edges, source: %s",
+                                    metadata.get("node_count", 0),
+                                    metadata.get("edge_count", 0),
+                                    metadata.get("source", "unknown"),
+                                )
+                        except Exception as e:
+                            logger.debug("Could not read graph metadata: %s", e)
+
+                except Exception as e:
+                    logger.error("Failed to export graph: %s", e)
+                    return 1
+            else:
+                # In work-dir mode we rely on the cached main graph and, when
+                # third-party resolution is enabled, also provide a merged
+                # graph next to it.
+                logger.info(
+                    "Graph stored under work directory: %s",
+                    cache_path,
+                )
+
+                if third_party_enabled:
+                    try:
+                        from depanalyzer.graph.merge import merge_graph_with_dependencies
+
+                        graphs_root_path = graphs_root or Path(".depanalyzer_cache/graphs")
+                        merged_data = merge_graph_with_dependencies(
+                            result.graph_id,
+                            cache_root=graphs_root_path,
+                        )
+
+                        merged_path = cache_path.with_name(f"{result.graph_id}_merged.json")
+                        with merged_path.open("w", encoding="utf-8") as f:
+                            json.dump(merged_data, f, indent=2)
+
+                        meta = merged_data.get("metadata", {})
+                        logger.info(
+                            "Merged graph stored under work directory: %s (%d nodes, %d edges)",
+                            merged_path,
+                            meta.get("node_count", 0),
+                            meta.get("edge_count", 0),
+                        )
+                    except Exception as e:
+                        logger.error("Failed to create merged graph: %s", e, exc_info=True)
+
+            # Log high-level information about third-party dependency graphs so
+            # users can see how many transactions were spawned.
+            try:
+                from depanalyzer.graph.global_dag import GlobalDAG
+
+                graphs_root_path = graphs_root or Path(".depanalyzer_cache/graphs")
+                global_dag = GlobalDAG.get_instance(cache_dir=graphs_root_path)
+                dep_graph_ids = global_dag.get_transitive_dependencies(result.graph_id)
+
+                if dep_graph_ids:
+                    sorted_ids = sorted(dep_graph_ids)
+                    logger.info(
+                        "Third-party dependency graphs: %d (%s)",
+                        len(sorted_ids),
+                        ", ".join(sorted_ids),
+                    )
+
+                    # Log a brief summary for each dependency graph so users can
+                    # understand what was analyzed in child transactions.
+                    for dep_id in sorted_ids:
+                        dep_entry = registry.get_entry(dep_id)
+                        if not dep_entry:
+                            logger.info(
+                                "  - %s: (no registry entry, graph may have failed)",
+                                dep_id,
+                            )
+                            continue
+
+                            # unreachable
+                        summary = dep_entry.get("summary", {})  # type: ignore[union-attr]
+                        logger.info(
+                            "  - %s: %d nodes, %d edges (source: %s)",
+                            dep_id,
+                            summary.get("node_count", 0),
+                            summary.get("edge_count", 0),
+                            summary.get("source", "unknown"),
+                        )
+                else:
+                    # Only log an explicit 0 when third-party resolution was enabled;
+                    # otherwise this is expected.
+                    if third_party_enabled:
+                        logger.info("Third-party dependency graphs: 0")
             except Exception as e:
-                logger.error("Failed to export graph: %s", e)
-                return 1
+                logger.debug(
+                    "Could not summarize third-party dependency graphs for %s: %s",
+                    result.graph_id,
+                    e,
+                )
         else:
             logger.warning("Graph not found in registry: %s", result.graph_id)
             return 1
@@ -187,9 +311,6 @@ def _scan_command_impl(args) -> int:
         logger.error("Scan failed: %s", e, exc_info=True)
         return 1
     finally:
-        # Stop progress manager
-        progress_manager.stop()
-
         # Ensure cleanup of coordinator
         try:
             TransactionCoordinator.get_instance().shutdown(wait=False)

@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 import logging
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 from depanalyzer.parsers.base import BaseParser
 from depanalyzer.graph.manager import GraphManager
@@ -43,7 +43,13 @@ class CMakeParser(BaseParser):
 
     NAME = "cmake"
 
-    def __init__(self, workspace_root: Path, graph_manager: GraphManager, eventbus) -> None:
+    def __init__(
+        self,
+        workspace_root: Path,
+        graph_manager: GraphManager,
+        eventbus,
+        config: Any | None = None,
+    ) -> None:
         """Initialize the CMake config parser with command handlers and graph builder hook.
 
         Args:
@@ -51,7 +57,7 @@ class CMakeParser(BaseParser):
             graph_manager: Transaction graph manager.
             eventbus: Event bus for publishing parse events.
         """
-        super().__init__(workspace_root, graph_manager, eventbus)
+        super().__init__(workspace_root, graph_manager, eventbus, config=config)
 
         # Initialize the CMakeGraphBuilder hook that consumes CMake events
         # and performs graph operations

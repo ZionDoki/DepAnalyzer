@@ -17,6 +17,7 @@ from depanalyzer.runtime.eventbus import EventBus
 from depanalyzer.runtime.lifecycle import LifecyclePhase
 from depanalyzer.runtime.worker import Task, TaskPriority, Worker
 from depanalyzer.runtime.workspace import Workspace
+from depanalyzer.runtime.graph_config import GraphBuildConfig
 
 if TYPE_CHECKING:
     from depanalyzer.runtime.coordinator import TransactionResult
@@ -47,6 +48,10 @@ class Transaction:
         progress_manager: Optional["ProgressManager"] = None,
         enable_dependency_resolution: bool = False,
         max_dependencies: Optional[int] = None,
+        graph_cache_root: Optional[Path] = None,
+        dep_cache_root: Optional[Path] = None,
+        workspace_cache_root: Optional[Path] = None,
+        graph_build_config: Optional[GraphBuildConfig] = None,
     ) -> None:
         """Initialize transaction.
 
@@ -60,6 +65,14 @@ class Transaction:
             progress_manager: Optional progress manager for live progress display.
             enable_dependency_resolution: Whether to resolve third-party dependencies.
             max_dependencies: Optional global limit for third-party dependencies.
+            graph_cache_root: Optional directory where graph cache files are stored.
+                If None, defaults to .depanalyzer_cache/graphs in the current working directory.
+            dep_cache_root: Optional directory where third-party dependency sources
+                are cached. If None, defaults to .depanalyzer_cache/deps.
+            workspace_cache_root: Optional directory where Git workspaces are cached.
+                If None, defaults to .depanalyzer_cache/workspaces.
+            graph_build_config: Optional GraphBuildConfig controlling how the
+                dependency construct graph is built across all lifecycle phases.
         """
         self.transaction_id = transaction_id or str(uuid.uuid4())
         self.source = source
@@ -70,8 +83,20 @@ class Transaction:
         self.enable_dependency_resolution = enable_dependency_resolution
         self.max_dependencies = max_dependencies
 
+        # Graph build configuration (lifecycle‑wide).
+        self._graph_build_config: GraphBuildConfig = (
+            graph_build_config or GraphBuildConfig.default()
+        )
+
+        # Cache roots (can be overridden by CLI work-dir)
+        self.graph_cache_root = Path(graph_cache_root) if graph_cache_root else None
+        self.dep_cache_root = Path(dep_cache_root) if dep_cache_root else None
+        self.workspace_cache_root = (
+            Path(workspace_cache_root) if workspace_cache_root else None
+        )
+
         # Core components (will be initialized in __setstate__ for deserialization)
-        self.workspace = Workspace(source)
+        self.workspace = Workspace(source, cache_root=self.workspace_cache_root)
         self.worker: Optional[Worker] = None
         self.eventbus: Optional[EventBus] = None
 
@@ -221,7 +246,12 @@ class Transaction:
             def detect_task(eco=ecosystem, det_cls=detector_class):
                 """Detection task wrapper."""
                 try:
-                    detector = det_cls(self.workspace.root_path, eventbus)
+                    detect_cfg = self._graph_build_config.get_detect_config(eco)
+                    detector = det_cls(
+                        self.workspace.root_path,
+                        eventbus,
+                        config=detect_cfg,
+                    )
                     targets = detector.detect()
                     logger.info("Detector %s found %d targets", eco, len(targets))
                     return {"ecosystem": eco, "targets": targets, "success": True}
@@ -285,12 +315,30 @@ class Transaction:
         # Initialize GraphManager if not already done
         if self._graph_manager is None:
             from depanalyzer.graph.manager import GraphManager
+
+            # For third-party dependency transactions, use a namespace prefix
+            # based on the workspace root directory name so that normalized
+            # node IDs remain globally unique and clearly identify the
+            # dependency repository.
+            path_namespace = None
+            if self.parent_transaction_id:
+                try:
+                    if self.workspace.root_path:
+                        path_namespace = Path(self.workspace.root_path).name
+                except Exception:
+                    path_namespace = None
+
             self._graph_manager = GraphManager(
                 graph_id=self.graph_id,
-                root_path=self.workspace.root_path
+                root_path=self.workspace.root_path,
+                path_namespace=path_namespace,
             )
-            logger.info("Initialized GraphManager with graph_id: %s, root_path: %s",
-                        self.graph_id, self.workspace.root_path)
+            logger.info(
+                "Initialized GraphManager with graph_id: %s, root_path: %s, namespace: %s",
+                self.graph_id,
+                self.workspace.root_path,
+                path_namespace,
+            )
 
         # Initialize dependency collector to collect DEPENDENCY_DISCOVERED events
         if self._dependency_collector is None:
@@ -341,7 +389,13 @@ class Transaction:
                 def parse_task(eco=ecosystem, p_cls=parser_class, tgt=target_path):
                     """Config parsing task wrapper."""
                     try:
-                        parser = p_cls(self.workspace.root_path, self._graph_manager, eventbus)
+                        parser_cfg = self._graph_build_config.get_parser_config(eco)
+                        parser = p_cls(
+                            self.workspace.root_path,
+                            self._graph_manager,
+                            eventbus,
+                            config=parser_cfg,
+                        )
                         parser.parse(tgt)
 
                         # Discover code files from config parser
@@ -441,8 +495,13 @@ class Transaction:
         # Submit all code files to process pool
         futures_list = []
         for ecosystem, file_paths in code_files_to_parse.items():
-            logger.info("Submitting %d code files for ecosystem: %s", len(file_paths), ecosystem)
-            batch_futures = code_pool.submit_batch(file_paths, ecosystem)
+            logger.info(
+                "Submitting %d code files for ecosystem: %s",
+                len(file_paths),
+                ecosystem,
+            )
+            code_cfg = self._graph_build_config.get_code_parser_config(ecosystem)
+            batch_futures = code_pool.submit_batch(file_paths, ecosystem, config=code_cfg)
             futures_list.extend(batch_futures)
 
         # Wait for code parsing to complete and collect results
@@ -499,6 +558,7 @@ class Transaction:
 
         from depanalyzer.graph.manager import EdgeKind, NodeType
         from depanalyzer.graph.schema import NodeSpec, EdgeSpec
+        from depanalyzer.graph.linking import LinkClass
         from depanalyzer.graph.identifiers import (
             make_include_placeholder_id,
             make_system_header_id,
@@ -652,6 +712,7 @@ class Transaction:
                     target=header_id,
                     kind=EdgeKind.INCLUDE,
                     parser_name=parser_name,
+                    attrs={"link_class": LinkClass.SEMANTIC.value},
                 )
                 self._graph_manager.add_edge_spec(edge_spec)
 
@@ -700,6 +761,7 @@ class Transaction:
                     target=include_node_id,
                     kind=EdgeKind.IMPORT,
                     parser_name=parser_name,
+                    attrs={"link_class": LinkClass.SEMANTIC.value},
                 )
                 self._graph_manager.add_edge_spec(edge_spec)
 
@@ -715,7 +777,10 @@ class Transaction:
                 target=include_node_id,
                 kind=EdgeKind.INCLUDE,
                 parser_name=parser_name,
-                attrs={"path": include_node_id},
+                attrs={
+                    "path": include_node_id,
+                    "link_class": LinkClass.SEMANTIC.value,
+                },
             )
             self._graph_manager.add_edge_spec(edge_spec)
 
@@ -750,7 +815,7 @@ class Transaction:
                 "Applying max dependency limit: %d of %d",
                 self.max_dependencies,
                 len(dep_specs),
-            )
+                )
             dep_specs = dep_specs[: self.max_dependencies]
 
         # Start progress tracking for this phase
@@ -767,7 +832,7 @@ class Transaction:
 
         resolved_deps = resolve_dependencies(
             dep_specs,
-            cache_root=Path(".depanalyzer_cache/deps")
+            cache_root=self.dep_cache_root or Path(".depanalyzer_cache/deps")
         )
 
         # Filter out failed dependencies
@@ -808,6 +873,10 @@ class Transaction:
                 parent_transaction_id=self.transaction_id,
                 enable_dependency_resolution=self.enable_dependency_resolution,
                 max_dependencies=self.max_dependencies,
+                graph_cache_root=self.graph_cache_root,
+                dep_cache_root=self.dep_cache_root,
+                workspace_cache_root=self.workspace_cache_root,
+                graph_build_config=self._graph_build_config,
             )
 
             future = coordinator.submit(child_tx)
@@ -870,6 +939,35 @@ class Transaction:
         # Complete phase
         if self._progress_manager and phase_id:
             self._progress_manager.complete_phase(phase_id)
+
+        self._emit_progress_event(
+            kind="phase_complete",
+            phase=LifecyclePhase.PARSE,
+        )
+
+    def _emit_progress_event(self, kind: str, phase: LifecyclePhase) -> None:
+        """Emit a progress event.
+
+        This is currently a lightweight compatibility hook used by the
+        transaction to signal progress-related milestones. The initial
+        implementation is intentionally minimal and only logs the event.
+
+        Args:
+            kind: Event kind (for example ``\"phase_complete\"``).
+            phase: Lifecycle phase the event is associated with.
+
+        Returns:
+            None. The method is a no-op beyond logging.
+        """
+        try:
+            logger.debug(
+                "Progress event emitted: kind=%s, phase=%s",
+                kind,
+                phase,
+            )
+        except Exception:
+            # Progress emission must never break transaction execution.
+            logger.debug("Progress event emission failed", exc_info=True)
 
     def _discover_dependencies(self) -> List["DependencySpec"]:
         """Discover dependencies from the current graph.
@@ -942,6 +1040,27 @@ class Transaction:
         dep_version = dep_info.get("version", "latest")
         dep_ecosystem = dep_info.get("ecosystem", "unknown")
 
+        # Attempt to detect license-only dependencies (e.g., OHPM packages without source)
+        license_only = False
+        source_root = dep_info.get("source")
+        if source_root:
+            try:
+                from pathlib import Path as _Path
+                import json as _json
+
+                meta_path = _Path(source_root) / ".hvigor_meta.json"
+                if meta_path.exists():
+                    with meta_path.open("r", encoding="utf-8") as f:
+                        meta = _json.load(f)
+                    license_only = bool(meta.get("license_only"))
+            except Exception as meta_err:
+                logger.debug(
+                    "Failed to read Hvigor dependency metadata for %s from %s: %s",
+                    dep_name,
+                    source_root,
+                    meta_err,
+                )
+
         logger.info(
             "Linking dependency graph %s to current graph %s (dep: %s/%s)",
             child_graph_id,
@@ -952,7 +1071,8 @@ class Transaction:
 
         try:
             # 1. Create a Proxy node in parent graph pointing to child graph
-            from depanalyzer.graph.manager import NodeType
+            from depanalyzer.graph.manager import EdgeKind, NodeType
+            from depanalyzer.graph.linking import LinkClass
 
             proxy_id = f"dep_graph:{child_graph_id}"
 
@@ -966,6 +1086,8 @@ class Transaction:
                 version=dep_version,
                 origin="external",
                 provenance="third_party_dependency",
+                kind="dependency_graph_proxy",
+                license_only=license_only,
             )
 
             logger.debug(
@@ -987,9 +1109,10 @@ class Transaction:
                         self._graph_manager.add_edge(
                             node_id,
                             proxy_id,
-                            edge_kind="depends_on",
+                            edge_kind=EdgeKind.DEPENDS_ON.value,
                             parser_name="transaction",
                             confidence=1.0,
+                            link_class=LinkClass.CROSS_GRAPH.value,
                         )
                         logger.debug(
                             "Linked external node %s to proxy %s",
@@ -1000,7 +1123,8 @@ class Transaction:
             # 2. Record package-level dependency in GlobalDAG
             from depanalyzer.graph.global_dag import GlobalDAG
 
-            global_dag = GlobalDAG.get_instance()
+            # Align GlobalDAG persistence with graph cache root when provided
+            global_dag = GlobalDAG.get_instance(cache_dir=self.graph_cache_root)
             global_dag.add_dependency(
                 parent_graph_id=self.graph_id,
                 child_graph_id=child_graph_id,
@@ -1033,64 +1157,47 @@ class Transaction:
             logger.warning("GraphManager not initialized, skipping join phase")
             return
 
+        # Event bus remains available for hooks that consume parse events,
+        # but cross-ecosystem linking is now handled by per-ecosystem linkers.
         eventbus = self._ensure_eventbus()
 
-        # Initialize and execute hooks
-        hooks = []
+        # In the simplified architecture we do not execute any join-time
+        # hooks by default; all cross-ecosystem wiring is delegated to
+        # ecosystem linkers. The event bus is kept for parsers such as
+        # CMakeParser that rely on CMakeGraphBuilder during parsing.
 
-        # HvigorCMakeBridge hook (legacy path-based matching)
-        try:
-            from depanalyzer.hooks.hvigor_cmake_bridge import HvigorCMakeBridge
-            bridge = HvigorCMakeBridge(self._graph_manager, eventbus)
-            hooks.append(("HvigorCMakeBridge", bridge))
-        except ImportError as e:
-            logger.debug("HvigorCMakeBridge not available: %s", e)
+        # Run per-ecosystem linkers
+        from depanalyzer.parsers.registry import EcosystemRegistry
+        from depanalyzer.graph.linker_contract import GlobalContractLinker
 
-        # ContractMatcher hook (new contract-based matching)
-        try:
-            from depanalyzer.hooks.contract_matcher import ContractMatcher
-            matcher = ContractMatcher(self._graph_manager, eventbus)
-            hooks.append(("ContractMatcher", matcher))
-        except ImportError as e:
-            logger.warning("ContractMatcher not available: %s", e)
+        registry = EcosystemRegistry.get_instance()
+        ecosystems = registry.list_ecosystems()
 
-        # Start progress tracking for this phase
-        phase_id = None
-        if self._progress_manager:
-            phase_id = self._progress_manager.start_phase(
-                phase=LifecyclePhase.JOIN,
-                total=len(hooks),
-                description=f"Executing {len(hooks)} hooks",
-            )
+        logger.info("Executing linkers for ecosystems: %s", ", ".join(ecosystems))
 
-        # Execute all hooks
-        executed_count = 0
-        for hook_name, hook in hooks:
+        for eco in ecosystems:
+            linker_cls = registry.get_linker(eco)
+            if not linker_cls:
+                continue
+
             try:
-                logger.info("Executing hook: %s", hook_name)
-                if self._progress_manager and phase_id:
-                    self._progress_manager.add_active_task(f"Hook: {hook_name}")
-
-                hook.execute()
-                executed_count += 1
-
-                if self._progress_manager and phase_id:
-                    self._progress_manager.remove_active_task(f"Hook: {hook_name}")
-                    self._progress_manager.update_phase(
-                        phase_id,
-                        completed=executed_count,
-                        description=f"Executed {executed_count}/{len(hooks)} hooks",
-                    )
+                logger.info("Running linker for ecosystem: %s", eco)
+                linker_cfg = self._graph_build_config.get_linker_config(eco)
+                linker = linker_cls(self._graph_manager, config=linker_cfg)
+                linker.link()
             except Exception as e:
-                logger.error("Hook %s failed: %s", hook_name, e, exc_info=True)
-                if self._progress_manager and phase_id:
-                    self._progress_manager.remove_active_task(f"Hook: {hook_name}")
+                logger.error(
+                    "Linker for ecosystem %s failed: %s", eco, e, exc_info=True
+                )
 
-        logger.info("Join phase completed with %d hooks executed", len(hooks))
-
-        # Complete phase
-        if self._progress_manager and phase_id:
-            self._progress_manager.complete_phase(phase_id)
+        # Apply global, ecosystem-agnostic contract linking.
+        try:
+            logger.info("Running GlobalContractLinker for contract-based edges")
+            GlobalContractLinker.link(
+                self._graph_manager, config=self._graph_build_config.contract_match
+            )
+        except Exception as e:
+            logger.error("GlobalContractLinker failed: %s", e, exc_info=True)
 
     def _phase_analyze(self) -> None:
         """Phase F: Analysis on transaction graph."""
@@ -1116,7 +1223,9 @@ class Transaction:
             if self._progress_manager and phase_id:
                 self._progress_manager.add_active_task("Asset-artifact projection")
 
-            self._graph_manager.derive_asset_artifact_projection()
+            self._graph_manager.derive_asset_artifact_projection(
+                config=self._graph_build_config.projection
+            )
             logger.info("Asset-to-artifact projection completed")
 
             if self._progress_manager and phase_id:
@@ -1293,7 +1402,7 @@ class Transaction:
 
         try:
             # Create cache directory
-            cache_dir = Path(".depanalyzer_cache") / "graphs"
+            cache_dir = self.graph_cache_root or (Path(".depanalyzer_cache") / "graphs")
             cache_dir.mkdir(parents=True, exist_ok=True)
 
             # Generate cache file path
@@ -1340,6 +1449,14 @@ class Transaction:
                 "node_count": self._graph_manager.node_count(),
                 "edge_count": self._graph_manager.edge_count(),
                 "timestamp": time.time(),
+                 # Persist root_path and path_namespace for downstream tools
+                 # (e.g. scancode integration and path de-normalization).
+                 "root_path": (
+                     str(self._graph_manager.root_path)
+                     if self._graph_manager.root_path
+                     else None
+                 ),
+                 "path_namespace": getattr(self._graph_manager, "path_namespace", None),
             }
 
             # Combine metadata and graph data
@@ -1421,8 +1538,17 @@ class Transaction:
 
             # Return graph manager (will be properly initialized in later implementation)
             if not self._graph_manager:
+                path_namespace = None
+                if self.parent_transaction_id:
+                    try:
+                        if self.workspace.root_path:
+                            path_namespace = Path(self.workspace.root_path).name
+                    except Exception:
+                        path_namespace = None
+
                 self._graph_manager = GraphManager(
-                    root_path=self.workspace.root_path
+                    root_path=self.workspace.root_path,
+                    path_namespace=path_namespace,
                 )
 
             # Serialize graph to disk before building result
@@ -1433,7 +1559,7 @@ class Transaction:
                 # Register graph in GraphRegistry
                 from depanalyzer.graph.registry import GraphRegistry
 
-                registry = GraphRegistry.get_instance()
+                registry = GraphRegistry.get_instance(cache_root=self.graph_cache_root)
                 summary = {
                     "node_count": self._graph_manager.node_count(),
                     "edge_count": self._graph_manager.edge_count(),

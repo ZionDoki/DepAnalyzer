@@ -19,6 +19,7 @@ from depanalyzer.graph.schema import (
     validate_node,
 )
 from depanalyzer.utils.path_utils import normalize_node_id
+from depanalyzer.graph.projection_config import ProjectionConfig
 
 logger = logging.getLogger("depanalyzer.graph.manager")
 
@@ -33,7 +34,8 @@ class GraphManager:
     def __init__(
         self,
         graph_id: Optional[str] = None,
-        root_path: Optional[Union[str, Path]] = None
+        root_path: Optional[Union[str, Path]] = None,
+        path_namespace: Optional[str] = None,
     ) -> None:
         """Initialize graph manager.
 
@@ -43,6 +45,10 @@ class GraphManager:
         """
         self.graph_id = graph_id or "default"
         self.root_path = Path(root_path).resolve() if root_path else None
+        # Optional namespace used for path normalization (e.g., third-party
+        # repository name). When set, normalized node IDs are prefixed with
+        # this namespace: //namespace/relative/path.
+        self.path_namespace = path_namespace
         self._backend = GraphBackend()
         self._metadata: Dict[str, Any] = {}
 
@@ -226,7 +232,7 @@ class GraphManager:
                 "root_path must be set on GraphManager to use path normalization. "
                 "Initialize GraphManager with root_path parameter."
             )
-        return normalize_node_id(path, self.root_path)
+        return normalize_node_id(path, self.root_path, namespace=self.path_namespace)
 
     def add_normalized_node(
         self,
@@ -487,19 +493,20 @@ class GraphManager:
 
     def derive_asset_artifact_projection(
         self,
+        config: Optional[ProjectionConfig] = None,
         *,
-        enable_fallback: bool = True,
-        enable_link_closure: bool = False,
-        enable_header_closure: bool = False,
-        max_header_hops: int = 2,
-        ignore_external_placeholders_in_fallback: bool = False,
-        nearest_dir_min_evidence: int = 0,
-        link_closure_max_hops: int = 3,
-        resolve_include_placeholders: bool = False,
-        fuse_evidence: bool = False,
+        enable_fallback: Optional[bool] = None,
+        enable_link_closure: Optional[bool] = None,
+        enable_header_closure: Optional[bool] = None,
+        max_header_hops: Optional[int] = None,
+        ignore_external_placeholders_in_fallback: Optional[bool] = None,
+        nearest_dir_min_evidence: Optional[int] = None,
+        link_closure_max_hops: Optional[int] = None,
+        resolve_include_placeholders: Optional[bool] = None,
+        fuse_evidence: Optional[bool] = None,
         fallback_max_targets_per_node: Optional[int] = None,
-        fallback_disable_import_inherited: bool = False,
-        fallback_disable_nearest_dir: bool = False,
+        fallback_disable_import_inherited: Optional[bool] = None,
+        fallback_disable_nearest_dir: Optional[bool] = None,
     ) -> None:
         """Derive asset→artifact projection edges.
 
@@ -507,6 +514,9 @@ class GraphManager:
         It preserves previous behavior by default and adds optional closures.
 
         Args:
+            config: Optional ProjectionConfig instance. When provided, it
+                supplies default values for all parameters below. Explicit
+                keyword arguments override the values in ``config``.
             enable_fallback: Enable conservative fallbacks for unmatched assets.
             enable_link_closure: Propagate influence across link_libraries edges.
             enable_header_closure: Propagate include effects using multi-hop closure.
@@ -525,6 +535,68 @@ class GraphManager:
             None
         """
         from collections import defaultdict
+
+        # Resolve effective configuration by layering explicit keyword
+        # arguments on top of an optional ProjectionConfig instance, and
+        # finally on top of the historical defaults used by this method.
+        base_cfg = config or ProjectionConfig()
+
+        eff_enable_fallback = (
+            enable_fallback if enable_fallback is not None else base_cfg.enable_fallback
+        )
+        eff_enable_link_closure = (
+            enable_link_closure
+            if enable_link_closure is not None
+            else base_cfg.enable_link_closure
+        )
+        eff_enable_header_closure = (
+            enable_header_closure
+            if enable_header_closure is not None
+            else base_cfg.enable_header_closure
+        )
+        eff_max_header_hops = (
+            max_header_hops
+            if max_header_hops is not None
+            else base_cfg.max_header_hops
+        )
+        eff_ignore_external_placeholders = (
+            ignore_external_placeholders_in_fallback
+            if ignore_external_placeholders_in_fallback is not None
+            else base_cfg.ignore_external_placeholders_in_fallback
+        )
+        eff_nearest_dir_min_evidence = (
+            nearest_dir_min_evidence
+            if nearest_dir_min_evidence is not None
+            else base_cfg.nearest_dir_min_evidence
+        )
+        eff_link_closure_max_hops = (
+            link_closure_max_hops
+            if link_closure_max_hops is not None
+            else base_cfg.link_closure_max_hops
+        )
+        eff_resolve_include_placeholders = (
+            resolve_include_placeholders
+            if resolve_include_placeholders is not None
+            else base_cfg.resolve_include_placeholders
+        )
+        eff_fuse_evidence = (
+            fuse_evidence if fuse_evidence is not None else base_cfg.fuse_evidence
+        )
+        eff_fallback_max_targets_per_node = (
+            fallback_max_targets_per_node
+            if fallback_max_targets_per_node is not None
+            else base_cfg.fallback_max_targets_per_node
+        )
+        eff_fallback_disable_import_inherited = (
+            fallback_disable_import_inherited
+            if fallback_disable_import_inherited is not None
+            else base_cfg.fallback_disable_import_inherited
+        )
+        eff_fallback_disable_nearest_dir = (
+            fallback_disable_nearest_dir
+            if fallback_disable_nearest_dir is not None
+            else base_cfg.fallback_disable_nearest_dir
+        )
 
         graph = self._backend.native_graph
 
@@ -636,7 +708,7 @@ class GraphManager:
                     )
 
         # Optional: link-closure propagation (code affects upstream consumers)
-        if enable_link_closure:
+        if eff_enable_link_closure:
             rev_adj: Dict[str, Set[str]] = defaultdict(set)
             nodes_data = dict(graph.nodes(data=True))
             for u, v, data in graph.edges(data=True):
@@ -653,7 +725,7 @@ class GraphManager:
                     seen = {base}
                     while frontier:
                         cur, d = frontier.pop(0)
-                        if d >= link_closure_max_hops:
+                        if d >= eff_link_closure_max_hops:
                             continue
                         for nxt in rev_adj.get(cur, set()):
                             if nxt in seen:
@@ -672,7 +744,7 @@ class GraphManager:
                             frontier.append((nxt, d + 1))
 
         # Optional: header/include multi-hop closure
-        if enable_header_closure and max_header_hops > 0:
+        if eff_enable_header_closure and eff_max_header_hops > 0:
             inc_adj: Dict[str, Set[str]] = defaultdict(set)
             for u, v, data in graph.edges(data=True):
                 if edge_kind(data) == "include":
@@ -694,7 +766,7 @@ class GraphManager:
                 visited = {start}
                 while frontier:
                     cur, d = frontier.pop(0)
-                    if d >= max_header_hops:
+                    if d >= eff_max_header_hops:
                         continue
                     for nxt in inc_adj.get(cur, set()):
                         if nxt in visited:
@@ -716,7 +788,7 @@ class GraphManager:
                         frontier.append((nxt, d + 1))
 
         # Optional: resolve //include:*.h placeholders
-        if resolve_include_placeholders:
+        if eff_resolve_include_placeholders:
             name_index: Dict[str, Set[str]] = defaultdict(set)
             for n, nd in graph.nodes(data=True):
                 if not isinstance(n, str) or not n.startswith("//"):
@@ -765,8 +837,8 @@ class GraphManager:
                                 )
                                 break
 
-        if not enable_fallback:
-            if fuse_evidence:
+        if not eff_enable_fallback:
+            if eff_fuse_evidence:
                 self.fuse_projection_evidence()
             return
 
@@ -795,14 +867,14 @@ class GraphManager:
             return False
 
         # 3) Fallback: inherit from importers' artifacts
-        if not fallback_disable_import_inherited:
+        if not eff_fallback_disable_import_inherited:
             for node, nd in list(graph.nodes(data=True)):
                 ntype = nd.get("type")
                 if ntype not in {"code", "project_header", "header"}:
                     continue
                 if ntype == "system_header" or str(node).startswith("//system:"):
                     continue
-                if ignore_external_placeholders_in_fallback:
+                if eff_ignore_external_placeholders:
                     origin = nd.get("origin")
                     prov = nd.get("provenance")
                     if (
@@ -823,10 +895,12 @@ class GraphManager:
                                 candidate_targets_seen.add(tgt)
                                 candidate_targets_list.append(tgt)
                 if (
-                    isinstance(fallback_max_targets_per_node, int)
-                    and fallback_max_targets_per_node > 0
+                    isinstance(eff_fallback_max_targets_per_node, int)
+                    and eff_fallback_max_targets_per_node > 0
                 ):
-                    candidate_targets_list = candidate_targets_list[:fallback_max_targets_per_node]
+                    candidate_targets_list = candidate_targets_list[
+                        :eff_fallback_max_targets_per_node
+                    ]
                 for tgt in candidate_targets_list:
                     self.add_edge(
                         node,
@@ -856,7 +930,7 @@ class GraphManager:
                 nd = node_dir.replace("\\", "/")
                 td = tdir.replace("\\", "/").lstrip("/")
                 if nd.startswith(td) and len(td) > best_len:
-                    if nearest_dir_min_evidence > 0:
+                    if eff_nearest_dir_min_evidence > 0:
                         has_evidence = False
                         for code_node, arts in code_to_artifacts.items():
                             if tgt in arts and code_node.startswith("//"):
@@ -872,7 +946,7 @@ class GraphManager:
                     best_len = len(td)
             return best
 
-        if not fallback_disable_nearest_dir:
+        if not eff_fallback_disable_nearest_dir:
             for node, nd in list(graph.nodes(data=True)):
                 ntype = nd.get("type")
                 if ntype not in {"code", "project_header", "header"}:
@@ -893,7 +967,7 @@ class GraphManager:
                         fallback_attached=True,
                         fallback_rule="nearest_dir",
                     )
-        if fuse_evidence:
+        if eff_fuse_evidence:
             self.fuse_projection_evidence()
 
     def fuse_projection_evidence(self, kinds: Optional[Set[str]] = None) -> None:

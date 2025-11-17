@@ -1,9 +1,13 @@
 """Path normalization utilities for cross-language dependency graph."""
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 
-def normalize_node_id(path: Union[Path, str], root_path: Path) -> str:
+def normalize_node_id(
+    path: Union[Path, str],
+    root_path: Path,
+    namespace: Optional[str] = None,
+) -> str:
     """
     Normalize node ID to unified format: //relative_path or //../external_path.
 
@@ -31,7 +35,13 @@ def normalize_node_id(path: Union[Path, str], root_path: Path) -> str:
     try:
         # Try to make path relative to root_path
         rel_path = path.relative_to(root_path)
-        return "//" + str(rel_path).replace("\\", "/")
+        rel_str = str(rel_path).replace("\\", "/")
+        if namespace:
+            # Third-party or namespaced repository: prefix with namespace
+            return "//" + "/".join(
+                [namespace] + ([rel_str] if rel_str else [])
+            )
+        return "//" + rel_str
     except ValueError:
         # Path is outside root_path
         try:

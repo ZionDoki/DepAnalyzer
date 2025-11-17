@@ -29,10 +29,37 @@ class HvigorDetector(BaseDetector):
         Returns:
             List of detected configuration file paths.
         """
-        detected = []
+        detected: List[Path] = []
 
-        for pattern in self.TARGET_PATTERNS:
-            files = list(self.workspace_root.rglob(pattern))
+        # Allow configuration to override or refine search behaviour.
+        patterns = list(self.TARGET_PATTERNS)
+        ignore_node_modules = False
+        include_root_dirs: List[Path] = []
+
+        cfg = getattr(self, "config", None)
+        if cfg is not None:
+            # Optional: restrict search to a subset of root‑level directories.
+            root_dirs = getattr(cfg, "include_root_dirs", None)
+            if isinstance(root_dirs, list):
+                include_root_dirs = [
+                    (self.workspace_root / d) for d in root_dirs
+                ]
+            ignore_node_modules = bool(getattr(cfg, "ignore_node_modules", False))
+
+        search_roots: List[Path]
+        if include_root_dirs:
+            search_roots = [p for p in include_root_dirs if p.exists()]
+        else:
+            search_roots = [self.workspace_root]
+
+        for pattern in patterns:
+            files: List[Path] = []
+            for root in search_roots:
+                for file_path in root.rglob(pattern):
+                    if ignore_node_modules and "node_modules" in file_path.parts:
+                        continue
+                    files.append(file_path)
+
             detected.extend(files)
 
             # Publish detection events for each found file
