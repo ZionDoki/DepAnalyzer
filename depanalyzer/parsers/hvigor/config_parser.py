@@ -518,25 +518,38 @@ class HvigorParser(BaseParser):
                         lib_id,
                     )
 
-                # Publish dependency discovered event
-                spec = DependencySpec(
-                    name=dep_name,
-                    version=str(dep_version) if dep_version else "",
-                    ecosystem="hvigor",
-                    metadata={
-                        "parser_name": self.NAME,
-                        "depth": 0,
-                    },
-                )
-                event = Event(
-                    event_type=EventType.DEPENDENCY_DISCOVERED,
-                    source=self.NAME,
-                    data={
-                        "spec": spec,
-                        "source_file": str(config_file),
-                    },
-                )
-                self.publish_parse_event(event)
+                # When a sibling oh-package-lock.json5 exists, that lock file
+                # provides the authoritative version information for OHPM
+                # dependencies. In that case we rely on _process_lock_file()
+                # to emit DEPENDENCY_DISCOVERED events, and skip emitting an
+                # additional event here to avoid duplicate or conflicting
+                # DependencySpec instances (e.g. semver ranges vs. locked
+                # concrete versions).
+                emit_event = True
+                if isinstance(config_file, Path):
+                    lock_path = config_file.parent / "oh-package-lock.json5"
+                    if lock_path.exists():
+                        emit_event = False
+
+                if emit_event:
+                    spec = DependencySpec(
+                        name=dep_name,
+                        version=str(dep_version) if dep_version else "",
+                        ecosystem="hvigor",
+                        metadata={
+                            "parser_name": self.NAME,
+                            "depth": 0,
+                        },
+                    )
+                    event = Event(
+                        event_type=EventType.DEPENDENCY_DISCOVERED,
+                        source=self.NAME,
+                        data={
+                            "spec": spec,
+                            "source_file": str(config_file),
+                        },
+                    )
+                    self.publish_parse_event(event)
 
         # Process native dependencies (for native bridge detection and shared libraries).
         cfg = getattr(self, "config", None)

@@ -133,6 +133,53 @@ class Workspace:
         Returns:
             str: Workspace signature.
         """
+        # Git workspaces: signature is derived from the source URL so that
+        # the same remote repository yields the same identifier across runs.
         if self._is_git:
             return hashlib.sha256(self.source.encode()).hexdigest()[:16]
+
+        # Local workspaces: signature is derived from the resolved root path.
         return hashlib.sha256(str(self._root_path).encode()).hexdigest()[:16]
+
+    def get_revision(self) -> Optional[str]:
+        """Return the current revision identifier for this workspace.
+
+        For Git-based workspaces, this is the HEAD commit SHA of the cloned
+        repository. For plain local directories, the revision is unknown and
+        this method returns None.
+
+        Returns:
+            Optional[str]: Revision identifier (e.g. Git commit SHA) or None
+            when no meaningful revision can be determined.
+        """
+        if not self._is_git:
+            # Non-Git workspaces do not have a well-defined revision.
+            return None
+
+        # Ensure the workspace has been acquired so that the clone exists.
+        root_path = self.get_root()
+
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(root_path), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            revision = result.stdout.strip()
+            if revision:
+                return revision
+        except subprocess.CalledProcessError as e:
+            logger.warning(
+                "Failed to determine Git revision for workspace %s: %s",
+                root_path,
+                e.stderr,
+            )
+        except Exception as e:  # pragma: no cover - defensive logging
+            logger.warning(
+                "Unexpected error while determining revision for %s: %s",
+                root_path,
+                e,
+            )
+
+        return None

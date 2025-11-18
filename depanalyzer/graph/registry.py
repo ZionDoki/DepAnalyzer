@@ -87,20 +87,56 @@ class GraphRegistry:
         """
         if cls._instance is None:
             cls(cache_root=cache_root)
-        return cls._instance
+            return cls._instance  # type: ignore[return-value]
+
+        instance: "GraphRegistry" = cls._instance
+
+        # Allow callers to rebind the cache_root when a different graphs root
+        # is specified (for example via CLI --cache-dir). This avoids silently
+        # operating on whichever cache_root happened to be used first.
+        if cache_root is not None:
+            cache_root = Path(cache_root)
+            current = getattr(instance, "cache_root", None)
+            if current is None or cache_root != current:
+                if cls._lock is not None:
+                    with cls._lock:
+                        instance.cache_root = cache_root
+                        instance.cache_root.mkdir(parents=True, exist_ok=True)
+                        instance._registry_file = instance.cache_root / "registry.json"
+                        instance._load_registry_unlocked()
+                else:  # pragma: no cover - defensive fallback
+                    instance.cache_root = cache_root
+                    instance.cache_root.mkdir(parents=True, exist_ok=True)
+                    instance._registry_file = instance.cache_root / "registry.json"
+                    instance._load_registry_unlocked()
+                logger.info(
+                    "Reconfigured GraphRegistry cache_root to %s", instance.cache_root
+                )
+
+        return instance
 
     def _load_registry(self) -> None:
         """Load registry from disk."""
-        if self._registry_file.exists():
-            try:
-                with open(self._registry_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                # Load into manager dict
-                with GraphRegistry._lock:
-                    self._registry.update(data)
-                logger.info("Loaded registry with %d entries", len(self._registry))
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning("Failed to load registry: %s", e)
+        if GraphRegistry._lock is not None:
+            with GraphRegistry._lock:
+                self._load_registry_unlocked()
+        else:  # pragma: no cover - defensive fallback for missing lock
+            self._load_registry_unlocked()
+
+    def _load_registry_unlocked(self) -> None:
+        """Load registry from disk without acquiring the lock."""
+        if not self._registry_file.exists():
+            return
+
+        try:
+            with open(self._registry_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # Replace current contents with on-disk data
+            self._registry.clear()
+            self._registry.update(data)
+            logger.info("Loaded registry with %d entries", len(self._registry))
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Failed to load registry: %s", e)
 
     def _save_registry_unlocked(self) -> None:
         """Save registry to disk without acquiring lock (internal use only).

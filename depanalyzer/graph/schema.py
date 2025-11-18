@@ -140,6 +140,27 @@ class NodeSpec(BaseModel):
             description="Whether this node represents an over-approximation",
         ),
     ]
+    uncertainty_category: Annotated[
+        str,
+        Field(
+            default="definite",
+            description="Uncertainty level: definite / probable / conditional",
+        ),
+    ]
+    uncertainty_reasons: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description="Machine-readable tags describing sources of uncertainty",
+        ),
+    ]
+    uncertainty_explanation: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Optional human-readable explanation for uncertainty",
+        ),
+    ]
     # Provisional nodes are created implicitly (e.g. as edge endpoints) and
     # should ideally be replaced or refined later.
     provisional: Annotated[
@@ -167,6 +188,14 @@ class NodeSpec(BaseModel):
             "confidence": self.confidence,
             "over_approx": self.over_approx,
         }
+        # Uncertainty annotations are exported for downstream tools but remain
+        # orthogonal to any business logic (license/security).
+        payload["uncertainty_category"] = self.uncertainty_category
+        if self.uncertainty_reasons:
+            payload["uncertainty_reasons"] = list(self.uncertainty_reasons)
+        if self.uncertainty_explanation:
+            payload["uncertainty_explanation"] = self.uncertainty_explanation
+
         if self.label:
             payload["label"] = self.label
         if self.src_path:
@@ -216,6 +245,27 @@ class EdgeSpec(BaseModel):
             description="Whether this edge represents an over-approximation",
         ),
     ]
+    uncertainty_category: Annotated[
+        str,
+        Field(
+            default="definite",
+            description="Uncertainty level: definite / probable / conditional",
+        ),
+    ]
+    uncertainty_reasons: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description="Machine-readable tags describing sources of uncertainty",
+        ),
+    ]
+    uncertainty_explanation: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Optional human-readable explanation for uncertainty",
+        ),
+    ]
 
     attrs: Annotated[Dict[str, Any], Field(default_factory=dict)]
 
@@ -235,6 +285,14 @@ class EdgeSpec(BaseModel):
         }
         if self.parser_name:
             payload["parser_name"] = self.parser_name
+
+        # Uncertainty annotations are exported for downstream tools but remain
+        # orthogonal to any business logic (license/security).
+        payload["uncertainty_category"] = self.uncertainty_category
+        if self.uncertainty_reasons:
+            payload["uncertainty_reasons"] = list(self.uncertainty_reasons)
+        if self.uncertainty_explanation:
+            payload["uncertainty_explanation"] = self.uncertainty_explanation
 
         payload.update(self.attrs)
         return payload

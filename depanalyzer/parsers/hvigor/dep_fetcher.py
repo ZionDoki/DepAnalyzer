@@ -75,26 +75,35 @@ class HvigorDepFetcher(BaseDepFetcher):
         """
         logger.info("Fetching Hvigor dependency: %s", dep_spec.name)
 
-        # Get cache directory
-        cache_dir = self.get_cache_dir(dep_spec)
-
-        # Check if already cached
-        if cache_dir.exists() and self._is_valid_cache(cache_dir):
-            logger.info("Using cached dependency: %s", cache_dir)
-            return cache_dir
-
         # Determine fetch method based on metadata
         dep_type = dep_spec.metadata.get("type", "ohpm")
 
-        if dep_type == "git" or (dep_spec.source_url and ".git" in dep_spec.source_url):
-            return self._fetch_from_git(dep_spec, cache_dir)
-        elif dep_type == "ohpm":
-            return self._fetch_from_ohpm(dep_spec, cache_dir)
-        elif dep_type == "local":
+        # Local dependencies are always resolved via explicit paths and do not
+        # participate in versioned caching.
+        if dep_type == "local":
             return self._handle_local_dependency(dep_spec)
-        else:
-            logger.warning("Unknown Hvigor dependency type: %s", dep_type)
-            return None
+
+        # Git-based dependencies use the generic cache-dir layout which
+        # includes the requested version string. This is safe because Git
+        # repositories already encode their own versioning scheme (tags/refs).
+        if dep_type == "git" or (dep_spec.source_url and ".git" in dep_spec.source_url):
+            cache_dir = self.get_cache_dir(dep_spec)
+
+            if cache_dir.exists() and self._is_valid_cache(cache_dir):
+                logger.info("Using cached Git dependency: %s", cache_dir)
+                return cache_dir
+
+            return self._fetch_from_git(dep_spec, cache_dir)
+
+        # OHPM registry dependencies are resolved to an exact version first
+        # and then cached under hvigor/<safe_name>/<resolved_version> so that
+        # different semver ranges which resolve to the same concrete version
+        # reuse the same on-disk checkout.
+        if dep_type == "ohpm":
+            return self._fetch_from_ohpm(dep_spec)
+
+        logger.warning("Unknown Hvigor dependency type: %s", dep_type)
+        return None
 
     def _is_valid_cache(self, cache_dir: Path) -> bool:
         """Check if cached directory is valid.
@@ -148,14 +157,11 @@ class HvigorDepFetcher(BaseDepFetcher):
             logger.error("Failed to fetch %s from %s", dep_spec.name, url)
             return None
 
-    def _fetch_from_ohpm(
-        self, dep_spec: DependencySpec, cache_dir: Path
-    ) -> Optional[Path]:
+    def _fetch_from_ohpm(self, dep_spec: DependencySpec) -> Optional[Path]:
         """Fetch dependency from OHPM registry.
 
         Args:
             dep_spec: Dependency specification.
-            cache_dir: Cache directory.
 
         Returns:
             Optional[Path]: Local path if successful, None otherwise.
@@ -173,7 +179,9 @@ class HvigorDepFetcher(BaseDepFetcher):
             logger.error("Failed to fetch OHPM metadata for %s: %s", dep_spec.name, e)
             return None
 
-        # Resolve version
+        # Resolve version (may be a semver range or tag). The resolved version
+        # is used as the canonical cache key so that multiple range expressions
+        # resolving to the same concrete version share a single checkout.
         try:
             resolved_version = self._resolve_version(meta, dep_spec.version)
         except ValueError as e:
@@ -181,6 +189,20 @@ class HvigorDepFetcher(BaseDepFetcher):
             return None
 
         logger.info("Resolved version: %s -> %s", dep_spec.version, resolved_version)
+
+        # Derive cache directory based on resolved version so that identical
+        # resolved versions reuse the same cache directory even when requested
+        # via different semver ranges.
+        cache_dir = self._get_ohpm_cache_dir(dep_spec.name, resolved_version)
+
+        # If we already have a valid cache for the resolved version, reuse it.
+        if cache_dir.exists() and self._is_valid_cache(cache_dir):
+            logger.info(
+                "Using cached OHPM dependency: %s (resolved_version=%s)",
+                cache_dir,
+                resolved_version,
+            )
+            return cache_dir
 
         # Get version info
         vinfo = meta.get("versions", {}).get(resolved_version, {})
@@ -341,7 +363,30 @@ class HvigorDepFetcher(BaseDepFetcher):
         )
 
         if result.returncode != 0:
-            raise RuntimeError(f"git clone failed: {result.stderr}")
+            stderr = result.stderr or ""
+            # Handle concurrent clone races gracefully. When another process
+            # has already cloned into target_dir, git reports that the
+            # destination path exists and is not empty. In this case we first
+            # validate the directory as a Hvigor cache (using .git and/or
+            # .hvigor_meta.json) before deciding whether it is safe to reuse.
+            if "already exists and is not an empty directory" in stderr:
+                if self._is_valid_cache(target_dir):
+                    logger.warning(
+                        "git clone for %s reported existing non-empty target %s; "
+                        "reusing existing cache populated by another process",
+                        repo_url,
+                        target_dir,
+                    )
+                    return
+
+                logger.warning(
+                    "git clone for %s hit existing non-empty target %s but cache "
+                    "did not pass validation; treating as failure",
+                    repo_url,
+                    target_dir,
+                )
+
+            raise RuntimeError(f"git clone failed: {stderr}")
 
         if not release_time_iso:
             logger.debug("No release time provided, keeping HEAD")
@@ -452,3 +497,21 @@ class HvigorDepFetcher(BaseDepFetcher):
         version = dep_spec.version or "latest"
 
         return self.cache_root / self.ECOSYSTEM / safe_name / version
+
+    def _get_ohpm_cache_dir(self, pkg_name: str, resolved_version: str) -> Path:
+        """Get cache directory for an OHPM dependency using resolved version.
+
+        This helper mirrors get_cache_dir but always keys the cache by the
+        concrete resolved version instead of the requested range. This avoids
+        duplicated checkouts when multiple semver ranges map to the same
+        release.
+
+        Args:
+            pkg_name: Package name as used in the OHPM registry.
+            resolved_version: Concrete version string resolved from metadata.
+
+        Returns:
+            Path: Cache directory path for the resolved version.
+        """
+        safe_name = pkg_name.replace("@", "").replace("/", "_")
+        return self.cache_root / self.ECOSYSTEM / safe_name / resolved_version

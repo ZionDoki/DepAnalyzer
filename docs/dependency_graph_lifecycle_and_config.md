@@ -19,7 +19,18 @@
    - 入口：`Transaction._phase_acquire()`
    - 职责：
      - 使用 `Workspace` 处理本地路径或 Git URL，得到只读 `root_path`。
-     - 在首次运行时生成 `graph_id`。
+     - 在首次运行时生成 `graph_id`（形如 `graph_<signature>`）。
+       - `signature` 目前基于**分析目标路径或 Git URL** 的 SHA‑256 前 16 个十六进制字符：
+         - Git 源：`Workspace.get_signature()` 对远程仓库 URL 取哈希，保证同一个 URL 在多次扫描下得到稳定的签名；
+         - 本地目录：对解析后的绝对 `root_path` 取哈希。
+       - 这意味着：
+         - 对同一条路径 / URL，`graph_id` 在不同分析会话中是稳定的；
+         - 但它**不区分具体版本 / 提交内容**——对于 Git 仓库，不同分支 / 提交但同一 URL 会共享同一个 `graph_id`。
+       - 在序列化阶段，`Transaction._flush_graph_to_disk()` 会在 `metadata` 中额外写入可选字段：
+         - `metadata["revision"]`：对于 Git 仓库，是当前克隆工作区的 `HEAD` 提交 SHA；本地目录则为 `null`。
+       - 碰撞风险说明：
+         - 16 个十六进制字符对应 64 bit 空间，在正常规模下碰撞概率极低，但理论上仍可能发生；
+         - 若未来需要进一步降低碰撞风险或在 `graph_id` 中显式引入 revision（例如 `graph_<signature>_<rev>`），可以在保持向后兼容的前提下演进格式。
 
 2. **DETECT**：目标检测
    - 入口：`_phase_detect()`

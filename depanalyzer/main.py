@@ -20,6 +20,7 @@ import depanalyzer.parsers  # noqa: F401
 from depanalyzer.cli.scan import scan_command
 from depanalyzer.cli.export import export_command
 from depanalyzer.cli.scancode import scancode_command
+from depanalyzer.cli.dag import dag_command
 
 
 def setup_logging(verbose: bool = False, console: Optional[Console] = None) -> None:
@@ -211,6 +212,38 @@ def main() -> int:
         help="Force re-scan even if cached license maps exist",
     )
 
+    # Global DAG inspection / validation command
+    dag_parser = subparsers.add_parser(
+        "dag",
+        help="Inspect and validate the global package-level DAG",
+    )
+    dag_parser.add_argument(
+        "--cache-dir",
+        help=(
+            "Cache directory where graphs were stored during scan "
+            "(expects graphs under <cache-dir>/graphs). "
+            "Typically the same <cache-dir>/<source_stem> used with the scan "
+            "command. If not provided, defaults to .dep_cache."
+        ),
+    )
+    dag_parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help=(
+            "Maximum number of cycles to report (default: 20). "
+            "Use <=0 for no limit (may be expensive on large DAGs)."
+        ),
+    )
+    dag_parser.add_argument(
+        "--fail-on-cycle",
+        action="store_true",
+        help=(
+            "Exit with non-zero status when dependency cycles are found. "
+            "Useful for CI validation."
+        ),
+    )
+
     # Query command (placeholder)
     query_parser = subparsers.add_parser(
         "query",
@@ -243,6 +276,8 @@ def main() -> int:
         return export_command(args)
     elif args.command == "scancode":
         return scancode_command(args)
+    elif args.command == "dag":
+        return dag_command(args)
     elif args.command == "query":
         logger.error("Query command not yet implemented")
         return 1

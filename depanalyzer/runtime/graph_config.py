@@ -191,6 +191,34 @@ class ContractMatchConfig:
 
 
 # ---------------------------------------------------------------------------
+# Uncertainty / over-approximation policy configuration
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class UncertaintyPolicyConfig:
+    """Configuration for uncertainty classification policy.
+
+    This controls how node/edge confidence values and structural patterns are
+    mapped into high-level uncertainty annotations (definite/probable/conditional).
+    """
+
+    # Global switch: when disabled, the uncertainty analyzer is skipped.
+    enabled: bool = False
+
+    # Confidence thresholds used for default category assignment.
+    probable_min_confidence: float = 0.6
+    definite_min_confidence: float = 0.9
+
+    # Feature toggles for marking specific structural patterns.
+    mark_projection_edges_as_probable: bool = True
+    mark_contract_edges_as_probable: bool = True
+    mark_proxy_nodes_as_conditional: bool = True
+    mark_unresolved_external_as_conditional: bool = True
+    mark_dynamic_patterns_as_conditional: bool = True
+
+
+# ---------------------------------------------------------------------------
 # Aggregate graph build configuration
 # ---------------------------------------------------------------------------
 
@@ -216,6 +244,7 @@ class GraphBuildConfig:
     linker: LinkerConfig = field(default_factory=LinkerConfig)
     projection: ProjectionConfig = field(default_factory=ProjectionConfig)
     contract_match: ContractMatchConfig = field(default_factory=ContractMatchConfig)
+    uncertainty: UncertaintyPolicyConfig = field(default_factory=UncertaintyPolicyConfig)
 
     # Optional per-ecosystem configuration objects provided by parser
     # packages via EcosystemConfigRegistry. When present, they take
@@ -342,6 +371,39 @@ class GraphBuildConfig:
                 enable_config=cm.get("enable_config", False),
             )
 
+        # Uncertainty policy (language-agnostic)
+        unc = data.get("uncertainty", {}) or {}
+        if isinstance(unc, dict):
+            cfg.uncertainty = UncertaintyPolicyConfig(
+                enabled=unc.get("enabled", cfg.uncertainty.enabled),
+                probable_min_confidence=unc.get(
+                    "probable_min_confidence", cfg.uncertainty.probable_min_confidence
+                ),
+                definite_min_confidence=unc.get(
+                    "definite_min_confidence", cfg.uncertainty.definite_min_confidence
+                ),
+                mark_projection_edges_as_probable=unc.get(
+                    "mark_projection_edges_as_probable",
+                    cfg.uncertainty.mark_projection_edges_as_probable,
+                ),
+                mark_contract_edges_as_probable=unc.get(
+                    "mark_contract_edges_as_probable",
+                    cfg.uncertainty.mark_contract_edges_as_probable,
+                ),
+                mark_proxy_nodes_as_conditional=unc.get(
+                    "mark_proxy_nodes_as_conditional",
+                    cfg.uncertainty.mark_proxy_nodes_as_conditional,
+                ),
+                mark_unresolved_external_as_conditional=unc.get(
+                    "mark_unresolved_external_as_conditional",
+                    cfg.uncertainty.mark_unresolved_external_as_conditional,
+                ),
+                mark_dynamic_patterns_as_conditional=unc.get(
+                    "mark_dynamic_patterns_as_conditional",
+                    cfg.uncertainty.mark_dynamic_patterns_as_conditional,
+                ),
+            )
+
         # Per-ecosystem configuration (plugins)
         ecosystems_dict = data.get("ecosystems", {}) or {}
         if isinstance(ecosystems_dict, dict):
@@ -362,6 +424,7 @@ __all__ = [
     "CodeParserConfig",
     "LinkerConfig",
     "ContractMatchConfig",
+    "UncertaintyPolicyConfig",
     "HvigorDetectConfig",
     "CMakeDetectConfig",
     "HvigorParserConfig",

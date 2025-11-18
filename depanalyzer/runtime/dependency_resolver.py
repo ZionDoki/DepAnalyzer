@@ -130,8 +130,47 @@ def resolve_dependencies(
                 "error": str(e),
             })
 
-    successful = sum(1 for r in resolved if r["success"])
-    failed = len(resolved) - successful
+    # Deduplicate successful resolutions by (ecosystem, name, source path) so
+    # that multiple DependencySpec instances which resolve to the same local
+    # checkout (for example different semver ranges of the same Hvigor/OHPM
+    # package) do not spawn duplicate child transactions.
+    unique_success: Dict[tuple, Dict[str, Any]] = {}
+    deduped: List[Dict[str, Any]] = []
+
+    for entry in resolved:
+        if not entry.get("success"):
+            deduped.append(entry)
+            continue
+
+        source = entry.get("source")
+        ecosystem = entry.get("ecosystem", "unknown")
+        name = entry.get("name", "unknown")
+
+        # If there is no concrete source path, keep the entry as-is.
+        if not source:
+            deduped.append(entry)
+            continue
+
+        key = (ecosystem, name, source)
+        if key in unique_success:
+            prev_spec = unique_success[key].get("spec")
+            curr_spec = entry.get("spec")
+            logger.info(
+                "Skipping duplicate resolved dependency %s/%s at %s "
+                "(requested versions: %s, %s)",
+                ecosystem,
+                name,
+                source,
+                getattr(prev_spec, "version", None),
+                getattr(curr_spec, "version", None),
+            )
+            continue
+
+        unique_success[key] = entry
+        deduped.append(entry)
+
+    successful = sum(1 for r in deduped if r["success"])
+    failed = len(deduped) - successful
 
     logger.info(
         "Dependency resolution completed: %d successful, %d failed",
@@ -139,4 +178,4 @@ def resolve_dependencies(
         failed,
     )
 
-    return resolved
+    return deduped

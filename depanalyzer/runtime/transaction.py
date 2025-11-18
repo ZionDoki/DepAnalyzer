@@ -806,6 +806,28 @@ class Transaction:
 
         if not dep_specs:
             logger.info("No dependencies found")
+            # Dependency resolution is enabled for this transaction but no
+            # dependencies are currently present. To ensure that the global
+            # package-level DAG does not retain stale edges, clear any
+            # existing outgoing edges for this graph.
+            if self.graph_id:
+                try:
+                    from depanalyzer.graph.global_dag import GlobalDAG
+
+                    dag = GlobalDAG.get_instance(cache_dir=self.graph_cache_root)
+                    dag.replace_dependencies(self.graph_id, set())
+                    logger.info(
+                        "Cleared GlobalDAG dependencies for %s "
+                        "(no dependencies discovered)",
+                        self.graph_id,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to clear GlobalDAG dependencies for %s: %s",
+                        self.graph_id,
+                        e,
+                        exc_info=True,
+                    )
             return
 
         logger.info("Found %d dependencies to resolve", len(dep_specs))
@@ -837,6 +859,45 @@ class Transaction:
 
         # Filter out failed dependencies
         successful_deps = [dep for dep in resolved_deps if dep["success"]]
+
+        # Avoid creating child transactions for self-dependencies where the
+        # resolved source path is the same as the current workspace root. This
+        # can happen when semver ranges inside a package resolve to the same
+        # package version and repository, which would otherwise create a
+        # spurious self-loop in the GlobalDAG.
+        try:
+            from pathlib import Path as _Path
+
+            workspace_root = _Path(self.workspace.root_path).resolve()
+        except Exception:  # pragma: no cover - defensive
+            workspace_root = None
+
+        if workspace_root is not None:
+            filtered_successful: List[Dict[str, Any]] = []
+            for dep in successful_deps:
+                source = dep.get("source")
+                if not source:
+                    filtered_successful.append(dep)
+                    continue
+
+                try:
+                    dep_root = _Path(source).resolve()
+                except Exception:
+                    filtered_successful.append(dep)
+                    continue
+
+                if dep_root == workspace_root:
+                    logger.info(
+                        "Skipping self-dependency %s for graph %s (source=%s)",
+                        dep.get("name"),
+                        self.graph_id,
+                        source,
+                    )
+                    continue
+
+                filtered_successful.append(dep)
+
+            successful_deps = filtered_successful
 
         if not successful_deps:
             logger.warning("No dependencies were successfully fetched")
@@ -889,6 +950,9 @@ class Transaction:
 
         completed_count = 0
         failed_count = 0
+        # Track child graph IDs that were successfully analyzed so that we can
+        # update the package-level GlobalDAG once at the end of the phase.
+        child_graph_ids: List[str] = []
 
         for dep, future, child_tx_id in futures:
             try:
@@ -904,8 +968,11 @@ class Transaction:
                         result.edge_count,
                     )
 
-                    # Link child graph in registry
+                    # Link child graph into the current graph and remember its
+                    # graph_id for GlobalDAG update after all children finish.
                     self._link_dependency_graph(result.graph_id, dep)
+                    if result.graph_id:
+                        child_graph_ids.append(result.graph_id)
                 else:
                     failed_count += 1
                     logger.error(
@@ -936,13 +1003,35 @@ class Transaction:
             failed_count,
         )
 
+        # After all child transactions have completed and the parent graph has
+        # been linked with proxy nodes, update the package-level GlobalDAG so
+        # that it reflects the *current* dependency set for this graph.
+        if self.graph_id and child_graph_ids:
+            try:
+                from depanalyzer.graph.global_dag import GlobalDAG
+
+                dag = GlobalDAG.get_instance(cache_dir=self.graph_cache_root)
+                dag.replace_dependencies(self.graph_id, set(child_graph_ids))
+                logger.info(
+                    "Updated GlobalDAG dependencies for %s: %d children",
+                    self.graph_id,
+                    len(child_graph_ids),
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to update GlobalDAG dependencies for %s: %s",
+                    self.graph_id,
+                    e,
+                    exc_info=True,
+                )
+
         # Complete phase
         if self._progress_manager and phase_id:
             self._progress_manager.complete_phase(phase_id)
 
         self._emit_progress_event(
             kind="phase_complete",
-            phase=LifecyclePhase.PARSE,
+            phase=LifecyclePhase.RESOLVE_DEPS,
         )
 
     def _emit_progress_event(self, kind: str, phase: LifecyclePhase) -> None:
@@ -1025,8 +1114,8 @@ class Transaction:
 
         This method:
         1. Creates a Proxy node in the parent graph pointing to the child graph
-        2. Registers the child graph in GraphRegistry (already done in child transaction)
-        3. Records the package-level dependency in GlobalDAG
+        2. Connects matching external dependency nodes in the parent graph to
+           the Proxy node so that cross-graph relationships are explicit.
 
         Args:
             child_graph_id: Graph ID of the child dependency.
@@ -1095,9 +1184,10 @@ class Transaction:
                 proxy_id,
                 child_graph_id,
             )
-
-            # Find external library nodes in current graph that match this dependency
-            # and link them to the proxy node
+            # Find external library nodes in current graph that match this
+            # dependency and link them to the proxy node. This provides a
+            # cross-graph anchor in the parent graph, while the package-level
+            # dependency ordering is managed separately via GlobalDAG.
             for node_id, node_attrs in self._graph_manager.nodes():
                 node_type = node_attrs.get("type")
 
@@ -1119,22 +1209,6 @@ class Transaction:
                             node_id,
                             proxy_id,
                         )
-
-            # 2. Record package-level dependency in GlobalDAG
-            from depanalyzer.graph.global_dag import GlobalDAG
-
-            # Align GlobalDAG persistence with graph cache root when provided
-            global_dag = GlobalDAG.get_instance(cache_dir=self.graph_cache_root)
-            global_dag.add_dependency(
-                parent_graph_id=self.graph_id,
-                child_graph_id=child_graph_id,
-            )
-
-            logger.info(
-                "Recorded package-level dependency in GlobalDAG: %s -> %s",
-                self.graph_id,
-                child_graph_id,
-            )
 
         except Exception as e:
             logger.error(
@@ -1294,6 +1368,19 @@ class Transaction:
             if self._progress_manager and phase_id:
                 self._progress_manager.remove_active_task("Linkage analysis")
 
+        # Optional: uncertainty analysis (over-approximation labeling)
+        try:
+            from depanalyzer.analysis.uncertainty import UncertaintyAnalyzer
+            from depanalyzer.runtime.graph_config import UncertaintyPolicyConfig
+
+            policy: UncertaintyPolicyConfig = self._graph_build_config.uncertainty
+            if policy.enabled:
+                logger.info("Running uncertainty analysis")
+                analyzer = UncertaintyAnalyzer(self._graph_manager, policy)
+                analyzer.analyze()
+        except Exception as e:
+            logger.error("Uncertainty analysis failed: %s", e, exc_info=True)
+
         logger.info("Analysis phase completed")
 
         # Complete phase
@@ -1442,6 +1529,11 @@ class Transaction:
             graph_data = node_link_data(export_graph, edges="links")
 
             # Add metadata
+            try:
+                revision = self.workspace.get_revision()
+            except Exception:
+                revision = None
+
             graph_metadata = {
                 "graph_id": self.graph_id,
                 "transaction_id": self.transaction_id,
@@ -1449,14 +1541,18 @@ class Transaction:
                 "node_count": self._graph_manager.node_count(),
                 "edge_count": self._graph_manager.edge_count(),
                 "timestamp": time.time(),
-                 # Persist root_path and path_namespace for downstream tools
-                 # (e.g. scancode integration and path de-normalization).
-                 "root_path": (
-                     str(self._graph_manager.root_path)
-                     if self._graph_manager.root_path
-                     else None
-                 ),
-                 "path_namespace": getattr(self._graph_manager, "path_namespace", None),
+                # Persist root_path and path_namespace for downstream tools
+                # (e.g. scancode integration and path de-normalization).
+                "root_path": (
+                    str(self._graph_manager.root_path)
+                    if self._graph_manager.root_path
+                    else None
+                ),
+                "path_namespace": getattr(self._graph_manager, "path_namespace", None),
+                # Optional revision identifier (e.g. Git commit SHA) for Git-based
+                # workspaces. This complements the path/URL-based graph_id so that
+                # consumers can distinguish graphs for different revisions.
+                "revision": revision,
             }
 
             # Combine metadata and graph data

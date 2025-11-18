@@ -107,6 +107,8 @@ def canonicalize_node(
     new_attrs.setdefault("type", "unknown")
     new_attrs.setdefault("confidence", 1.0)
     new_attrs.setdefault("over_approx", False)
+    new_attrs.setdefault("uncertainty_category", "definite")
+    new_attrs.setdefault("uncertainty_reasons", [])
 
     # Normalize path fields: prefer src_path, mirror legacy 'path' into src_path
     if "src_path" not in new_attrs and isinstance(new_attrs.get("path"), str):
@@ -160,6 +162,8 @@ def canonicalize_edge(attrs: Dict[str, Any]) -> Dict[str, Any]:
     new_attrs.setdefault("kind", "unknown")
     new_attrs.setdefault("confidence", 1.0)
     new_attrs.setdefault("over_approx", False)
+    new_attrs.setdefault("uncertainty_category", "definite")
+    new_attrs.setdefault("uncertainty_reasons", [])
 
     if "label" not in new_attrs or not new_attrs["label"]:
         new_attrs["label"] = new_attrs.get("kind", "unknown")
