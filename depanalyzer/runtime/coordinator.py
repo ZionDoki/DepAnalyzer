@@ -5,14 +5,19 @@ Transaction instances in parallel across multiple processes, avoiding Python's G
 """
 
 # Coordinator protects against worker crashes to keep the scheduler alive.
-# pylint: disable=broad-exception-caught
+
 
 import logging
 import multiprocessing
 import os
+import pickle
+import time
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from depanalyzer.runtime.transaction import Transaction
 
 logger = logging.getLogger("depanalyzer.coordinator")
 
@@ -53,9 +58,6 @@ def _run_transaction_worker(transaction_pickle_data: bytes) -> TransactionResult
     Returns:
         TransactionResult: Execution result.
     """
-    import pickle
-    import time
-
     # Reconstruct transaction from pickle data
     transaction = pickle.loads(transaction_pickle_data)
 
@@ -86,7 +88,7 @@ def _run_transaction_worker(transaction_pickle_data: bytes) -> TransactionResult
 
         return result
 
-    except Exception as e:
+    except Exception as e:  
         execution_time = time.time() - start_time
         logger.error(
             "[PID %d] Transaction %s failed after %.2fs: %s",
@@ -144,13 +146,16 @@ class TransactionCoordinator:
         self._pending_transactions: List[Tuple[str, bytes]] = []  # (tx_id, pickle_data)
 
         logger.info(
-            "TransactionCoordinator initialized with %d max processes", self.max_processes
+            "TransactionCoordinator initialized with %d max processes",
+            self.max_processes,
         )
 
         TransactionCoordinator._initialized = True
 
     @classmethod
-    def get_instance(cls, max_processes: Optional[int] = None) -> "TransactionCoordinator":
+    def get_instance(
+        cls, max_processes: Optional[int] = None
+    ) -> "TransactionCoordinator":
         """Get the singleton instance.
 
         Args:
@@ -180,24 +185,27 @@ class TransactionCoordinator:
         Returns:
             Future: Future object for tracking execution.
         """
-        import pickle
-
         # Ensure executor is created
         if self._executor is None:
             # Use explicit 'spawn' context for Windows compatibility
             # On Unix, this is harmless; on Windows, it's required to avoid bootstrap errors
-            mp_context = multiprocessing.get_context('spawn')
+            mp_context = multiprocessing.get_context("spawn")
             self._executor = ProcessPoolExecutor(
                 max_workers=self.max_processes,
                 mp_context=mp_context,
             )
-            logger.info("Process pool executor started with %d workers (spawn context)", self.max_processes)
+            logger.info(
+                "Process pool executor started with %d workers (spawn context)",
+                self.max_processes,
+            )
 
         # Serialize transaction
         try:
             pickle_data = pickle.dumps(transaction)
         except Exception as e:
-            logger.error("Failed to serialize transaction %s: %s", transaction.transaction_id, e)
+            logger.error(
+                "Failed to serialize transaction %s: %s", transaction.transaction_id, e
+            )
             raise
 
         # Submit to process pool
@@ -239,12 +247,18 @@ class TransactionCoordinator:
                     self._results[transaction_id] = result
 
                     if result.success:
-                        logger.info("Transaction %s completed successfully", transaction_id)
+                        logger.info(
+                            "Transaction %s completed successfully", transaction_id
+                        )
                     else:
-                        logger.error("Transaction %s failed: %s", transaction_id, result.error)
+                        logger.error(
+                            "Transaction %s failed: %s", transaction_id, result.error
+                        )
 
-                except Exception as e:
-                    logger.error("Failed to get result for transaction %s: %s", transaction_id, e)
+                except Exception as e:  
+                    logger.error(
+                        "Failed to get result for transaction %s: %s", transaction_id, e
+                    )
                     self._results[transaction_id] = TransactionResult(
                         transaction_id=transaction_id,
                         graph_id="unknown",
@@ -261,7 +275,11 @@ class TransactionCoordinator:
             successful = sum(1 for r in self._results.values() if r.success)
             failed = len(self._results) - successful
 
-            logger.info("All transactions completed: %d successful, %d failed", successful, failed)
+            logger.info(
+                "All transactions completed: %d successful, %d failed",
+                successful,
+                failed,
+            )
 
             return self._results
 

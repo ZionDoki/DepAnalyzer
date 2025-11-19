@@ -36,7 +36,7 @@ def _parse_toml(text: str) -> Dict[str, Any]:
     except ModuleNotFoundError:
         try:
             toml_module = importlib.import_module("tomli")
-        except ModuleNotFoundError as inner_exc:  # pragma: no cover - requires tomli
+        except ModuleNotFoundError as inner_exc:
             raise RuntimeError(
                 "TOML configuration requires Python 3.11+ (tomllib) or the "
                 "`tomli` package installed"

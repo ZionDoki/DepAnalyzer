@@ -1,7 +1,7 @@
 """HVigor configuration parser producing unified graph structures."""
 
 # Parser must continue operating even when individual config files are malformed.
-# pylint: disable=broad-exception-caught
+
 
 import logging
 from pathlib import Path
@@ -108,7 +108,9 @@ class HvigorParser(BaseParser):
                 deps_legacy = config.get("dependencies", {}) or {}
                 for name, info in deps_legacy.items():
                     ver = info.get("version") if isinstance(info, dict) else ""
-                    deps_list.append({"name": name, "version": ver, "registry_type": "ohpm"})
+                    deps_list.append(
+                        {"name": name, "version": ver, "registry_type": "ohpm"}
+                    )
 
                 # New structure (lockfileVersion 3: packages)
                 packages = config.get("packages", {}) or {}
@@ -121,11 +123,13 @@ class HvigorParser(BaseParser):
                     registry_type = info.get("registryType", "ohpm")
 
                     if name:
-                        deps_list.append({
-                            "name": name,
-                            "version": ver,
-                            "registry_type": registry_type,
-                        })
+                        deps_list.append(
+                            {
+                                "name": name,
+                                "version": ver,
+                                "registry_type": registry_type,
+                            }
+                        )
 
                 result["external_dependencies"] = deps_list
 
@@ -137,9 +141,7 @@ class HvigorParser(BaseParser):
             logger.warning("Could not parse build config %s: %s", file_path, e)
         return result
 
-    def _process_config_result(
-        self, result: Dict[str, Any]
-    ):
+    def _process_config_result(self, result: Dict[str, Any]):
         """Processes a single parsed config file, creating nodes and publishing events."""
         config_file: Path = result.get("file")
         if not config_file:
@@ -359,7 +361,9 @@ class HvigorParser(BaseParser):
         )
         self.publish_parse_event(event)
 
-    def _process_package_dependencies(self, result: Dict[str, Any], config_file_id: str):
+    def _process_package_dependencies(
+        self, result: Dict[str, Any], config_file_id: str
+    ):
         """Process oh-package.json5 dependencies."""
         config_file = result.get("file")
 
@@ -439,7 +443,9 @@ class HvigorParser(BaseParser):
             if is_local:
                 # Local dependency - reference to another module or local package
                 # Extract the target module name from the dependency name (e.g., @sj/ffmpeg -> ffmpeg)
-                target_module_name = dep_name.split("/")[-1] if "/" in dep_name else dep_name
+                target_module_name = (
+                    dep_name.split("/")[-1] if "/" in dep_name else dep_name
+                )
                 target_module_id = f"module:{target_module_name}"
 
                 # Ensure target module node exists so it does not stay as type=unknown

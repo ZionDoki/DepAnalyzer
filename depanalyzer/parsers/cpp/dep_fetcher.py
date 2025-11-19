@@ -6,6 +6,7 @@ Handles fetching of C/C++ dependencies from various sources:
 - Conan/vcpkg - future support
 """
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import Optional
@@ -42,7 +43,11 @@ class CppDepFetcher(BaseDepFetcher):
         # Also handle if it looks like a git URL
         if dep_spec.source_url:
             url_lower = dep_spec.source_url.lower()
-            if url_lower.endswith(".git") or "github.com" in url_lower or "gitlab" in url_lower:
+            if (
+                url_lower.endswith(".git")
+                or "github.com" in url_lower
+                or "gitlab" in url_lower
+            ):
                 return True
 
         return False
@@ -130,8 +135,6 @@ class CppDepFetcher(BaseDepFetcher):
             version_dir = dep_spec.version
         elif dep_spec.source_url:
             # Use last part of URL as identifier
-            import hashlib
-
             url_hash = hashlib.md5(dep_spec.source_url.encode()).hexdigest()[:8]
             version_dir = f"url_{url_hash}"
         else:

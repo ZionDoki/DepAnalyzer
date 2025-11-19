@@ -14,8 +14,9 @@ from rich.logging import RichHandler
 logger = logging.getLogger("depanalyzer.cli")
 
 # Trigger ecosystem registration by importing parsers package
-import depanalyzer.parsers  # noqa: F401  # pylint: disable=unused-import
+import depanalyzer.parsers
 
+from depanalyzer.parsers.registry import EcosystemRegistry
 from depanalyzer.cli.scan import scan_command
 from depanalyzer.cli.export import export_command
 from depanalyzer.cli.scancode import scancode_command
@@ -57,14 +58,19 @@ def main() -> int:
         int: Exit code.
     """
     # Verify ecosystem registration (only in main process)
-    from depanalyzer.parsers.registry import EcosystemRegistry
     _registry = EcosystemRegistry.get_instance()
     _ecosystems = _registry.list_ecosystems()
     if not _ecosystems:
         logger.warning("⚠ WARNING: No ecosystems were registered during startup!")
-        logger.warning("Please check for import errors above. Scan command will not work.")
+        logger.warning(
+            "Please check for import errors above. Scan command will not work."
+        )
     else:
-        logger.info("✓ Successfully loaded %d ecosystem(s): %s", len(_ecosystems), ", ".join(_ecosystems))
+        logger.info(
+            "✓ Successfully loaded %d ecosystem(s): %s",
+            len(_ecosystems),
+            ", ".join(_ecosystems),
+        )
 
     parser = argparse.ArgumentParser(
         description="Depanalyzer - Dependency Analysis Tool",

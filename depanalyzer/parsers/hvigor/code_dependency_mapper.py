@@ -6,7 +6,7 @@ and IMPORT edges in the dependency graph.
 """
 
 # Mapper intentionally guards against parser crashes to keep transactions running.
-# pylint: disable=broad-exception-caught
+
 
 from __future__ import annotations
 
@@ -85,9 +85,11 @@ class HvigorCodeDependencyMapper(BaseCodeDependencyMapper):
                     id=include_node_id,
                     type=NodeType.CODE,
                     path=target_path_str,
-                    src_path=str(target_path.resolve())
-                    if target_path.exists()
-                    else target_path_str,
+                    src_path=(
+                        str(target_path.resolve())
+                        if target_path.exists()
+                        else target_path_str
+                    ),
                     name=target_path.name,
                     parser_name=parser_name,
                 )

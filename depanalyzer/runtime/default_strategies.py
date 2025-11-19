@@ -6,12 +6,15 @@ without changing CLI semantics.
 """
 
 # Default strategies keep running even when hooks raise unexpected exceptions.
-# pylint: disable=broad-exception-caught
+
 
 from __future__ import annotations
 
 from typing import Any, Dict
 
+from depanalyzer.graph.linking import LinkClass
+from depanalyzer.graph.manager import EdgeKind, NodeType
+from depanalyzer.graph.schema import EdgeSpec, NodeSpec
 from depanalyzer.runtime.strategies import (
     AssetProjectionStrategy,
     CodeDependencyContext,
@@ -56,10 +59,6 @@ class DefaultCodeDependencyMapper(CodeDependencyMapper):
         graph = tx.graph
         if graph is None:
             return
-
-        from depanalyzer.graph.linking import LinkClass  # local import
-        from depanalyzer.graph.manager import EdgeKind, NodeType
-        from depanalyzer.graph.schema import EdgeSpec, NodeSpec
 
         file_path = ctx.file_path
         parse_result: Dict[str, Any] = ctx.parse_result

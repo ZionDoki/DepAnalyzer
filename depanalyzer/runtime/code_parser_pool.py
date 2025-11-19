@@ -9,13 +9,15 @@ transactions), this pool provides file-level parallelism for fine-grained code p
 """
 
 # Worker pool paths intentionally catch Exception to surface failures per file rather than crash.
-# pylint: disable=broad-exception-caught
+
 
 import logging
 import os
 from concurrent.futures import Future, ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from depanalyzer.parsers.registry import EcosystemRegistry
 
 logger = logging.getLogger("depanalyzer.runtime.code_parser_pool")
 
@@ -38,9 +40,6 @@ def _get_code_parser(ecosystem: str, config: Any | None = None):
     """
     if ecosystem not in _CODE_PARSER_CACHE:
         try:
-            # Import here to avoid circular dependencies
-            from depanalyzer.parsers.registry import EcosystemRegistry
-
             registry = EcosystemRegistry.get_instance()
             parser_class = registry.get_code_parser(ecosystem)
 
@@ -115,9 +114,7 @@ def _code_worker_dispatch(task_data: Tuple[str, str, Any | None]) -> Dict[str, A
             result.setdefault("ecosystem", ecosystem)
         return result
     except Exception as e:
-        logger.error(
-            "[PID %d] Failed to parse %s: %s", os.getpid(), file_path, e
-        )
+        logger.error("[PID %d] Failed to parse %s: %s", os.getpid(), file_path, e)
         return {
             "file": file_path_str,
             "error": str(e),

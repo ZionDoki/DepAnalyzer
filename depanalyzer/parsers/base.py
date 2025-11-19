@@ -7,10 +7,14 @@ Following AGENTS.md design: each ecosystem must implement three interfaces:
 """
 
 # Parsers catch broad exceptions to keep pipelines moving when repos have malformed inputs.
-# pylint: disable=broad-exception-caught
+
 
 import logging
+import shutil
 import subprocess
+import tarfile
+import urllib.request
+import zipfile
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -132,9 +136,7 @@ class BaseParser(ABC):
         """
         self.graph_manager.add_node(node_id, node_type, **attributes)
 
-    def add_edge(
-        self, source: str, target: str, edge_kind: str, **attributes
-    ) -> None:
+    def add_edge(self, source: str, target: str, edge_kind: str, **attributes) -> None:
         """Helper to add edge to transaction graph.
 
         Args:
@@ -172,7 +174,9 @@ class BaseLinker(ABC):
 
     ECOSYSTEM: str = "base"
 
-    def __init__(self, graph_manager: GraphManager, config: Optional[Any] = None) -> None:
+    def __init__(
+        self, graph_manager: GraphManager, config: Optional[Any] = None
+    ) -> None:
         """Initialize linker with graph manager.
 
         Args:
@@ -256,7 +260,7 @@ class BaseCodeDependencyMapper(CodeDependencyMapper, ABC):
     NAME: str = "base_code_mapper"
     ECOSYSTEM: str = "base"
 
-    def map(self, ctx: CodeDependencyContext) -> None:  # type: ignore[override]
+    def map(self, ctx: CodeDependencyContext) -> None: 
         """Dispatch mapping for a single parsed source file.
 
         This method performs common precondition checks and ensures that
@@ -422,8 +426,9 @@ class BaseDepFetcher(ABC):
         # Check if already exists
         if target_dir.exists():
             if force:
-                logger.info("Force re-cloning, removing existing directory: %s", target_dir)
-                import shutil
+                logger.info(
+                    "Force re-cloning, removing existing directory: %s", target_dir
+                )
                 shutil.rmtree(target_dir)
             else:
                 logger.info("Repository already exists at: %s", target_dir)
@@ -479,8 +484,6 @@ class BaseDepFetcher(ABC):
             bool: True if download succeeded, False otherwise.
         """
         try:
-            import urllib.request
-
             target_path.parent.mkdir(parents=True, exist_ok=True)
 
             logger.info("Downloading file: %s", url)
@@ -510,19 +513,15 @@ class BaseDepFetcher(ABC):
             logger.info("Extracting archive: %s", archive_path)
 
             if archive_path.suffix == ".zip":
-                import zipfile
                 with zipfile.ZipFile(archive_path, "r") as zip_ref:
                     zip_ref.extractall(target_dir)
             elif archive_path.name.endswith((".tar.gz", ".tgz")):
-                import tarfile
                 with tarfile.open(archive_path, "r:gz") as tar_ref:
                     tar_ref.extractall(target_dir)
             elif archive_path.name.endswith(".tar.bz2"):
-                import tarfile
                 with tarfile.open(archive_path, "r:bz2") as tar_ref:
                     tar_ref.extractall(target_dir)
             elif archive_path.name.endswith(".tar.xz"):
-                import tarfile
                 with tarfile.open(archive_path, "r:xz") as tar_ref:
                     tar_ref.extractall(target_dir)
             else:

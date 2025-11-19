@@ -32,4 +32,3 @@ class LinkClass(str, Enum):
     SEMANTIC = "semantic"
     BUILD_CONFIG = "build_config"
     CROSS_GRAPH = "cross_graph"
-

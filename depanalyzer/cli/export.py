@@ -1,12 +1,18 @@
 """Export command implementation."""
 
 # Export command intentionally guards against unexpected exceptions to report failures cleanly.
-# pylint: disable=broad-exception-caught
+
 
 import json
 import logging
 from pathlib import Path
 from typing import List
+
+from networkx.exception import NetworkXError
+from networkx.readwrite import node_link_graph
+
+from depanalyzer.graph.global_dag import GlobalDAG
+from depanalyzer.graph.registry import GraphRegistry
 
 logger = logging.getLogger("depanalyzer.cli.export")
 
@@ -27,9 +33,6 @@ def export_command(args) -> int:
     logger.info("=== Depanalyzer Export ===")
 
     try:
-        from depanalyzer.graph.registry import GraphRegistry
-        from depanalyzer.graph.global_dag import GlobalDAG
-
         graph_id = args.graph_id
         output_path = Path(args.output)
         export_format = getattr(args, "format", "json")
@@ -90,8 +93,8 @@ def export_command(args) -> int:
                     else:
                         logger.warning("Dependency graph not found: %s", dep_id)
 
-            except Exception as e:
-                logger.warning("Failed to get dependency graphs: %s", e)
+            except (OSError, RuntimeError, TimeoutError, ValueError) as err:
+                logger.warning("Failed to get dependency graphs: %s", err)
 
         # Determine path to GlobalDAG (if present)
         global_dag_path = graphs_root / "global_dag.json"
@@ -112,8 +115,15 @@ def export_command(args) -> int:
         else:
             return 1
 
-    except Exception as e:
-        logger.error("Export failed: %s", e, exc_info=True)
+    except (
+        AttributeError,
+        json.JSONDecodeError,
+        OSError,
+        RuntimeError,
+        TimeoutError,
+        ValueError,
+    ) as err:
+        logger.error("Export failed: %s", err, exc_info=True)
         return 1
 
 
@@ -128,8 +138,6 @@ def _export_asset_artifact_mapping(graphs: List[dict], output_path: Path) -> boo
         bool: True if successful, False otherwise.
     """
     try:
-        from networkx.readwrite import node_link_graph
-
         # Ensure output directory exists
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -271,8 +279,8 @@ def _export_asset_artifact_mapping(graphs: List[dict], output_path: Path) -> boo
         )
         return True
 
-    except Exception as e:
-        logger.error("Failed to export asset->artifact mapping: %s", e, exc_info=True)
+    except (OSError, json.JSONDecodeError, NetworkXError, ValueError) as err:
+        logger.error("Failed to export asset->artifact mapping: %s", err, exc_info=True)
         return False
 
 
@@ -320,7 +328,7 @@ def _export_json(
                 with open(global_dag_path, "r", encoding="utf-8") as f:
                     dag_data = json.load(f)
                 output_data["global_dag"] = dag_data
-            except Exception as dag_err:
+            except (OSError, json.JSONDecodeError, ValueError) as dag_err:
                 logger.warning(
                     "Failed to load GlobalDAG from %s: %s",
                     global_dag_path,
@@ -338,6 +346,6 @@ def _export_json(
         )
         return True
 
-    except Exception as e:
-        logger.error("Failed to export JSON: %s", e, exc_info=True)
+    except (KeyError, OSError, json.JSONDecodeError, ValueError) as err:
+        logger.error("Failed to export JSON: %s", err, exc_info=True)
         return False

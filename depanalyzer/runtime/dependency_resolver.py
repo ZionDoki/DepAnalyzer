@@ -5,7 +5,7 @@ based on DependencySpec specifications.
 """
 
 # Resolver catches fetcher exceptions so a single failed dependency doesn't abort the run.
-# pylint: disable=broad-exception-caught
+
 
 from __future__ import annotations
 
@@ -20,8 +20,7 @@ logger = logging.getLogger("depanalyzer.runtime.dependency_resolver")
 
 
 def resolve_dependencies(
-    deps: List[DependencySpec],
-    cache_root: Path = Path(".depanalyzer_cache/deps")
+    deps: List[DependencySpec], cache_root: Path = Path(".depanalyzer_cache/deps")
 ) -> List[Dict[str, Any]]:
     """Resolve and fetch dependencies using appropriate fetchers.
 
@@ -70,15 +69,17 @@ def resolve_dependencies(
                 spec.ecosystem,
                 spec.name,
             )
-            resolved.append({
-                "name": spec.name,
-                "version": spec.version,
-                "ecosystem": spec.ecosystem,
-                "source": None,
-                "spec": spec,
-                "success": False,
-                "error": f"No fetcher for ecosystem '{spec.ecosystem}'",
-            })
+            resolved.append(
+                {
+                    "name": spec.name,
+                    "version": spec.version,
+                    "ecosystem": spec.ecosystem,
+                    "source": None,
+                    "spec": spec,
+                    "success": False,
+                    "error": f"No fetcher for ecosystem '{spec.ecosystem}'",
+                }
+            )
             continue
 
         # Create fetcher instance and fetch dependency
@@ -92,29 +93,33 @@ def resolve_dependencies(
                     spec.name,
                     dep_path,
                 )
-                resolved.append({
-                    "name": spec.name,
-                    "version": spec.version,
-                    "ecosystem": spec.ecosystem,
-                    "source": str(dep_path),
-                    "spec": spec,
-                    "success": True,
-                })
+                resolved.append(
+                    {
+                        "name": spec.name,
+                        "version": spec.version,
+                        "ecosystem": spec.ecosystem,
+                        "source": str(dep_path),
+                        "spec": spec,
+                        "success": True,
+                    }
+                )
             else:
                 logger.warning(
                     "Fetcher returned invalid path for %s: %s",
                     spec.name,
                     dep_path,
                 )
-                resolved.append({
-                    "name": spec.name,
-                    "version": spec.version,
-                    "ecosystem": spec.ecosystem,
-                    "source": None,
-                    "spec": spec,
-                    "success": False,
-                    "error": "Fetcher returned invalid path",
-                })
+                resolved.append(
+                    {
+                        "name": spec.name,
+                        "version": spec.version,
+                        "ecosystem": spec.ecosystem,
+                        "source": None,
+                        "spec": spec,
+                        "success": False,
+                        "error": "Fetcher returned invalid path",
+                    }
+                )
 
         except Exception as e:
             logger.error(
@@ -123,15 +128,17 @@ def resolve_dependencies(
                 e,
                 exc_info=True,
             )
-            resolved.append({
-                "name": spec.name,
-                "version": spec.version,
-                "ecosystem": spec.ecosystem,
-                "source": None,
-                "spec": spec,
-                "success": False,
-                "error": str(e),
-            })
+            resolved.append(
+                {
+                    "name": spec.name,
+                    "version": spec.version,
+                    "ecosystem": spec.ecosystem,
+                    "source": None,
+                    "spec": spec,
+                    "success": False,
+                    "error": str(e),
+                }
+            )
 
     # Deduplicate successful resolutions by (ecosystem, name, source path) so
     # that multiple DependencySpec instances which resolve to the same local

@@ -5,7 +5,7 @@ Designed for process-pool execution.
 """
 
 # Parser intentionally swallows tree-sitter failures so the pool keeps running.
-# pylint: disable=broad-exception-caught
+
 
 import logging
 from pathlib import Path
@@ -95,10 +95,7 @@ class HvigorCodeParser(BaseCodeParser):
         }
 
         if not _TREE_SITTER_AVAILABLE or TS_LANGUAGE is None:
-            return {
-                **result,
-                "error": "tree-sitter TypeScript language not available"
-            }
+            return {**result, "error": "tree-sitter TypeScript language not available"}
 
         try:
             content = file_path.read_bytes()
@@ -171,7 +168,7 @@ class HvigorCodeParser(BaseCodeParser):
                 "Parsed %s: %d resolved imports, %d unresolved",
                 file_path.name,
                 len(resolved_imports),
-                len(unresolved_imports)
+                len(unresolved_imports),
             )
 
             return result
@@ -227,9 +224,8 @@ class HvigorCodeParser(BaseCodeParser):
         # up the ancestor chain and search there. This helps resolve imports
         # such as "entry/src/common/util" that are effectively rooted at the
         # project root or module root.
-        if (
-            not import_spec.startswith("@")
-            and ("/" in import_spec or import_spec.endswith(tuple(exts)))
+        if not import_spec.startswith("@") and (
+            "/" in import_spec or import_spec.endswith(tuple(exts))
         ):
             current = source_file.parent
             # Cap the number of levels we walk to avoid traversing the whole

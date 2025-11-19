@@ -88,6 +88,6 @@ def dag_command(args) -> int:
 
         return 0
 
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except (OSError, RuntimeError, TimeoutError, ValueError) as e:
         logger.error("DAG command failed: %s", e, exc_info=True)
         return 1

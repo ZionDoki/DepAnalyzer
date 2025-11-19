@@ -111,4 +111,3 @@ def make_file_id(
         Canonical ID matching the repository‑relative convention.
     """
     return normalize_node_id(file_path, repo_root, target_name)
-

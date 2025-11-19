@@ -7,7 +7,7 @@ associations.
 """
 
 # Event handlers intentionally catch unexpected errors so one bad subscriber does not crash the bus.
-# pylint: disable=broad-exception-caught
+
 
 import logging
 from collections import defaultdict
@@ -109,9 +109,7 @@ class EventBus:
         with self._lock:
             self._subscribers[event_type].append(handler)
             handler_name = name or handler.__name__
-            logger.debug(
-                "Handler %s subscribed to %s", handler_name, event_type.name
-            )
+            logger.debug("Handler %s subscribed to %s", handler_name, event_type.name)
 
     def publish(self, event: Event) -> None:
         """Publish event to all registered subscribers.
@@ -126,7 +124,9 @@ class EventBus:
                 return
 
             logger.debug(
-                "Publishing event %s to %d handlers", event.event_type.name, len(handlers)
+                "Publishing event %s to %d handlers",
+                event.event_type.name,
+                len(handlers),
             )
             for handler in handlers:
                 try:

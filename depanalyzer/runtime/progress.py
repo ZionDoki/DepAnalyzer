@@ -5,7 +5,7 @@ active tasks, and phase execution tracking.
 """
 
 # Progress manager shields live rendering errors so builds continue even if the UI fails.
-# pylint: disable=broad-exception-caught
+
 
 import logging
 import threading
@@ -394,7 +394,11 @@ class ProgressManager:
                     f"[cyan]Time:[/cyan] [blue]{self._metrics.elapsed:.1f}s[/blue]"
                 )
 
-            metrics_line = "  ".join(metrics_parts) if metrics_parts else "[dim]Initializing...[/dim]"
+            metrics_line = (
+                "  ".join(metrics_parts)
+                if metrics_parts
+                else "[dim]Initializing...[/dim]"
+            )
 
             # Build active tasks (compact, max 3)
             active_tasks_text = Text()
@@ -405,7 +409,7 @@ class ProgressManager:
                 if len(self._active_tasks) > 3:
                     active_tasks_text.append(
                         f"... and {len(self._active_tasks) - 3} more",
-                        style="dim yellow"
+                        style="dim yellow",
                     )
             else:
                 active_tasks_text.append("(no active tasks)", style="dim")

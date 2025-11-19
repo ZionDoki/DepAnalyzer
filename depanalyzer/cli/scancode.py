@@ -18,7 +18,7 @@ Per-graph license maps are also cached under the graphs directory as
 """
 
 # CLI intentionally shields unexpected ScanCode failures to keep process exit codes consistent.
-# pylint: disable=broad-exception-caught
+
 
 from __future__ import annotations
 
@@ -143,17 +143,15 @@ def _run_scancode(
                 continue
 
             # Derive license expression for this file.
-            expr = (
-                fentry.get("license_expression")
-                or fentry.get("detected_license_expression")
+            expr = fentry.get("license_expression") or fentry.get(
+                "detected_license_expression"
             )
             if not expr:
                 # Try legacy format: licenses list with per-match expressions
                 licenses = fentry.get("licenses") or []
                 if licenses:
-                    expr = (
-                        licenses[0].get("license_expression")
-                        or licenses[0].get("expression")
+                    expr = licenses[0].get("license_expression") or licenses[0].get(
+                        "expression"
                     )
 
             if not expr:
@@ -170,7 +168,7 @@ def _run_scancode(
     finally:
         try:
             os.unlink(tmp_path)
-        except Exception:
+        except OSError:
             pass
 
 
@@ -224,7 +222,9 @@ def scancode_command(args) -> int:
 
             cache_path = Path(cache_entry["cache_path"])
             if not cache_path.is_file():
-                logger.warning("Cached graph file missing for %s: %s", graph_id, cache_path)
+                logger.warning(
+                    "Cached graph file missing for %s: %s", graph_id, cache_path
+                )
                 continue
 
             # Load graph metadata to get root_path and namespace
@@ -236,9 +236,7 @@ def scancode_command(args) -> int:
             path_namespace = metadata.get("path_namespace")
 
             if not root_path_str:
-                logger.warning(
-                    "Graph %s has no root_path metadata, skipping", graph_id
-                )
+                logger.warning("Graph %s has no root_path metadata, skipping", graph_id)
                 continue
 
             root_path = Path(root_path_str)
@@ -256,7 +254,7 @@ def scancode_command(args) -> int:
                         len(license_map),
                     )
                     continue
-                except Exception as e:
+                except (OSError, json.JSONDecodeError, ValueError) as e:
                     logger.warning(
                         "Failed to load cached license map for %s: %s; re-scanning",
                         graph_id,
@@ -266,7 +264,12 @@ def scancode_command(args) -> int:
             # Run ScanCode for this graph
             try:
                 license_map = _run_scancode(root_path, path_namespace)
-            except Exception as e:
+            except (
+                RuntimeError,
+                OSError,
+                json.JSONDecodeError,
+                ValueError,
+            ) as e:
                 logger.error("ScanCode failed for graph %s: %s", graph_id, e)
                 return 1
 
@@ -277,10 +280,8 @@ def scancode_command(args) -> int:
                 logger.info(
                     "Cached license map for %s at %s", graph_id, license_cache_path
                 )
-            except Exception as e:
-                logger.warning(
-                    "Failed to cache license map for %s: %s", graph_id, e
-                )
+            except (OSError, TypeError, ValueError) as e:
+                logger.warning("Failed to cache license map for %s: %s", graph_id, e)
 
             result[graph_id] = license_map
 
@@ -289,14 +290,12 @@ def scancode_command(args) -> int:
         with output.open("w", encoding="utf-8") as f:
             json.dump(result, f, indent=2)
 
-        logger.info(
-            "License map exported to %s for %d graph(s)", output, len(result)
-        )
+        logger.info("License map exported to %s for %d graph(s)", output, len(result))
         return 0
 
     except RuntimeError as e:
         logger.error(str(e))
         return 1
-    except Exception as e:
+    except (OSError, json.JSONDecodeError, ValueError) as e:
         logger.error("scancode command failed: %s", e, exc_info=True)
         return 1

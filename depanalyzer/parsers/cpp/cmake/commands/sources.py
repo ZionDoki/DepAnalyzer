@@ -6,7 +6,7 @@ expansion for conservative, compliance-safe mapping.
 """
 
 # Command handlers keep running even if individual source items are malformed.
-# pylint: disable=broad-exception-caught
+
 
 from __future__ import annotations
 

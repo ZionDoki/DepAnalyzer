@@ -7,8 +7,9 @@ Supports multi-process execution via serialization.
 """
 
 # Transaction intentionally guards every lifecycle stage to report deterministic failures.
-# pylint: disable=broad-exception-caught
 
+
+import json
 import logging
 import os
 import time
@@ -16,8 +17,31 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence
 
+from networkx import MultiDiGraph
+from networkx.readwrite import node_link_data
+
+import depanalyzer.parsers
+
+from depanalyzer.analysis.deadcode import DeadcodeAnalyzer
+from depanalyzer.analysis.linkage import LinkageAnalyzer
+from depanalyzer.analysis.uncertainty import (
+    UncertaintyAnalyzer,
+    UncertaintyPolicyConfig,
+)
 from depanalyzer.graph.contract_registry import ContractRegistry
-from depanalyzer.graph.manager import GraphManager
+from depanalyzer.graph.global_dag import GlobalDAG
+from depanalyzer.graph.linking import LinkClass
+from depanalyzer.graph.linker_contract import GlobalContractLinker
+from depanalyzer.graph.manager import EdgeKind, GraphManager, NodeType
+from depanalyzer.graph.registry import GraphRegistry
+from depanalyzer.graph.schema_utils import canonicalize_edge, canonicalize_node
+from depanalyzer.parsers.base import DependencySpec
+from depanalyzer.parsers.cpp.code_dependency_mapper import CppCodeDependencyMapper
+from depanalyzer.parsers.hvigor.code_dependency_mapper import (
+    HvigorCodeDependencyMapper,
+)
+from depanalyzer.parsers.registry import EcosystemRegistry
+from depanalyzer.runtime.code_parser_pool import CodeParserPool
 from depanalyzer.runtime.context import (
     AnalyzeContext,
     DetectContext,
@@ -27,10 +51,13 @@ from depanalyzer.runtime.context import (
     ResolveDepsContext,
     TransactionContext,
 )
+from depanalyzer.runtime.coordinator import TransactionCoordinator, TransactionResult
 from depanalyzer.runtime.default_strategies import (
     DefaultAssetProjectionStrategy,
     DefaultCodeDependencyMapper,
 )
+from depanalyzer.runtime.dependency_collector import DependencyCollector
+from depanalyzer.runtime.dependency_resolver import resolve_dependencies
 from depanalyzer.runtime.eventbus import EventBus
 from depanalyzer.runtime.graph_config import GraphBuildConfig
 from depanalyzer.runtime.lifecycle import LifecyclePhase
@@ -47,7 +74,6 @@ from depanalyzer.runtime.worker import Task, TaskPriority, Worker
 from depanalyzer.runtime.workspace import Workspace
 
 if TYPE_CHECKING:
-    from depanalyzer.runtime.coordinator import TransactionResult
     from depanalyzer.runtime.progress import ProgressManager
 
 logger = logging.getLogger("depanalyzer.transaction")
@@ -150,25 +176,10 @@ class Transaction:
         else:
             # Install built-in per-ecosystem mappers by default so that
             # behavior matches the pre-strategy implementation.
-            try:
-                from depanalyzer.parsers.cpp.code_dependency_mapper import (
-                    CppCodeDependencyMapper,
-                )
-                from depanalyzer.parsers.hvigor.code_dependency_mapper import (
-                    HvigorCodeDependencyMapper,
-                )
-
-                self._code_dependency_mappers.setdefault(
-                    "cpp", CppCodeDependencyMapper()
-                )
-                self._code_dependency_mappers.setdefault(
-                    "hvigor", HvigorCodeDependencyMapper()
-                )
-            except Exception:
-                logger.debug(
-                    "Failed to initialize built-in code dependency mappers",
-                    exc_info=True,
-                )
+            self._code_dependency_mappers.setdefault("cpp", CppCodeDependencyMapper())
+            self._code_dependency_mappers.setdefault(
+                "hvigor", HvigorCodeDependencyMapper()
+            )
 
         self._default_code_dependency_mapper: CodeDependencyMapper = (
             DefaultCodeDependencyMapper()
@@ -249,8 +260,6 @@ class Transaction:
 
             # Initialize DependencyCollector hook after eventbus is created
             if self._dependency_collector is None:
-                from depanalyzer.runtime.dependency_collector import DependencyCollector
-
                 self._dependency_collector = DependencyCollector(self.eventbus)
                 logger.debug("DependencyCollector initialized")
 
@@ -358,8 +367,6 @@ class Transaction:
         )
         self._run_lifecycle_hooks_before(detect_ctx)
 
-        from depanalyzer.parsers.registry import EcosystemRegistry
-
         registry = EcosystemRegistry.get_instance()
 
         # Get all registered detector classes
@@ -420,7 +427,7 @@ class Transaction:
             worker.enqueue(task)
 
         # Log task count before execution
-        task_count = worker.queued_task_count()  # pylint: disable=no-member
+        task_count = worker.queued_task_count()
         logger.info("Enqueued %d detection tasks for execution", task_count)
 
         # Execute all detection tasks and collect results
@@ -448,7 +455,11 @@ class Transaction:
                 self._progress_manager.update_phase(
                     phase_id,
                     completed=completed_count,
-                    description=f"Detected {total_targets} targets from {completed_count}/{len(ecosystems)} ecosystems",
+                    description=(
+                        "Detected "
+                        f"{total_targets} targets from "
+                        f"{completed_count}/{len(ecosystems)} ecosystems"
+                    ),
                 )
 
         total_targets = sum(len(targets) for targets in self._detected_targets.values())
@@ -518,8 +529,6 @@ class Transaction:
 
         # Initialize dependency collector to collect DEPENDENCY_DISCOVERED events
         if self._dependency_collector is None:
-            from depanalyzer.runtime.dependency_collector import DependencyCollector
-
             eventbus = self._ensure_eventbus()
             self._dependency_collector = DependencyCollector(eventbus)
             logger.info("Initialized DependencyCollector")
@@ -535,8 +544,6 @@ class Transaction:
             )
             self._run_lifecycle_hooks_after(after_ctx)
             return
-
-        from depanalyzer.parsers.registry import EcosystemRegistry
 
         registry = EcosystemRegistry.get_instance()
 
@@ -686,8 +693,6 @@ class Transaction:
             )
             self._progress_manager.complete_phase(phase_id_tmp)
 
-        from depanalyzer.runtime.code_parser_pool import CodeParserPool
-
         code_pool = CodeParserPool.get_instance()
 
         # Submit all code files to process pool
@@ -735,7 +740,11 @@ class Transaction:
                 self._progress_manager.update_phase(
                     phase_id,
                     completed=total_processed,
-                    description=f"Parsed {total_processed}/{total_code_files} code files ({successful} ok, {failed} failed)",
+                    description=(
+                        "Parsed "
+                        f"{total_processed}/{total_code_files} code files "
+                        f"({successful} ok, {failed} failed)"
+                    ),
                 )
                 # Update graph metrics
                 if self._graph_manager:
@@ -854,8 +863,6 @@ class Transaction:
             # existing outgoing edges for this graph.
             if self.graph_id:
                 try:
-                    from depanalyzer.graph.global_dag import GlobalDAG
-
                     dag = GlobalDAG.get_instance(cache_dir=self.graph_cache_root)
                     dag.replace_dependencies(self.graph_id, set())
                     logger.info(
@@ -899,8 +906,6 @@ class Transaction:
             )
 
         # Resolve dependencies (fetch to local paths)
-        from depanalyzer.runtime.dependency_resolver import resolve_dependencies
-
         resolved_deps = resolve_dependencies(
             dep_specs, cache_root=self.dep_cache_root or Path(".depanalyzer_cache/deps")
         )
@@ -915,7 +920,7 @@ class Transaction:
         # spurious self-loop in the GlobalDAG.
         try:
             workspace_root = Path(self.workspace.root_path).resolve()
-        except Exception:  # pragma: no cover - defensive
+        except Exception:
             workspace_root = None
 
         if workspace_root is not None:
@@ -956,9 +961,6 @@ class Transaction:
             len(successful_deps),
             len(resolved_deps),
         )
-
-        # Import coordinator
-        from depanalyzer.runtime.coordinator import TransactionCoordinator
 
         # Get global coordinator instance
         coordinator = TransactionCoordinator.get_instance()
@@ -1038,7 +1040,11 @@ class Transaction:
                 self._progress_manager.update_phase(
                     phase_id,
                     completed=total_processed,
-                    description=f"Resolved {total_processed}/{len(futures)} dependencies ({completed_count} ok, {failed_count} failed)",
+                    description=(
+                        "Resolved "
+                        f"{total_processed}/{len(futures)} dependencies "
+                        f"({completed_count} ok, {failed_count} failed)"
+                    ),
                 )
 
         logger.info(
@@ -1052,8 +1058,6 @@ class Transaction:
         # that it reflects the *current* dependency set for this graph.
         if self.graph_id and child_graph_ids:
             try:
-                from depanalyzer.graph.global_dag import GlobalDAG
-
                 dag = GlobalDAG.get_instance(cache_dir=self.graph_cache_root)
                 dag.replace_dependencies(self.graph_id, set(child_graph_ids))
                 logger.info(
@@ -1121,7 +1125,6 @@ class Transaction:
         Returns:
             List[DependencySpec]: List of dependency specifications.
         """
-        from depanalyzer.parsers.base import DependencySpec
 
         discovered = []
 
@@ -1190,12 +1193,10 @@ class Transaction:
         source_root = dep_info.get("source")
         if source_root:
             try:
-                import json as _json
-
                 meta_path = Path(source_root) / ".hvigor_meta.json"
                 if meta_path.exists():
                     with meta_path.open("r", encoding="utf-8") as f:
-                        meta = _json.load(f)
+                        meta = json.load(f)
                     license_only = bool(meta.get("license_only"))
             except Exception as meta_err:
                 logger.debug(
@@ -1215,8 +1216,6 @@ class Transaction:
 
         try:
             # 1. Create a Proxy node in parent graph pointing to child graph
-            from depanalyzer.graph.manager import EdgeKind, NodeType
-            from depanalyzer.graph.linking import LinkClass
 
             proxy_id = f"dep_graph:{child_graph_id}"
 
@@ -1292,9 +1291,6 @@ class Transaction:
         self._ensure_eventbus()
 
         # Run per-ecosystem linkers.
-        from depanalyzer.parsers.registry import EcosystemRegistry
-        from depanalyzer.graph.linker_contract import GlobalContractLinker
-
         registry = EcosystemRegistry.get_instance()
         ecosystems = registry.list_ecosystems()
 
@@ -1393,8 +1389,6 @@ class Transaction:
             if self._progress_manager and phase_id:
                 self._progress_manager.add_active_task("Deadcode analysis")
 
-            from depanalyzer.analysis.deadcode import DeadcodeAnalyzer
-
             dc_analyzer = DeadcodeAnalyzer(self._graph_manager)
             dead_nodes = dc_analyzer.analyze()
 
@@ -1420,8 +1414,6 @@ class Transaction:
             if self._progress_manager and phase_id:
                 self._progress_manager.add_active_task("Linkage analysis")
 
-            from depanalyzer.analysis.linkage import LinkageAnalyzer
-
             linkage_analyzer = LinkageAnalyzer(self._graph_manager)
             linkage_map = linkage_analyzer.analyze()
 
@@ -1443,9 +1435,6 @@ class Transaction:
 
         # Optional: uncertainty analysis (over-approximation labeling)
         try:
-            from depanalyzer.analysis.uncertainty import UncertaintyAnalyzer
-            from depanalyzer.runtime.graph_config import UncertaintyPolicyConfig
-
             policy: UncertaintyPolicyConfig = self._graph_build_config.uncertainty
             if policy.enabled:
                 logger.info("Running uncertainty analysis")
@@ -1507,15 +1496,12 @@ class Transaction:
                 if self._progress_manager and phase_id:
                     self._progress_manager.add_active_task("Exporting graph")
 
-                import json
-                from networkx.readwrite import node_link_data
-
                 # Ensure parent directory exists
                 output_path = Path(output_path)
                 output_path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Get the native NetworkX graph
-                native_graph = self._graph_manager.backend.native_graph  # pylint: disable=no-member
+                native_graph = self._graph_manager.backend.native_graph
 
                 # Convert to node-link format
                 graph_data = node_link_data(native_graph, edges="links")
@@ -1590,18 +1576,8 @@ class Transaction:
             # Generate cache file path
             cache_file = cache_dir / f"{self.graph_id}.json"
 
-            # Serialize graph using NetworkX node_link_data
-            import json
-            from networkx import MultiDiGraph
-            from networkx.readwrite import node_link_data
-
-            from depanalyzer.graph.schema_utils import (
-                canonicalize_edge,
-                canonicalize_node,
-            )
-
             # Build an export-only graph with canonical IDs and schemas
-            native_graph = self._graph_manager.backend.native_graph  # pylint: disable=no-member
+            native_graph = self._graph_manager.backend.native_graph
             export_graph = MultiDiGraph()
 
             node_id_map: Dict[str, str] = {}
@@ -1685,14 +1661,6 @@ class Transaction:
         Returns:
             TransactionResult: Transaction execution result.
         """
-        # Import here to avoid circular dependency
-        from depanalyzer.runtime.coordinator import TransactionResult
-
-        # CRITICAL: Force ecosystem registration in subprocess
-        # This ensures that ecosystems are registered even when running in a subprocess
-        import depanalyzer.parsers  # noqa: F401  # pylint: disable=unused-import
-        from depanalyzer.parsers.registry import EcosystemRegistry
-
         registry = EcosystemRegistry.get_instance()
         ecosystems = registry.list_ecosystems()
         logger.info(
@@ -1751,8 +1719,6 @@ class Transaction:
                 logger.info("Graph cached at: %s", cache_path)
 
                 # Register graph in GraphRegistry
-                from depanalyzer.graph.registry import GraphRegistry
-
                 registry = GraphRegistry.get_instance(cache_root=self.graph_cache_root)
                 summary = {
                     "node_count": self._graph_manager.node_count(),

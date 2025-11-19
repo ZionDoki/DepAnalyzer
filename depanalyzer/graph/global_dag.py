@@ -9,8 +9,9 @@ The implementation is explicitly hardened for multi-process usage:
 - Each write operation performs a load-merge-save cycle under the lock,
   ensuring that edges from different processes are not lost.
 """
+
 # File I/O paths deliberately catch Exception to keep cache handling resilient.
-# pylint: disable=broad-exception-caught
+
 
 import json
 import logging
@@ -21,15 +22,21 @@ from pathlib import Path
 from typing import List, Optional, Set
 
 import networkx as nx
+from networkx.exception import NetworkXError
 
 logger = logging.getLogger("depanalyzer.graph.global_dag")
 
+IO_ERRORS = (OSError, TimeoutError)
+STATE_ERRORS = IO_ERRORS + (json.JSONDecodeError, ValueError)
+GRAPH_ERRORS = STATE_ERRORS + (NetworkXError,)
+CYCLE_ERRORS = (NetworkXError, ValueError)
+
 try:
-    import fcntl  # type: ignore[attr-defined]
+    import fcntl
 
     _HAS_FCNTL = True
-except ImportError:  # pragma: no cover - Windows and non-posix platforms
-    fcntl = None  # type: ignore[assignment]
+except ImportError:
+    fcntl = None
     _HAS_FCNTL = False
 
 
@@ -44,8 +51,8 @@ class GlobalDAG:
     file-level lock around the on-disk JSON representation.
     """
 
-    _instance = None  # type: Optional["GlobalDAG"]
-    _initialized = False  # type: bool
+    _instance = None
+    _initialized = False
 
     def __new__(cls, cache_dir: Optional[Path] = None) -> "GlobalDAG":
         """Singleton pattern for global DAG within a single process.
@@ -76,10 +83,9 @@ class GlobalDAG:
         # Whether to perform DAG-wide cycle checks on each write operation.
         # This can be disabled via environment variable when working with very
         # large DAGs to avoid the O(V+E) cost on every update.
-        self._check_on_write = (
-            os.getenv("DEPANALYZER_DAG_CHECK_ON_WRITE", "1").lower()
-            not in ("0", "false", "no")
-        )
+        self._check_on_write = os.getenv(
+            "DEPANALYZER_DAG_CHECK_ON_WRITE", "1"
+        ).lower() not in ("0", "false", "no")
 
         # Set up cache directory and DAG file paths
         if cache_dir is None:
@@ -125,9 +131,8 @@ class GlobalDAG:
                     "Reconfigured GlobalDAG cache directory: %s", instance.dag_file
                 )
                 try:
-                    with instance._acquire_lock():  # pylint: disable=protected-access
-                        instance._load_unlocked()  # pylint: disable=protected-access
-                except Exception as e:  # pragma: no cover - defensive logging
+                    instance.reload_from_disk()
+                except STATE_ERRORS as e:
                     logger.error("Failed to reload GlobalDAG after reconfigure: %s", e)
 
         return instance
@@ -178,9 +183,7 @@ class GlobalDAG:
                     break
                 except FileExistsError as lock_err:
                     if time.time() - start > timeout:
-                        logger.error(
-                            "Timeout acquiring GlobalDAG lock: %s", lock_path
-                        )
+                        logger.error("Timeout acquiring GlobalDAG lock: %s", lock_path)
                         raise TimeoutError(
                             f"Timeout acquiring GlobalDAG lock: {lock_path}"
                         ) from lock_err
@@ -227,7 +230,7 @@ class GlobalDAG:
         try:
             with self._acquire_lock():
                 self._save_unlocked()
-        except Exception as e:
+        except IO_ERRORS as e:
             logger.error("Failed to save global DAG: %s", e)
 
     def _load_unlocked(self) -> None:
@@ -265,9 +268,14 @@ class GlobalDAG:
         try:
             with self._acquire_lock():
                 self._load_unlocked()
-        except Exception as e:
+        except STATE_ERRORS as e:
             logger.error("Failed to load global DAG: %s", e)
             # Continue with empty DAG
+
+    def reload_from_disk(self) -> None:
+        """Reload DAG contents from disk under the file lock."""
+        with self._acquire_lock():
+            self._load_unlocked()
 
     def add_dependency(self, parent_graph_id: str, child_graph_id: str) -> None:
         """Add dependency edge from parent to child transaction.
@@ -294,9 +302,7 @@ class GlobalDAG:
                 )
 
                 # Check for cycles and log full cycle path when detected
-                if self._check_on_write and not nx.is_directed_acyclic_graph(
-                    self._dag
-                ):
+                if self._check_on_write and not nx.is_directed_acyclic_graph(self._dag):
                     logger.warning(
                         "Cycle detected in global DAG involving %s and %s",
                         parent_graph_id,
@@ -326,7 +332,7 @@ class GlobalDAG:
 
                             cycle_repr = " -> ".join(cycle_nodes)
                             logger.warning("Global DAG cycle path: %s", cycle_repr)
-                    except Exception as cycle_err:
+                    except CYCLE_ERRORS as cycle_err:
                         # Cycle introspection is best-effort only and must not break execution.
                         logger.debug(
                             "Failed to compute full cycle path for GlobalDAG: %s",
@@ -342,7 +348,7 @@ class GlobalDAG:
                 child_graph_id,
                 lock_err,
             )
-        except Exception as e:
+        except GRAPH_ERRORS as e:
             logger.error(
                 "Failed to add dependency %s -> %s to GlobalDAG: %s",
                 parent_graph_id,
@@ -350,7 +356,9 @@ class GlobalDAG:
                 e,
             )
 
-    def replace_dependencies(self, parent_graph_id: str, new_children: Set[str]) -> None:
+    def replace_dependencies(
+        self, parent_graph_id: str, new_children: Set[str]
+    ) -> None:
         """Replace all outgoing dependencies of a parent graph.
 
         This method removes all existing edges parent_graph_id -> * and then
@@ -393,9 +401,7 @@ class GlobalDAG:
                 )
 
                 # Check for cycles and log when detected.
-                if self._check_on_write and not nx.is_directed_acyclic_graph(
-                    self._dag
-                ):
+                if self._check_on_write and not nx.is_directed_acyclic_graph(self._dag):
                     logger.warning(
                         "Cycle detected in global DAG after replacing dependencies "
                         "for parent %s",
@@ -417,7 +423,7 @@ class GlobalDAG:
                             logger.warning(
                                 "Global DAG cycle path after replace: %s", cycle_repr
                             )
-                    except Exception as cycle_err:
+                    except CYCLE_ERRORS as cycle_err:
                         logger.debug(
                             "Failed to compute cycle path after replace_dependencies "
                             "for %s: %s",
@@ -433,7 +439,7 @@ class GlobalDAG:
                 parent_graph_id,
                 lock_err,
             )
-        except Exception as e:
+        except GRAPH_ERRORS as e:
             logger.error(
                 "Failed to replace dependencies for %s in GlobalDAG: %s",
                 parent_graph_id,
@@ -456,7 +462,7 @@ class GlobalDAG:
                 if not self._dag.has_node(graph_id):
                     return set()
                 return set(self._dag.successors(graph_id))
-        except Exception as e:
+        except GRAPH_ERRORS as e:
             logger.warning(
                 "Failed to get dependencies for %s from GlobalDAG: %s", graph_id, e
             )
@@ -480,7 +486,7 @@ class GlobalDAG:
 
                 # Use NetworkX descendants to get all reachable nodes
                 return nx.descendants(self._dag, graph_id)
-        except Exception as e:
+        except GRAPH_ERRORS as e:
             logger.warning(
                 "Failed to compute transitive dependencies for %s: %s", graph_id, e
             )
@@ -502,7 +508,7 @@ class GlobalDAG:
                 if not self._dag.has_node(graph_id):
                     return set()
                 return set(self._dag.predecessors(graph_id))
-        except Exception as e:
+        except GRAPH_ERRORS as e:
             logger.warning(
                 "Failed to get dependents for %s from GlobalDAG: %s", graph_id, e
             )
@@ -575,10 +581,10 @@ class GlobalDAG:
                         cycles.append([str(node) for node in cycle])
                         if max_cycles is not None and len(cycles) >= max_cycles:
                             break
-                except Exception as e:
+                except CYCLE_ERRORS as e:
                     logger.warning("Failed to enumerate cycles in GlobalDAG: %s", e)
 
-        except Exception as e:
+        except GRAPH_ERRORS as e:
             logger.warning("Failed to get cycles from GlobalDAG: %s", e)
 
         return cycles
@@ -594,5 +600,5 @@ class GlobalDAG:
                 self._dag.clear()
                 self._save_unlocked()
             logger.debug("Global DAG cleared")
-        except Exception as e:
+        except GRAPH_ERRORS as e:
             logger.error("Failed to clear GlobalDAG: %s", e)

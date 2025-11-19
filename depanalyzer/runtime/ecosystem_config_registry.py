@@ -7,7 +7,7 @@ GraphBuildConfig can consume when loading user configuration files
 """
 
 # Registry methods catch unexpected factory errors to avoid crashing import-time wiring.
-# pylint: disable=broad-exception-caught
+
 
 from __future__ import annotations
 
@@ -72,9 +72,12 @@ class EcosystemConfigRegistry:
             return None
         try:
             return factory(data or {})
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error(
-                "Config factory for ecosystem '%s' failed: %s", ecosystem, exc, exc_info=True
+                "Config factory for ecosystem '%s' failed: %s",
+                ecosystem,
+                exc,
+                exc_info=True,
             )
             return None
 

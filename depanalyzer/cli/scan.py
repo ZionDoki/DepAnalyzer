@@ -1,20 +1,39 @@
 """Scan command implementation."""
 
 # CLI must gracefully handle unexpected failures to present user-friendly errors.
-# pylint: disable=broad-exception-caught
+
 
 import json
 import logging
 import shutil
+import sys
 import time
+import traceback
+from concurrent.futures import CancelledError
 from pathlib import Path
+from pickle import PickleError
 from typing import Optional
+
+from depanalyzer.graph.global_dag import GlobalDAG
+from depanalyzer.graph.merge import merge_graph_with_dependencies
+from depanalyzer.graph.registry import GraphRegistry
 
 from depanalyzer.runtime.coordinator import TransactionCoordinator
 from depanalyzer.runtime.transaction import Transaction
 from depanalyzer.runtime.config_loader import load_graph_build_config
 
 logger = logging.getLogger("depanalyzer.cli.scan")
+
+RECOVERABLE_SCAN_ERRORS = (
+    AttributeError,
+    json.JSONDecodeError,
+    OSError,
+    RuntimeError,
+    shutil.Error,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 def scan_command(args) -> int:
@@ -26,13 +45,9 @@ def scan_command(args) -> int:
     Returns:
         int: Exit code.
     """
-    # Add a top-level exception handler to catch ANY unhandled exceptions
-    import sys
-    import traceback
-
     try:
         return _scan_command_impl(args)
-    except Exception as e:
+    except RECOVERABLE_SCAN_ERRORS as e:
         # Print to stderr directly to ensure it's visible even if logging is broken
         print(f"\n{'=' * 70}", file=sys.stderr)
         print("FATAL ERROR in scan_command:", file=sys.stderr)
@@ -80,7 +95,7 @@ def _scan_command_impl(args) -> int:
             if cache_dir_arg
             else Path(".dep_cache").resolve()
         )
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         logger.error("Failed to resolve cache-dir %s: %s", cache_dir_arg, e)
         return 1
 
@@ -94,8 +109,10 @@ def _scan_command_impl(args) -> int:
     try:
         sources_root.mkdir(parents=True, exist_ok=True)
         graphs_root.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        logger.error("Failed to initialize cache subdirectories under %s: %s", cache_root, e)
+    except OSError as e:
+        logger.error(
+            "Failed to initialize cache subdirectories under %s: %s", cache_root, e
+        )
         return 1
 
     try:
@@ -123,11 +140,13 @@ def _scan_command_impl(args) -> int:
         )
         logger.info("Transaction created: %s", transaction.transaction_id)
 
-        logger.info("Submitting transaction %s to process pool", transaction.transaction_id)
+        logger.info(
+            "Submitting transaction %s to process pool", transaction.transaction_id
+        )
         try:
             future = coordinator.submit(transaction)
             logger.info("Transaction submitted successfully")
-        except Exception as e:
+        except (PickleError, RuntimeError, OSError, ValueError) as e:
             logger.error("Failed to submit transaction: %s", e, exc_info=True)
             return 1
 
@@ -141,7 +160,7 @@ def _scan_command_impl(args) -> int:
             logger.error("This usually indicates the subprocess is stuck or crashed")
             logger.error("Check the logs above for any error messages")
             return 1
-        except Exception as e:
+        except (CancelledError, OSError, RuntimeError, ValueError) as e:
             logger.error("Transaction failed with exception: %s", e, exc_info=True)
             return 1
 
@@ -157,9 +176,6 @@ def _scan_command_impl(args) -> int:
             result.edge_count,
             result.graph_id,
         )
-
-        # Get graph from registry for export
-        from depanalyzer.graph.registry import GraphRegistry
 
         registry = GraphRegistry.get_instance(cache_root=graphs_root)
         cache_path = registry.get_cache_path(result.graph_id)
@@ -177,9 +193,9 @@ def _scan_command_impl(args) -> int:
                     output_path.parent.mkdir(parents=True, exist_ok=True)
 
                     if third_party_enabled:
-                        from depanalyzer.graph.merge import merge_graph_with_dependencies
-
-                        graphs_root_path = graphs_root or Path(".depanalyzer_cache/graphs")
+                        graphs_root_path = graphs_root or Path(
+                            ".depanalyzer_cache/graphs"
+                        )
                         merged_data = merge_graph_with_dependencies(
                             result.graph_id,
                             cache_root=graphs_root_path,
@@ -211,10 +227,10 @@ def _scan_command_impl(args) -> int:
                                     metadata.get("edge_count", 0),
                                     metadata.get("source", "unknown"),
                                 )
-                        except Exception as e:
+                        except (OSError, json.JSONDecodeError, ValueError) as e:
                             logger.debug("Could not read graph metadata: %s", e)
 
-                except Exception as e:
+                except (OSError, json.JSONDecodeError, shutil.Error, ValueError) as e:
                     logger.error("Failed to export graph: %s", e)
                     return 1
             else:
@@ -228,15 +244,17 @@ def _scan_command_impl(args) -> int:
 
                 if third_party_enabled:
                     try:
-                        from depanalyzer.graph.merge import merge_graph_with_dependencies
-
-                        graphs_root_path = graphs_root or Path(".depanalyzer_cache/graphs")
+                        graphs_root_path = graphs_root or Path(
+                            ".depanalyzer_cache/graphs"
+                        )
                         merged_data = merge_graph_with_dependencies(
                             result.graph_id,
                             cache_root=graphs_root_path,
                         )
 
-                        merged_path = cache_path.with_name(f"{result.graph_id}_merged.json")
+                        merged_path = cache_path.with_name(
+                            f"{result.graph_id}_merged.json"
+                        )
                         with merged_path.open("w", encoding="utf-8") as f:
                             json.dump(merged_data, f, indent=2)
 
@@ -247,14 +265,19 @@ def _scan_command_impl(args) -> int:
                             meta.get("node_count", 0),
                             meta.get("edge_count", 0),
                         )
-                    except Exception as e:
-                        logger.error("Failed to create merged graph: %s", e, exc_info=True)
+                    except (
+                        OSError,
+                        json.JSONDecodeError,
+                        RuntimeError,
+                        ValueError,
+                    ) as e:
+                        logger.error(
+                            "Failed to create merged graph: %s", e, exc_info=True
+                        )
 
             # Log high-level information about third-party dependency graphs so
             # users can see how many transactions were spawned.
             try:
-                from depanalyzer.graph.global_dag import GlobalDAG
-
                 graphs_root_path = graphs_root or Path(".depanalyzer_cache/graphs")
                 global_dag = GlobalDAG.get_instance(cache_dir=graphs_root_path)
                 dep_graph_ids = global_dag.get_transitive_dependencies(result.graph_id)
@@ -279,7 +302,7 @@ def _scan_command_impl(args) -> int:
                             continue
 
                             # unreachable
-                        summary = dep_entry.get("summary", {})  # type: ignore[union-attr]
+                        summary = dep_entry.get("summary", {})
                         logger.info(
                             "  - %s: %d nodes, %d edges (source: %s)",
                             dep_id,
@@ -292,7 +315,7 @@ def _scan_command_impl(args) -> int:
                     # otherwise this is expected.
                     if third_party_enabled:
                         logger.info("Third-party dependency graphs: 0")
-            except Exception as e:
+            except (OSError, RuntimeError, ValueError) as e:
                 logger.debug(
                     "Could not summarize third-party dependency graphs for %s: %s",
                     result.graph_id,
@@ -307,19 +330,18 @@ def _scan_command_impl(args) -> int:
 
         return 0
 
-    except Exception as e:
+    except RECOVERABLE_SCAN_ERRORS as e:
         logger.error("Scan failed: %s", e, exc_info=True)
         return 1
     finally:
         # Ensure cleanup of coordinator
         try:
             TransactionCoordinator.get_instance().shutdown(wait=False)
-        except Exception:  # pragma: no cover - best effort cleanup
+        except (OSError, RuntimeError):
             pass
 
         # Ensure cleanup of GraphRegistry manager
         try:
-            from depanalyzer.graph.registry import GraphRegistry
             GraphRegistry.shutdown()
-        except Exception:  # pragma: no cover - best effort cleanup
+        except (OSError, RuntimeError):
             pass

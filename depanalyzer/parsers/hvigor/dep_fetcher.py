@@ -11,7 +11,7 @@ Special features:
 """
 
 # Dependency fetching wraps external network/process calls defensively.
-# pylint: disable=broad-exception-caught
+
 
 import json
 import logging
@@ -26,15 +26,19 @@ logger = logging.getLogger("depanalyzer.parsers.hvigor.dep_fetcher")
 # Optional requests library
 try:
     import requests
+
     HAS_REQUESTS = True
 except ImportError:
     requests = None
     HAS_REQUESTS = False
-    logger.warning("requests library not available, OHPM registry fetching will be limited")
+    logger.warning(
+        "requests library not available, OHPM registry fetching will be limited"
+    )
 
 # Optional semantic version sorter
 try:
     from packaging.version import Version as PKGVERSION
+
     HAS_PACKAGING = True
 except ImportError:
     PKGVERSION = None
@@ -119,7 +123,9 @@ class HvigorDepFetcher(BaseDepFetcher):
             bool: True if cache is valid.
         """
         # Check for metadata file or git directory
-        return (cache_dir / ".hvigor_meta.json").exists() or (cache_dir / ".git").exists()
+        return (cache_dir / ".hvigor_meta.json").exists() or (
+            cache_dir / ".git"
+        ).exists()
 
     def _fetch_from_git(
         self, dep_spec: DependencySpec, cache_dir: Path
@@ -174,7 +180,9 @@ class HvigorDepFetcher(BaseDepFetcher):
             logger.error("requests library required for OHPM fetching")
             return None
 
-        logger.info("Fetching from OHPM registry: %s@%s", dep_spec.name, dep_spec.version)
+        logger.info(
+            "Fetching from OHPM registry: %s@%s", dep_spec.name, dep_spec.version
+        )
 
         # Fetch metadata from registry
         try:
@@ -251,7 +259,12 @@ class HvigorDepFetcher(BaseDepFetcher):
         }
         self._write_metadata(cache_dir, meta_out)
 
-        logger.info("Successfully fetched %s@%s to %s", dep_spec.name, resolved_version, cache_dir)
+        logger.info(
+            "Successfully fetched %s@%s to %s",
+            dep_spec.name,
+            resolved_version,
+            cache_dir,
+        )
         return cache_dir
 
     def _fetch_ohpm_metadata(self, pkg_name: str) -> Dict[str, Any]:
@@ -274,7 +287,9 @@ class HvigorDepFetcher(BaseDepFetcher):
         logger.debug("Fetching OHPM metadata from %s", url)
 
         if requests is None:
-            raise RuntimeError("requests library is required for OHPM metadata fetching")
+            raise RuntimeError(
+                "requests library is required for OHPM metadata fetching"
+            )
 
         response = requests.get(url, timeout=20)
         response.raise_for_status()
@@ -356,7 +371,9 @@ class HvigorDepFetcher(BaseDepFetcher):
 
         # Clone full repository (not shallow) for accurate time-based checkout
         cmd = ["git", "clone", repo_url, str(target_dir)]
-        logger.info("Cloning repository (full clone for time-based checkout): %s", repo_url)
+        logger.info(
+            "Cloning repository (full clone for time-based checkout): %s", repo_url
+        )
         logger.debug("Command: %s", " ".join(cmd))
 
         result = subprocess.run(
@@ -434,13 +451,17 @@ class HvigorDepFetcher(BaseDepFetcher):
                 f"--after={iso}",
                 "HEAD",
             ]
-            result = subprocess.run(cmd_after, capture_output=True, text=True, check=False)
+            result = subprocess.run(
+                cmd_after, capture_output=True, text=True, check=False
+            )
             commit = result.stdout.strip()
 
         if commit:
             logger.info("Checking out commit closest to release time: %s", commit)
             cmd_checkout = ["git", "-C", str(target_dir), "checkout", "-q", commit]
-            result = subprocess.run(cmd_checkout, capture_output=True, text=True, check=False)
+            result = subprocess.run(
+                cmd_checkout, capture_output=True, text=True, check=False
+            )
 
             if result.returncode != 0:
                 logger.warning("git checkout %s failed: %s", commit, result.stderr)

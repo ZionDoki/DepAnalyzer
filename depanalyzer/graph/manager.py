@@ -6,13 +6,17 @@ managing all nodes, edges, and metadata for that analysis session.
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 
 import networkx as nx
 
 from depanalyzer.graph.backend import GraphBackend
+from depanalyzer.graph.projection import (
+    derive_asset_artifact_projection as _derive_projection,
+    fuse_projection_evidence as _fuse_projection,
+)
+from depanalyzer.graph.projection_config import ProjectionConfig
 from depanalyzer.graph.schema import (
     EdgeKind,
     EdgeSpec,
@@ -22,7 +26,6 @@ from depanalyzer.graph.schema import (
     validate_node,
 )
 from depanalyzer.utils.path_utils import normalize_node_id
-from depanalyzer.graph.projection_config import ProjectionConfig
 
 logger = logging.getLogger("depanalyzer.graph.manager")
 
@@ -48,9 +51,7 @@ class GraphManager:
         """
         self.graph_id = graph_id or "default"
         self.root_path = Path(root_path).resolve() if root_path else None
-        # Optional namespace used for path normalization (e.g., third-party
-        # repository name). When set, normalized node IDs are prefixed with
-        # this namespace: //namespace/relative/path.
+
         self.path_namespace = path_namespace
         self._backend = GraphBackend()
         self._metadata: Dict[str, Any] = {}
@@ -92,11 +93,12 @@ class GraphManager:
             logger.debug("Node %s already exists, skipping", node_id)
             return
 
-        # Map legacy string/enum node_type into NodeType.
         try:
             ntype = NodeType(node_type)
         except ValueError:
-            logger.debug("Unknown node type %s for %s, using UNKNOWN", node_type, node_id)
+            logger.debug(
+                "Unknown node type %s for %s, using UNKNOWN", node_type, node_id
+            )
             ntype = NodeType.UNKNOWN
 
         attrs = dict(attributes)
@@ -154,7 +156,6 @@ class GraphManager:
         Returns:
             int: Edge key.
         """
-        # Map legacy string kind into EdgeKind enum when possible.
         try:
             kind = EdgeKind(edge_kind)
         except ValueError:
@@ -186,8 +187,6 @@ class GraphManager:
 
         This is the preferred entry point for new code constructing edges.
         """
-        # Ensure endpoints exist so we do not end up with nodes that only have
-        # an implicit ID and no schema attributes.
         if not self._backend.has_node(spec.source):
             provisional_node = NodeSpec(
                 id=spec.source,
@@ -276,7 +275,9 @@ class GraphManager:
             ValueError: If root_path is not set on this GraphManager
         """
         node_id = self.normalize_path(path)
-        self.add_node(node_id, node_type, confidence, over_approx, evidence, **attributes)
+        self.add_node(
+            node_id, node_type, confidence, over_approx, evidence, **attributes
+        )
         return node_id
 
     def add_normalized_edge(
@@ -311,7 +312,15 @@ class GraphManager:
         """
         source_id = self.normalize_path(source_path)
         target_id = self.normalize_path(target_path)
-        key = self.add_edge(source_id, target_id, edge_kind, confidence, over_approx, evidence, **attributes)
+        key = self.add_edge(
+            source_id,
+            target_id,
+            edge_kind,
+            confidence,
+            over_approx,
+            evidence,
+            **attributes,
+        )
         return (source_id, target_id, key)
 
     def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
@@ -363,7 +372,9 @@ class GraphManager:
         self._backend.native_graph.nodes[node_id][key] = value
         logger.debug("Updated node %s attribute: %s", node_id, key)
 
-    def nodes(self, node_type: Optional[str] = None) -> List[tuple[str, Dict[str, Any]]]:
+    def nodes(
+        self, node_type: Optional[str] = None
+    ) -> List[tuple[str, Dict[str, Any]]]:
         """Get all nodes, optionally filtered by type.
 
         Args:
@@ -374,7 +385,9 @@ class GraphManager:
         """
         nodes = list(self._backend.nodes(data=True))
         if node_type:
-            nodes = [(nid, attrs) for nid, attrs in nodes if attrs.get("type") == node_type]
+            nodes = [
+                (nid, attrs) for nid, attrs in nodes if attrs.get("type") == node_type
+            ]
         return nodes
 
     def edges(
@@ -386,15 +399,11 @@ class GraphManager:
             edge_kind: Optional edge kind filter.
 
         Returns:
-            List[tuple[str, str, int, Dict[str, Any]]]: List of (source, target, key, attributes) tuples.
+            List[tuple[str, str, int, Dict[str, Any]]]: (source, target, key, attributes) tuples.
         """
         edges = list(self._backend.edges(data=True, keys=True))
         if edge_kind:
-            edges = [
-                (u, v, k, d)
-                for u, v, k, d in edges
-                if d.get("kind") == edge_kind
-            ]
+            edges = [(u, v, k, d) for u, v, k, d in edges if d.get("kind") == edge_kind]
         return edges
 
     def node_count(self) -> int:
@@ -527,535 +536,51 @@ class GraphManager:
         It preserves previous behavior by default and adds optional closures.
 
         Args:
-            config: Optional ProjectionConfig instance. When provided, it
-                supplies default values for all parameters below. Explicit
-                keyword arguments override the values in ``config``.
+            config: Optional ProjectionConfig instance supplying default values.
             enable_fallback: Enable conservative fallbacks for unmatched assets.
             enable_link_closure: Propagate influence across link_libraries edges.
             enable_header_closure: Propagate include effects using multi-hop closure.
             max_header_hops: Max include hops for header closure.
-            ignore_external_placeholders_in_fallback: Skip external placeholders in fallback.
-            nearest_dir_min_evidence: Minimal source evidence to accept nearest-dir fallback.
+            ignore_external_placeholders_in_fallback: Skip external placeholders
+                in fallback.
+            nearest_dir_min_evidence: Minimal source evidence for nearest-dir fallback.
             link_closure_max_hops: Max hops across artifact links during link closure.
-            resolve_include_placeholders: Resolve //include:*.h to real headers using include_dirs.
+            resolve_include_placeholders: Resolve //include placeholders via include_dirs.
             fuse_evidence: Fuse multi-evidence projection edges for compactness.
-            fallback_max_targets_per_node: If set (>0), cap number of fallback targets
-                attached per asset in the import/include inheritance step (stable order).
-            fallback_disable_import_inherited: Skip import/include inheritance fallback when True.
-            fallback_disable_nearest_dir: Skip nearest-by-directory fallback when True.
+            fallback_max_targets_per_node: Cap fallback targets attached per asset.
+            fallback_disable_import_inherited: Skip import/include inheritance fallback.
+            fallback_disable_nearest_dir: Skip nearest-directory fallback.
 
         Returns:
             None
         """
-        from collections import defaultdict
-
-        # Resolve effective configuration by layering explicit keyword
-        # arguments on top of an optional ProjectionConfig instance, and
-        # finally on top of the historical defaults used by this method.
-        base_cfg = config or ProjectionConfig()
-
-        eff_enable_fallback = (
-            enable_fallback if enable_fallback is not None else base_cfg.enable_fallback
+        _derive_projection(
+            self,
+            config=config,
+            enable_fallback=enable_fallback,
+            enable_link_closure=enable_link_closure,
+            enable_header_closure=enable_header_closure,
+            max_header_hops=max_header_hops,
+            ignore_external_placeholders_in_fallback=ignore_external_placeholders_in_fallback,
+            nearest_dir_min_evidence=nearest_dir_min_evidence,
+            link_closure_max_hops=link_closure_max_hops,
+            resolve_include_placeholders=resolve_include_placeholders,
+            fuse_evidence=fuse_evidence,
+            fallback_max_targets_per_node=fallback_max_targets_per_node,
+            fallback_disable_import_inherited=fallback_disable_import_inherited,
+            fallback_disable_nearest_dir=fallback_disable_nearest_dir,
         )
-        eff_enable_link_closure = (
-            enable_link_closure
-            if enable_link_closure is not None
-            else base_cfg.enable_link_closure
-        )
-        eff_enable_header_closure = (
-            enable_header_closure
-            if enable_header_closure is not None
-            else base_cfg.enable_header_closure
-        )
-        eff_max_header_hops = (
-            max_header_hops
-            if max_header_hops is not None
-            else base_cfg.max_header_hops
-        )
-        eff_ignore_external_placeholders = (
-            ignore_external_placeholders_in_fallback
-            if ignore_external_placeholders_in_fallback is not None
-            else base_cfg.ignore_external_placeholders_in_fallback
-        )
-        eff_nearest_dir_min_evidence = (
-            nearest_dir_min_evidence
-            if nearest_dir_min_evidence is not None
-            else base_cfg.nearest_dir_min_evidence
-        )
-        eff_link_closure_max_hops = (
-            link_closure_max_hops
-            if link_closure_max_hops is not None
-            else base_cfg.link_closure_max_hops
-        )
-        eff_resolve_include_placeholders = (
-            resolve_include_placeholders
-            if resolve_include_placeholders is not None
-            else base_cfg.resolve_include_placeholders
-        )
-        eff_fuse_evidence = (
-            fuse_evidence if fuse_evidence is not None else base_cfg.fuse_evidence
-        )
-        eff_fallback_max_targets_per_node = (
-            fallback_max_targets_per_node
-            if fallback_max_targets_per_node is not None
-            else base_cfg.fallback_max_targets_per_node
-        )
-        eff_fallback_disable_import_inherited = (
-            fallback_disable_import_inherited
-            if fallback_disable_import_inherited is not None
-            else base_cfg.fallback_disable_import_inherited
-        )
-        eff_fallback_disable_nearest_dir = (
-            fallback_disable_nearest_dir
-            if fallback_disable_nearest_dir is not None
-            else base_cfg.fallback_disable_nearest_dir
-        )
-
-        graph = self._backend.native_graph
-
-        def edge_kind(data: Dict) -> Optional[str]:
-            """Resolve semantic kind of an edge.
-
-            Args:
-                data: Edge attribute mapping.
-
-            Returns:
-                Optional[str]: Semantic kind from 'kind'/'label'/'type'.
-            """
-            if not isinstance(data, Dict):
-                return None
-            return data.get("kind") or data.get("label") or data.get("type")
-
-        # Preprocess: establish subdirectory → target contains edges
-        subdirs = {}  # dir_id -> src_path
-        artifact_types = {
-            "shared_library",
-            "static_library",
-            "executable",
-            "module",
-            "module_library",
-            "interface_library",
-            "object",
-        }
-
-        for node, nd in graph.nodes(data=True):
-            if nd.get("type") == "subdirectory":
-                src_path = nd.get("src_path")
-                if src_path:
-                    subdirs[node] = src_path.replace("\\", "/")
-
-        # Find targets that belong to each subdirectory
-        for node, nd in graph.nodes(data=True):
-            if nd.get("type") in artifact_types:
-                target_src_path = nd.get("src_path")
-                if not target_src_path:
-                    continue
-                target_src_path = target_src_path.replace("\\", "/")
-
-                best_subdir = None
-                best_subdir_len = -1
-                for subdir_id, subdir_path in subdirs.items():
-                    if target_src_path.startswith(subdir_path + "/"):
-                        if len(subdir_path) > best_subdir_len:
-                            best_subdir = subdir_id
-                            best_subdir_len = len(subdir_path)
-
-                if best_subdir:
-                    self.add_edge(
-                        best_subdir,
-                        node,
-                        edge_kind="contains",
-                        parser_name="projection",
-                        derived_from="subdirectory_inference",
-                        confidence=1.0,
-                    )
-
-        # 1) Build part_of from explicit sources and contains
-        part_of_added = set()
-        for u, v, data in graph.edges(data=True):
-            k = edge_kind(data)
-            if k == "sources":
-                self.add_edge(
-                    v,
-                    u,
-                    edge_kind="part_of",
-                    parser_name="projection",
-                    derived_from="sources",
-                    confidence=1.0,
-                )
-                part_of_added.add((v, u))
-            elif k == "contains":
-                self.add_edge(
-                    v,
-                    u,
-                    edge_kind="part_of",
-                    parser_name="projection",
-                    derived_from="contains",
-                    confidence=1.0,
-                )
-                part_of_added.add((v, u))
-
-        # Build lookup: code -> {artifacts}
-        code_to_artifacts: Dict[str, Set[str]] = {}
-        for x, y, data in graph.edges(data=True):
-            if edge_kind(data) == "part_of":
-                code_to_artifacts.setdefault(x, set()).add(y)
-
-        # 2) include propagation: header -> target via code (skip system headers)
-        nodes_data_all = dict(graph.nodes(data=True))
-        for u, v, data in graph.edges(data=True):
-            if edge_kind(data) == "include":
-                code_node = u
-                header_node = v
-                header_type = (nodes_data_all.get(header_node, {}) or {}).get("type")
-                if header_type == "system_header" or str(header_node).startswith("//system:"):
-                    continue
-                for tgt in code_to_artifacts.get(code_node, set()):
-                    self.add_edge(
-                        header_node,
-                        tgt,
-                        edge_kind="affects",
-                        parser_name="projection",
-                        derived_from="include+part_of",
-                        confidence=0.8,
-                    )
-
-        # Optional: link-closure propagation (code affects upstream consumers)
-        if eff_enable_link_closure:
-            rev_adj: Dict[str, Set[str]] = defaultdict(set)
-            nodes_data = dict(graph.nodes(data=True))
-            for u, v, data in graph.edges(data=True):
-                if (
-                    edge_kind(data) == "link_libraries"
-                    and nodes_data.get(u, {}).get("type") in artifact_types
-                ):
-                    if nodes_data.get(v, {}).get("type") in artifact_types:
-                        rev_adj[v].add(u)
-
-            for code, bases in list(code_to_artifacts.items()):
-                for base in list(bases):
-                    frontier = [(base, 0)]
-                    seen = {base}
-                    while frontier:
-                        cur, d = frontier.pop(0)
-                        if d >= eff_link_closure_max_hops:
-                            continue
-                        for nxt in rev_adj.get(cur, set()):
-                            if nxt in seen:
-                                continue
-                            seen.add(nxt)
-                            conf = max(0.5, 0.7 - 0.1 * d)
-                            self.add_edge(
-                                code,
-                                nxt,
-                                edge_kind="affects",
-                                parser_name="projection",
-                                derived_from="link_closure",
-                                confidence=conf,
-                                hops=d + 1,
-                            )
-                            frontier.append((nxt, d + 1))
-
-        # Optional: header/include multi-hop closure
-        if eff_enable_header_closure and eff_max_header_hops > 0:
-            inc_adj: Dict[str, Set[str]] = defaultdict(set)
-            for u, v, data in graph.edges(data=True):
-                if edge_kind(data) == "include":
-                    inc_adj[u].add(v)
-
-            node_to_artifacts: Dict[str, Set[str]] = defaultdict(set)
-            for u, v, data in graph.edges(data=True):
-                k = edge_kind(data)
-                if k in {"part_of", "affects"}:
-                    node_to_artifacts[u].add(v)
-
-            for start, arts in list(node_to_artifacts.items()):
-                if not arts:
-                    continue
-                st_type = (nodes_data_all.get(start, {}) or {}).get("type")
-                if st_type == "system_header" or str(start).startswith("//system:"):
-                    continue
-                frontier = [(start, 0)]
-                visited = {start}
-                while frontier:
-                    cur, d = frontier.pop(0)
-                    if d >= eff_max_header_hops:
-                        continue
-                    for nxt in inc_adj.get(cur, set()):
-                        if nxt in visited:
-                            continue
-                        visited.add(nxt)
-                        ntype = (nodes_data_all.get(nxt, {}) or {}).get("type")
-                        if not (ntype == "system_header" or str(nxt).startswith("//system:")):
-                            conf = max(0.5, 0.6 - 0.1 * d)
-                            for tgt in arts:
-                                self.add_edge(
-                                    nxt,
-                                    tgt,
-                                    edge_kind="affects",
-                                    parser_name="projection",
-                                    derived_from="include_closure",
-                                    confidence=conf,
-                                    hops=d + 1,
-                                )
-                        frontier.append((nxt, d + 1))
-
-        # Optional: resolve //include:*.h placeholders
-        if eff_resolve_include_placeholders:
-            name_index: Dict[str, Set[str]] = defaultdict(set)
-            for n, nd in graph.nodes(data=True):
-                if not isinstance(n, str) or not n.startswith("//"):
-                    continue
-                if (nd.get("type") == "code") and (
-                    n.split(":")[0].lower().endswith((".h", ".hpp", ".hh", ".hxx"))
-                ):
-                    base = n.split("/")[-1].split(":")[0]
-                    name_index[base].add(n)
-
-            artifact_include_dirs: Dict[str, List[str]] = {}
-            for n, nd in graph.nodes(data=True):
-                incs = nd.get("include_dirs") or []
-                if incs and isinstance(incs, list):
-                    artifact_include_dirs[n] = [
-                        i.replace("\\", "/").lstrip("/")
-                        for i in incs
-                        if isinstance(i, str)
-                    ]
-
-            for u, v, data in list(graph.edges(data=True)):
-                if edge_kind(data) != "include":
-                    continue
-                if not (isinstance(v, str) and v.startswith("//include:")):
-                    continue
-                base = v.split(":", 1)[-1]
-                candidates = name_index.get(base)
-                if not candidates:
-                    continue
-                targets = code_to_artifacts.get(u, set())
-                for tgt in targets:
-                    inc_dirs = artifact_include_dirs.get(tgt) or []
-                    for cand in candidates:
-                        cand_dir = cand[2:].split(":")[0]
-                        if "/" in cand_dir:
-                            cand_dir = cand_dir.rsplit("/", 1)[0]
-                        for inc in inc_dirs:
-                            if cand_dir.startswith(inc.lstrip("/")):
-                                self.add_edge(
-                                    cand,
-                                    tgt,
-                                    edge_kind="affects",
-                                    parser_name="projection",
-                                    derived_from="include_dir_resolve",
-                                    confidence=0.75,
-                                )
-                                break
-
-        if not eff_enable_fallback:
-            if eff_fuse_evidence:
-                self.fuse_projection_evidence()
-            return
-
-        # Identify artifact nodes and their directories
-        artifact_dirs: Dict[str, str] = {}
-        for node, nd in graph.nodes(data=True):
-            if nd.get("type") in artifact_types:
-                src_path = nd.get("src_path")
-                if isinstance(src_path, str) and src_path:
-                    normalized = src_path.replace("\\", "/")
-                    artifact_dirs[node] = os.path.dirname(normalized)
-                else:
-                    if isinstance(node, str) and node.startswith("//"):
-                        path_part = node[2:].split(":")[0]
-                        artifact_dirs[node] = (
-                            path_part.rsplit("/", 1)[0] if "/" in path_part else path_part
-                        )
-
-        def has_part_of(n: str) -> bool:
-            for _, _, ed in graph.out_edges(n, data=True):
-                if edge_kind(ed) == "part_of":
-                    return True
-            return False
-
-        # 3) Fallback: inherit from importers' artifacts
-        if not eff_fallback_disable_import_inherited:
-            for node, nd in list(graph.nodes(data=True)):
-                ntype = nd.get("type")
-                if ntype not in {"code", "project_header", "header"}:
-                    continue
-                if ntype == "system_header" or str(node).startswith("//system:"):
-                    continue
-                if eff_ignore_external_placeholders:
-                    origin = nd.get("origin")
-                    prov = nd.get("provenance")
-                    if (
-                        str(node).startswith("//external:")
-                        or origin == "external"
-                        or prov == "import_unresolved"
-                    ):
-                        continue
-                if has_part_of(node):
-                    continue
-                candidate_targets_list: List[str] = []
-                candidate_targets_seen: Set[str] = set()
-                for pred, _, ed in graph.in_edges(node, data=True):
-                    k = edge_kind(ed)
-                    if k in {"import", "include"}:
-                        for tgt in code_to_artifacts.get(pred, set()):
-                            if tgt not in candidate_targets_seen:
-                                candidate_targets_seen.add(tgt)
-                                candidate_targets_list.append(tgt)
-                if (
-                    isinstance(eff_fallback_max_targets_per_node, int)
-                    and eff_fallback_max_targets_per_node > 0
-                ):
-                    candidate_targets_list = candidate_targets_list[
-                        :eff_fallback_max_targets_per_node
-                    ]
-                for tgt in candidate_targets_list:
-                    self.add_edge(
-                        node,
-                        tgt,
-                        edge_kind="affects",
-                        parser_name="projection",
-                        derived_from="fallback:import_inherited",
-                        confidence=0.6,
-                        fallback_attached=True,
-                        fallback_rule="import_inherited",
-                    )
-
-        # 4) Fallback: nearest-by-directory artifact
-        def best_dir_match(node_label: str) -> Optional[str]:
-            if not (isinstance(node_label, str) and node_label.startswith("//")):
-                return None
-            node_dir = node_label[2:]
-            if ":" in node_dir:
-                node_dir = node_dir.split(":")[0]
-            if "/" in node_dir:
-                node_dir = node_dir.rsplit("/", 1)[0]
-            best = None
-            best_len = -1
-            for tgt, tdir in artifact_dirs.items():
-                if not tdir:
-                    continue
-                nd = node_dir.replace("\\", "/")
-                td = tdir.replace("\\", "/").lstrip("/")
-                if nd.startswith(td) and len(td) > best_len:
-                    if eff_nearest_dir_min_evidence > 0:
-                        has_evidence = False
-                        for code_node, arts in code_to_artifacts.items():
-                            if tgt in arts and code_node.startswith("//"):
-                                cdir = code_node[2:].split(":")[0]
-                                if "/" in cdir:
-                                    cdir = cdir.rsplit("/", 1)[0]
-                                if cdir.replace("\\", "/").startswith(nd):
-                                    has_evidence = True
-                                    break
-                        if not has_evidence:
-                            continue
-                    best = tgt
-                    best_len = len(td)
-            return best
-
-        if not eff_fallback_disable_nearest_dir:
-            for node, nd in list(graph.nodes(data=True)):
-                ntype = nd.get("type")
-                if ntype not in {"code", "project_header", "header"}:
-                    continue
-                if ntype == "system_header" or str(node).startswith("//system:"):
-                    continue
-                if has_part_of(node):
-                    continue
-                tgt = best_dir_match(node)
-                if tgt:
-                    self.add_edge(
-                        node,
-                        tgt,
-                        edge_kind="affects",
-                        parser_name="projection",
-                        derived_from="fallback:nearest_dir",
-                        confidence=0.5,
-                        fallback_attached=True,
-                        fallback_rule="nearest_dir",
-                    )
-        if eff_fuse_evidence:
-            self.fuse_projection_evidence()
 
     def fuse_projection_evidence(self, kinds: Optional[Set[str]] = None) -> None:
-        """Fuse multi-evidence projection edges per (u,v,kind).
-
-        This collapses multiple 'projection' edges between the same endpoints and
-        of the same semantic kind into a single edge that merges confidences and
-        provenance. It preserves non-projection edges untouched.
+        """Fuse multi-evidence projection edges per (u, v, kind).
 
         Args:
-            kinds: Which kinds to fuse; defaults to {'part_of','affects'}.
+            kinds: Which kinds to fuse; defaults to {'part_of', 'affects'}.
 
         Returns:
             None
         """
-        from collections import defaultdict
-
-        if kinds is None:
-            kinds = {"part_of", "affects"}
-
-        graph = self._backend.native_graph
-        groups: Dict[tuple[str, str, str], List[tuple[str, str, int, Dict]]] = defaultdict(list)
-
-        for u, v, key, data in graph.edges(data=True, keys=True):
-            if not isinstance(data, Dict):
-                continue
-            if data.get("parser_name") != "projection":
-                continue
-            k = data.get("kind") or data.get("label") or data.get("type")
-            if k not in kinds:
-                continue
-            groups[(u, v, k)].append((u, v, key, data))
-
-        for (u, v, k), items in groups.items():
-            if len(items) <= 1:
-                continue
-            max_conf = 0.0
-            derived_from: Set[str] = set()
-            fallback_any = False
-            rules: Set[str] = set()
-            for _, _, _, d in items:
-                try:
-                    c = float(d.get("confidence", 0.0))
-                    if c > max_conf:
-                        max_conf = c
-                except (TypeError, ValueError):
-                    pass
-                df = d.get("derived_from")
-                if isinstance(df, str):
-                    derived_from.add(df)
-                elif isinstance(df, (list, tuple)):
-                    for x in df:
-                        if isinstance(x, str):
-                            derived_from.add(x)
-                if d.get("fallback_attached"):
-                    fallback_any = True
-                fr = d.get("fallback_rule")
-                if isinstance(fr, str):
-                    rules.add(fr)
-
-            # remove all old edges
-            for _, _, key, _ in items:
-                try:
-                    self.remove_edge(u, v, key)
-                except nx.NetworkXError:
-                    continue
-
-            # add a fused edge
-            attrs = {"kind": k, "parser_name": "projection"}
-            if max_conf:
-                attrs["confidence"] = max_conf
-            if derived_from:
-                attrs["derived_from"] = sorted(derived_from)
-            if fallback_any:
-                attrs["fallback_attached"] = True
-            if rules:
-                attrs["fallback_rule"] = sorted(rules)
-            self.add_edge(u, v, edge_kind=k, **attrs)
+        _fuse_projection(self, kinds=kinds)
 
     def save(self, file_path: Path, file_format: str = "json") -> None:
         """Save graph to file.
@@ -1096,12 +621,12 @@ class GraphManager:
         if file_format == "json":
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            manager._backend.set_native_graph(  # pylint: disable=no-member
+            manager._backend.set_native_graph(
                 nx.readwrite.json_graph.node_link_graph(data, edges="edges")
             )
             logger.info("Graph loaded from: %s", file_path)
         elif file_format == "gml":
-            manager._backend.set_native_graph(nx.read_gml(str(file_path)))  # pylint: disable=no-member
+            manager._backend.set_native_graph(nx.read_gml(str(file_path)))
             logger.info("Graph loaded from: %s", file_path)
         else:
             raise ValueError(f"Unsupported format: {file_format}")

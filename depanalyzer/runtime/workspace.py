@@ -5,7 +5,7 @@ for detectors and parsers.
 """
 
 # Workspace utilities guard subprocess and filesystem failures for resilience.
-# pylint: disable=broad-exception-caught
+
 
 import hashlib
 import logging
@@ -178,11 +178,6 @@ class Workspace:
                 root_path,
                 e.stderr,
             )
-        except Exception as e:  # pragma: no cover - defensive logging
-            logger.warning(
-                "Unexpected error while determining revision for %s: %s",
-                root_path,
-                e,
-            )
+        # Remove broad exception catch; rely on CalledProcessError above.
 
         return None

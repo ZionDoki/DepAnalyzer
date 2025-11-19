@@ -60,7 +60,7 @@ class BuildInterfaceContract:
 
     def __post_init__(self):
         """Validate contract data."""
-        if not (0.0 <= self.confidence <= 1.0):
+        if not 0.0 <= self.confidence <= 1.0:
             raise ValueError(f"Confidence must be in [0.0, 1.0], got {self.confidence}")
 
         if not self.provider_artifact and not self.consumer_artifact:

@@ -7,7 +7,7 @@ the graph builder performs graph operations.
 """
 
 # Event processing catches broad exceptions so a single bad event does not stop parsing.
-# pylint: disable=broad-exception-caught
+
 
 from __future__ import annotations
 

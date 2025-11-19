@@ -7,7 +7,7 @@ CMake include_dirs and target membership as primary evidence.
 """
 
 # Mapping logic intentionally tolerates parser failures on a per-file basis.
-# pylint: disable=broad-exception-caught
+
 
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ class CppCodeDependencyMapper(BaseCodeDependencyMapper):
         # Discover owning targets and their include_dirs from the skeleton graph.
         owning_targets: list[str] = []
         include_dirs_for_targets: dict[str, list[str]] = {}
-        native_graph = graph.backend.native_graph  # type: ignore[attr-defined]
+        native_graph = graph.backend.native_graph 
         nodes_data = dict(native_graph.nodes(data=True))
 
         for u, _, ed in native_graph.in_edges(file_node_id, data=True):
@@ -97,9 +97,7 @@ class CppCodeDependencyMapper(BaseCodeDependencyMapper):
             incs = nd.get("include_dirs") or []
             if isinstance(incs, list):
                 include_dirs_for_targets[tgt] = [
-                    i.replace("\\", "/").lstrip("/")
-                    for i in incs
-                    if isinstance(i, str)
+                    i.replace("\\", "/").lstrip("/") for i in incs if isinstance(i, str)
                 ]
 
         repo_root = getattr(transaction_ctx.workspace, "root_path", None)

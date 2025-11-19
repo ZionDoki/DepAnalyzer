@@ -57,10 +57,12 @@ class GraphRegistry:
         if GraphRegistry._manager is None:
             # Use explicit 'spawn' context for Windows compatibility
             # On Unix, this is harmless; on Windows, it's required to avoid bootstrap errors
-            mp_context = multiprocessing.get_context('spawn')
+            mp_context = multiprocessing.get_context("spawn")
             GraphRegistry._manager = mp_context.Manager()
             GraphRegistry._lock = GraphRegistry._manager.Lock()
-            logger.info("Initialized multiprocessing Manager for shared state (spawn context)")
+            logger.info(
+                "Initialized multiprocessing Manager for shared state (spawn context)"
+            )
 
         self.cache_root = cache_root or Path(".depanalyzer_cache/graphs")
         self.cache_root.mkdir(parents=True, exist_ok=True)
@@ -87,7 +89,7 @@ class GraphRegistry:
         """
         if cls._instance is None:
             cls(cache_root=cache_root)
-            return cls._instance  # type: ignore[return-value]
+            return cls._instance
 
         instance: "GraphRegistry" = cls._instance
 
@@ -100,15 +102,9 @@ class GraphRegistry:
             if current is None or cache_root != current:
                 if cls._lock is not None:
                     with cls._lock:
-                        instance.cache_root = cache_root
-                        instance.cache_root.mkdir(parents=True, exist_ok=True)
-                        instance._registry_file = instance.cache_root / "registry.json"  # pylint: disable=protected-access
-                        instance._load_registry_unlocked()  # pylint: disable=protected-access
-                else:  # pragma: no cover - defensive fallback
-                    instance.cache_root = cache_root
-                    instance.cache_root.mkdir(parents=True, exist_ok=True)
-                    instance._registry_file = instance.cache_root / "registry.json"  # pylint: disable=protected-access
-                    instance._load_registry_unlocked()  # pylint: disable=protected-access
+                        instance.configure_cache_root(cache_root)
+                else:
+                    instance.configure_cache_root(cache_root)
                 logger.info(
                     "Reconfigured GraphRegistry cache_root to %s", instance.cache_root
                 )
@@ -120,8 +116,16 @@ class GraphRegistry:
         if GraphRegistry._lock is not None:
             with GraphRegistry._lock:
                 self._load_registry_unlocked()
-        else:  # pragma: no cover - defensive fallback for missing lock
+        else:
             self._load_registry_unlocked()
+
+    def configure_cache_root(self, cache_root: Path) -> None:
+        """Configure registry to use a new cache root and reload state."""
+        resolved_root = Path(cache_root)
+        resolved_root.mkdir(parents=True, exist_ok=True)
+        self.cache_root = resolved_root
+        self._registry_file = self.cache_root / "registry.json"
+        self._load_registry_unlocked()
 
     def _load_registry_unlocked(self) -> None:
         """Load registry from disk without acquiring the lock."""
@@ -184,7 +188,7 @@ class GraphRegistry:
                 # Use unlocked version since we already hold the lock
                 self._save_registry_unlocked()
                 logger.info("Registered graph: %s (PID: %d)", graph_id, os.getpid())
-        else:  # pragma: no cover - defensive fallback
+        else:
             self._registry[graph_id] = {
                 "cache_path": str(cache_path),
                 "summary": summary,
@@ -272,7 +276,7 @@ class GraphRegistry:
                 # Use unlocked version since we already hold the lock
                 self._save_registry_unlocked()
                 logger.warning("Registry cleared")
-        else:  # pragma: no cover - defensive fallback
+        else:
             self._registry.clear()
             self._save_registry_unlocked()
             logger.warning("Registry cleared")

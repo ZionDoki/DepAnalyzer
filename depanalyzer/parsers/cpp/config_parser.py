@@ -5,7 +5,7 @@ It extracts targets, dependencies, sources, and other CMake entities into a grap
 """
 
 # Parser must keep running even if individual files are malformed.
-# pylint: disable=broad-exception-caught
+
 
 from __future__ import annotations
 
@@ -103,11 +103,15 @@ class CMakeParser(BaseParser):
 
         self._last_parsed_dir = target_path.parent.resolve()
 
-        variable_resolver = CMakeVariableResolver(str(self.graph_manager.root_path), target_path)
+        variable_resolver = CMakeVariableResolver(
+            str(self.graph_manager.root_path), target_path
+        )
 
         try:
             tree = CMAKE_PARSER.parse(text)
-            self._process_parse_tree(tree, self.graph_manager, variable_resolver, target_path)
+            self._process_parse_tree(
+                tree, self.graph_manager, variable_resolver, target_path
+            )
         except Exception as e:
             log.warning("Failed to parse %s: %s - skipping file", target_path, e)
             return

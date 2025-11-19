@@ -6,7 +6,7 @@ later resolution during the RESOLVE_DEPS phase.
 """
 
 # Event handlers intentionally catch all exceptions to avoid disrupting transactions.
-# pylint: disable=broad-exception-caught
+
 
 from __future__ import annotations
 

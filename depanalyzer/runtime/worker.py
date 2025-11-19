@@ -6,7 +6,7 @@ execution, avoiding recursion.
 """
 
 # Worker catches unexpected task failures to prevent the coordinator from crashing.
-# pylint: disable=broad-exception-caught
+
 
 import logging
 import os
@@ -131,7 +131,9 @@ class Worker:
             else:
                 self._queue.append(task)
 
-            logger.debug("Enqueued task %s (priority=%s)", task.task_id, task.priority.name)
+            logger.debug(
+                "Enqueued task %s (priority=%s)", task.task_id, task.priority.name
+            )
             return True
 
     def queued_task_count(self) -> int:
@@ -181,9 +183,25 @@ class Worker:
                 result=result,
                 execution_time=execution_time,
             )
-        except Exception as e:
+        except (RuntimeError, ValueError) as e:
             execution_time = time.time() - start_time
             logger.error("[PID %d] Task %s failed: %s", os.getpid(), task.task_id, e)
+            return TaskResult(
+                task_id=task.task_id,
+                success=False,
+                error=e,
+                execution_time=execution_time,
+            )
+        except BaseException as e:
+            # Catch-all for unexpected exceptions (including KeyboardInterrupt/SystemExit);
+            # logs and returns failure. This is intentional to prevent coordinator crash.
+            execution_time = time.time() - start_time
+            logger.error(
+                "[PID %d] Task %s failed with unexpected error: %s",
+                os.getpid(),
+                task.task_id,
+                e,
+            )
             return TaskResult(
                 task_id=task.task_id,
                 success=False,
@@ -198,7 +216,9 @@ class Worker:
             Dict[str, TaskResult]: Results for all executed tasks.
         """
         logger.info(
-            "[PID %d] Starting task execution with %d tasks", os.getpid(), len(self._queue)
+            "[PID %d] Starting task execution with %d tasks",
+            os.getpid(),
+            len(self._queue),
         )
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -216,14 +236,16 @@ class Worker:
                     future = executor.submit(self._execute_task, task)
                     futures[future] = task.task_id
                     logger.debug(
-                        "[PID %d] Submitted task %s for execution", os.getpid(), task.task_id
+                        "[PID %d] Submitted task %s for execution",
+                        os.getpid(),
+                        task.task_id,
                     )
 
                 # Wait for at least one task to complete
                 if futures:
                     try:
                         completed = []
-                        for future in as_completed(futures.keys(), timeout=5.0):
+                        for future in as_completed(futures, timeout=5.0):
                             completed.append(future)
 
                         for future in completed:
@@ -233,16 +255,33 @@ class Worker:
                                 self._results[task_id] = result
                     except TimeoutError:
                         # Check for completed futures manually
-                        completed = [f for f in futures.keys() if f.done()]
+                        completed = [f for f in futures if f.done()]
                         for future in completed:
                             task_id = futures.pop(future)
                             try:
                                 result = future.result()
                                 with self._lock:
                                     self._results[task_id] = result
-                            except Exception as e:
+                            except (RuntimeError, ValueError) as e:
                                 logger.error(
-                                    "[PID %d] Task %s failed: %s", os.getpid(), task_id, e
+                                    "[PID %d] Task %s failed: %s",
+                                    os.getpid(),
+                                    task_id,
+                                    e,
+                                )
+                                with self._lock:
+                                    self._results[task_id] = TaskResult(
+                                        task_id=task_id,
+                                        success=False,
+                                        error=e,
+                                        execution_time=0.0,
+                                    )
+                            except BaseException as e:
+                                logger.error(
+                                    "[PID %d] Task %s failed with unexpected error: %s",
+                                    os.getpid(),
+                                    task_id,
+                                    e,
                                 )
                                 with self._lock:
                                     self._results[task_id] = TaskResult(
