@@ -52,6 +52,10 @@ class NodeType(str, Enum):
     HAR = "har"
     HSP = "hsp"
 
+    # Derived / analysis-only nodes
+    SCC_CLUSTER = "scc_cluster"
+    CODE_SCC_CLUSTER = "code_scc_cluster"
+
     # Fallback for places that still don't set a concrete type.
     UNKNOWN = "unknown"
 

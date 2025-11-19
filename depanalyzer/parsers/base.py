@@ -29,6 +29,26 @@ from depanalyzer.runtime.strategies import (
 
 logger = logging.getLogger("depanalyzer.parsers.base")
 
+# Common exceptions that parsers should handle gracefully
+_SAFE_EXCEPTIONS = (
+    RuntimeError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    KeyError,
+    IndexError,
+    OSError,
+    IOError,
+    ImportError,
+    LookupError,
+    subprocess.CalledProcessError,
+    subprocess.TimeoutExpired,
+    urllib.error.URLError,
+    urllib.error.HTTPError,
+    zipfile.BadZipFile,
+    tarfile.TarError,
+)
+
 
 class BaseDetector(ABC):
     """Base class for target detectors.
@@ -260,7 +280,7 @@ class BaseCodeDependencyMapper(CodeDependencyMapper, ABC):
     NAME: str = "base_code_mapper"
     ECOSYSTEM: str = "base"
 
-    def map(self, ctx: CodeDependencyContext) -> None: 
+    def map(self, ctx: CodeDependencyContext) -> None:
         """Dispatch mapping for a single parsed source file.
 
         This method performs common precondition checks and ensures that
@@ -337,7 +357,10 @@ class DependencySpec:
         self.metadata = metadata or {}
 
     def __repr__(self) -> str:
-        return f"DependencySpec(name={self.name}, version={self.version}, ecosystem={self.ecosystem})"
+        return (
+            f"DependencySpec(name={self.name}, "
+            f"version={self.version}, ecosystem={self.ecosystem})"
+        )
 
 
 class BaseDepFetcher(ABC):
@@ -469,7 +492,7 @@ class BaseDepFetcher(ABC):
             logger.error("Git clone failed: %s", e.stderr)
             return False
 
-        except Exception as e:
+        except _SAFE_EXCEPTIONS as e:
             logger.error("Unexpected error during git clone: %s", e)
             return False
 
@@ -491,7 +514,7 @@ class BaseDepFetcher(ABC):
             logger.info("Downloaded to: %s", target_path)
             return True
 
-        except Exception as e:
+        except _SAFE_EXCEPTIONS as e:
             logger.error("Failed to download file %s: %s", url, e)
             return False
 
@@ -531,6 +554,6 @@ class BaseDepFetcher(ABC):
             logger.info("Extracted to: %s", target_dir)
             return True
 
-        except Exception as e:
+        except _SAFE_EXCEPTIONS as e:
             logger.error("Failed to extract archive %s: %s", archive_path, e)
             return False

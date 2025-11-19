@@ -4,6 +4,7 @@ __pycache__/
 dist/
 
 test_*
+!tests/**/test_*.py
 AGENTS.md
 *.json
 *.pyc

@@ -24,6 +24,9 @@ from typing import List, Optional, Set
 import networkx as nx
 from networkx.exception import NetworkXError
 
+from depanalyzer.graph.condensation import CondensationResult, build_condensation_dag
+from depanalyzer.graph.schema import NodeType
+
 logger = logging.getLogger("depanalyzer.graph.global_dag")
 
 IO_ERRORS = (OSError, TimeoutError)
@@ -530,6 +533,27 @@ class GlobalDAG:
             except nx.NetworkXError as e:
                 logger.error("Cannot compute topological order: %s", e)
                 raise
+
+    def build_cluster_view(self) -> CondensationResult:
+        """Construct a condensation DAG for the global graph.
+
+        The resulting DAG collapses every strongly connected component into a
+        synthetic `scc_cluster` node with a `members` attribute listing all
+        graph IDs contained in that component. Algorithms that require an
+        acyclic input (module grouping, layered governance, etc.) can operate on
+        the returned DAG while the original GlobalDAG remains unchanged.
+
+        Returns:
+            CondensationResult: Cluster DAG and membership map.
+        """
+
+        with self._acquire_lock():
+            self._load_unlocked()
+            return build_condensation_dag(
+                self._dag,
+                node_prefix="global_scc:",
+                cluster_type=NodeType.SCC_CLUSTER.value,
+            )
 
     def has_cycle(self) -> bool:
         """Check if global DAG contains cycles.

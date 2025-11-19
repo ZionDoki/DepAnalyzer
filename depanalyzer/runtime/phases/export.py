@@ -1,0 +1,210 @@
+"""
+EXPORT phase implementation.
+
+This phase exports the graph to disk in a serialized format.
+"""
+
+import json
+import logging
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+from networkx import MultiDiGraph
+from networkx.readwrite import node_link_data
+
+from depanalyzer.graph.schema_utils import canonicalize_edge, canonicalize_node
+from depanalyzer.runtime.lifecycle import LifecyclePhase
+from depanalyzer.runtime.phases.base import BasePhase
+from depanalyzer.runtime.context import ExportContext
+
+logger = logging.getLogger("depanalyzer.transaction.phase.export")
+
+_SAFE_EXCEPTIONS = (RuntimeError, ValueError, TypeError, AttributeError, KeyError,
+                    IndexError, OSError, ImportError, LookupError)
+
+
+def _make_json_serializable(obj: Any) -> Any:
+    """
+    Convert objects to JSON-serializable formats.
+
+    Args:
+        obj: Object to convert
+
+    Returns:
+        JSON-serializable version of the object
+    """
+    if isinstance(obj, Path):
+        return str(obj)
+    elif isinstance(obj, dict):
+        return {k: _make_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_make_json_serializable(item) for item in obj]
+    elif isinstance(obj, set):
+        return list(_make_json_serializable(item) for item in obj)
+    elif hasattr(obj, '__dict__'):
+        # For custom objects, try to convert to dict
+        return str(obj)
+    else:
+        return obj
+
+
+class ExportPhase(BasePhase):
+    """
+    EXPORT phase: Export graph to disk.
+
+    This phase:
+    1. Canonicalizes graph nodes and edges
+    2. Serializes graph to JSON
+    3. Writes graph to cache directory
+
+    Critical: False - Export failures shouldn't rollback analysis.
+    """
+
+    IS_CRITICAL = False  # Non-critical: export is optional
+
+    def execute(self, context: ExportContext) -> None:
+        """Execute EXPORT phase logic."""
+        if not self.state.graph_manager:
+            logger.warning("GraphManager not initialized, skipping export")
+            return
+
+        serialized = self._serialize_graph_data()
+        if not serialized:
+            return
+
+        graph_data, node_count, edge_count = serialized
+
+        cache_path = self._write_cache_export(graph_data, node_count, edge_count)
+        if cache_path:
+            self.state.update_phase_result(
+                LifecyclePhase.EXPORT,
+                "graph_cache_path",
+                cache_path,
+            )
+
+        if context.output_path is not None:
+            self._write_requested_export(
+                context.output_path,
+                graph_data,
+                node_count,
+                edge_count,
+            )
+
+    def _serialize_graph_data(self) -> Optional[tuple[Dict[str, Any], int, int]]:
+        """
+        Build canonicalized graph data for export.
+        """
+        try:
+            native_graph = self.state.graph_manager.backend.native_graph
+
+            # Canonicalize nodes and edges
+            export_graph = MultiDiGraph()
+            node_id_map = {}
+
+            workspace_root = None
+            try:
+                workspace_root = (
+                    self.state.workspace.root_path if self.state.workspace else None
+                )
+            except _SAFE_EXCEPTIONS:
+                workspace_root = None
+
+            # Canonicalize nodes
+            for raw_id, attrs in native_graph.nodes(data=True):
+                canonical_id, canonical_attrs = canonicalize_node(
+                    raw_id,
+                    attrs,
+                    workspace_root,
+                )
+                node_id_map[str(raw_id)] = canonical_id
+                export_graph.add_node(canonical_id, **canonical_attrs)
+
+            # Canonicalize edges
+            for u, v, _key, attrs in native_graph.edges(data=True, keys=True):
+                source_id = node_id_map.get(str(u), str(u))
+                target_id = node_id_map.get(str(v), str(v))
+                canonical_attrs = canonicalize_edge(attrs or {})
+                export_graph.add_edge(source_id, target_id, **canonical_attrs)
+
+            # Serialize to node-link format with explicit edges parameter
+            data = node_link_data(export_graph, edges="links")
+
+            # Add metadata (make JSON-serializable)
+            metadata = self.state.graph_manager.metadata
+            serializable_metadata = _make_json_serializable(metadata)
+            serializable_metadata.setdefault(
+                "node_count", export_graph.number_of_nodes()
+            )
+            serializable_metadata.setdefault(
+                "edge_count", export_graph.number_of_edges()
+            )
+            data["metadata"] = serializable_metadata
+            data["graph_id"] = self.state.graph_id
+            data["source"] = self.state.source
+
+            return data, export_graph.number_of_nodes(), export_graph.number_of_edges()
+
+        except _SAFE_EXCEPTIONS as e:
+            logger.error("Failed to serialize graph for export: %s", e, exc_info=True)
+            return None
+
+    def _write_cache_export(
+        self,
+        graph_data: Dict[str, Any],
+        node_count: int,
+        edge_count: int,
+    ) -> Optional[Path]:
+        """
+        Write the serialized graph to the configured cache directory.
+        """
+        if not self.state.graph_cache_root or not self.state.graph_id:
+            logger.info("Graph caching disabled (no cache_root or graph_id)")
+            return None
+
+        try:
+            cache_dir = Path(self.state.graph_cache_root)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_file = cache_dir / f"{self.state.graph_id}.json"
+            self._write_graph_file(cache_file, graph_data)
+            logger.info(
+                "Graph exported to: %s (%d nodes, %d edges)",
+                cache_file,
+                node_count,
+                edge_count,
+            )
+            return cache_file
+        except _SAFE_EXCEPTIONS as e:
+            logger.error("Failed to write graph cache: %s", e, exc_info=True)
+            return None
+
+    def _write_requested_export(
+        self,
+        output_path: Path,
+        graph_data: Dict[str, Any],
+        node_count: int,
+        edge_count: int,
+    ) -> Optional[Path]:
+        """
+        Write the serialized graph to the caller-provided path.
+        """
+        try:
+            written_path = self._write_graph_file(output_path, graph_data)
+            logger.info(
+                "Graph exported to requested path: %s (%d nodes, %d edges)",
+                written_path,
+                node_count,
+                edge_count,
+            )
+            return written_path
+        except _SAFE_EXCEPTIONS as e:
+            logger.error("Failed to export graph to %s: %s", output_path, e, exc_info=True)
+            return None
+
+    def _write_graph_file(self, target_path: Path, graph_data: Dict[str, Any]) -> Path:
+        """
+        Write graph data to disk.
+        """
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with target_path.open("w", encoding="utf-8") as handle:
+            json.dump(graph_data, handle, indent=2, default=str)
+        return target_path

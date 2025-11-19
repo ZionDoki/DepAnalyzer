@@ -12,6 +12,10 @@ from typing import Any, Dict, List, Optional, Set, Union
 import networkx as nx
 
 from depanalyzer.graph.backend import GraphBackend
+from depanalyzer.graph.condensation import (
+    CondensationResult,
+    build_condensation_dag,
+)
 from depanalyzer.graph.projection import (
     derive_asset_artifact_projection as _derive_projection,
     fuse_projection_evidence as _fuse_projection,
@@ -422,6 +426,25 @@ class GraphManager:
         """
         return self._backend.edge_count()
 
+    def build_code_cluster_view(self) -> CondensationResult:
+        """Build a condensation DAG for the current transaction graph.
+
+        Code-level dependency graphs often contain cycles (mutual imports,
+        recursive calls, etc.). Algorithms that require a DAG should rely on
+        this method to obtain a compact `code_scc_cluster` view instead of
+        mutating the original graph.
+
+        Returns:
+            CondensationResult: DAG composed of code SCC clusters.
+        """
+
+        prefix = f"code_scc:{self.graph_id}:"
+        return build_condensation_dag(
+            self._backend.native_graph,
+            node_prefix=prefix,
+            cluster_type=NodeType.CODE_SCC_CLUSTER.value,
+        )
+
     def set_metadata(self, key: str, value: Any) -> None:
         """Set graph metadata.
 
@@ -442,6 +465,15 @@ class GraphManager:
             Any: Metadata value.
         """
         return self._metadata.get(key, default)
+
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        """Get all graph metadata.
+
+        Returns:
+            Dict[str, Any]: Complete metadata dictionary.
+        """
+        return self._metadata
 
     def get_summary(self) -> Dict[str, Any]:
         """Get graph summary.
