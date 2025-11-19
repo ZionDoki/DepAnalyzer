@@ -4,6 +4,9 @@ This module provides functions to resolve and fetch third-party dependencies
 based on DependencySpec specifications.
 """
 
+# Resolver catches fetcher exceptions so a single failed dependency doesn't abort the run.
+# pylint: disable=broad-exception-caught
+
 from __future__ import annotations
 
 import logging

@@ -4,6 +4,9 @@ Handles local paths and Git URLs, providing a clean read-only view
 for detectors and parsers.
 """
 
+# Workspace utilities guard subprocess and filesystem failures for resilience.
+# pylint: disable=broad-exception-caught
+
 import hashlib
 import logging
 import subprocess

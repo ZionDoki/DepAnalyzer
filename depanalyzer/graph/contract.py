@@ -4,7 +4,7 @@ This module defines the contract data structure that acts as the single source
 of truth for connecting mixed-language build artifacts (e.g., Hvigor + CMake).
 """
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List
 from enum import Enum
 
 

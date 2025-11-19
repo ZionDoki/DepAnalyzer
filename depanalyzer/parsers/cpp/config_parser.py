@@ -4,6 +4,9 @@ This module parses CMakeLists.txt files using tree-sitter-cmake and command hand
 It extracts targets, dependencies, sources, and other CMake entities into a graph.
 """
 
+# Parser must keep running even if individual files are malformed.
+# pylint: disable=broad-exception-caught
+
 from __future__ import annotations
 
 import re
@@ -14,7 +17,6 @@ from typing import Any, List
 from depanalyzer.parsers.base import BaseParser
 from depanalyzer.graph.manager import GraphManager
 from depanalyzer.runtime.eventbus import Event, EventType
-from depanalyzer.hooks.cmake_graph_builder import CMakeGraphBuilder
 
 from depanalyzer.parsers.cpp.cmake.grammar import CMAKE_PARSER, ParseTokenWrapper
 from depanalyzer.parsers.cpp.cmake import tokens
@@ -27,6 +29,7 @@ from depanalyzer.parsers.cpp.cmake.commands import (
     IncludesCommandHandler,
     SourcesCommandHandler,
 )
+from depanalyzer.parsers.cpp.cmake_graph_builder import CMakeGraphBuilder
 
 log = logging.getLogger("depanalyzer.parsers.cpp.config_parser")
 

@@ -79,9 +79,9 @@ class HvigorDetector(BaseDetector):
                 )
                 self.publish_detection_event(event)
 
-                logger.debug(f"Detected {target_type}: {file_path}")
+                logger.debug("Detected %s: %s", target_type, file_path)
 
-        logger.info(f"HvigorDetector found {len(detected)} configuration files")
+        logger.info("HvigorDetector found %d configuration files", len(detected))
         return detected
 
     def _classify_file_type(self, file_name: str) -> str:

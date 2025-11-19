@@ -10,6 +10,9 @@ Special features:
 - Full clone for accurate version matching
 """
 
+# Dependency fetching wraps external network/process calls defensively.
+# pylint: disable=broad-exception-caught
+
 import json
 import logging
 import subprocess
@@ -25,6 +28,7 @@ try:
     import requests
     HAS_REQUESTS = True
 except ImportError:
+    requests = None
     HAS_REQUESTS = False
     logger.warning("requests library not available, OHPM registry fetching will be limited")
 
@@ -263,13 +267,14 @@ class HvigorDepFetcher(BaseDepFetcher):
             requests.RequestException: If HTTP request fails.
             ValueError: If response is not valid JSON.
         """
-        import requests
-
         # Scope names need URL encoding similar to npm registry
         encoded = quote(pkg_name, safe="@/")
         url = f"{self.REGISTRY_BASE}/{encoded}"
 
         logger.debug("Fetching OHPM metadata from %s", url)
+
+        if requests is None:
+            raise RuntimeError("requests library is required for OHPM metadata fetching")
 
         response = requests.get(url, timeout=20)
         response.raise_for_status()

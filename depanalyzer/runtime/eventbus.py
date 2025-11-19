@@ -1,8 +1,13 @@
-"""Event bus for parser→hook communication.
+"""Event bus for parser→graph wiring communication.
 
-Parsers publish structured events (e.g., target detected, module parsed),
-and hooks subscribe to these events to perform cross-domain associations.
+Parsers publish structured events (for example, targets created, sources
+attached, dependencies discovered), and dedicated graph builders or
+collectors subscribe to these events to perform cross-domain
+associations.
 """
+
+# Event handlers intentionally catch unexpected errors so one bad subscriber does not crash the bus.
+# pylint: disable=broad-exception-caught
 
 import logging
 from collections import defaultdict

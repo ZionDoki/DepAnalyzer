@@ -1,5 +1,8 @@
 """Export command implementation."""
 
+# Export command intentionally guards against unexpected exceptions to report failures cleanly.
+# pylint: disable=broad-exception-caught
+
 import json
 import logging
 from pathlib import Path
@@ -57,11 +60,13 @@ def export_command(args) -> int:
 
         # Load main graph
         graphs_to_export = []
-        graphs_to_export.append({
-            "graph_id": graph_id,
-            "cache_path": cache_path,
-            "is_main": True,
-        })
+        graphs_to_export.append(
+            {
+                "graph_id": graph_id,
+                "cache_path": cache_path,
+                "is_main": True,
+            }
+        )
 
         # If --with-deps is enabled, load all dependency graphs
         if with_deps:
@@ -75,11 +80,13 @@ def export_command(args) -> int:
                 for dep_id in dep_graph_ids:
                     dep_cache_path = registry.get_cache_path(dep_id)
                     if dep_cache_path:
-                        graphs_to_export.append({
-                            "graph_id": dep_id,
-                            "cache_path": dep_cache_path,
-                            "is_main": False,
-                        })
+                        graphs_to_export.append(
+                            {
+                                "graph_id": dep_id,
+                                "cache_path": dep_cache_path,
+                                "is_main": False,
+                            }
+                        )
                     else:
                         logger.warning("Dependency graph not found: %s", dep_id)
 
@@ -121,7 +128,6 @@ def _export_asset_artifact_mapping(graphs: List[dict], output_path: Path) -> boo
         bool: True if successful, False otherwise.
     """
     try:
-        import networkx as nx
         from networkx.readwrite import node_link_graph
 
         # Ensure output directory exists
@@ -147,13 +153,22 @@ def _export_asset_artifact_mapping(graphs: List[dict], output_path: Path) -> boo
                 node_type = attrs.get("type")
 
                 # Asset types
-                if node_type in ["asset", "code", "header", "project_header", "system_header", "source"]:
-                    asset_nodes.append({
-                        "id": node_id,
-                        "type": node_type,
-                        "name": attrs.get("name", node_id),
-                        "path": attrs.get("path") or attrs.get("src_path"),
-                    })
+                if node_type in [
+                    "asset",
+                    "code",
+                    "header",
+                    "project_header",
+                    "system_header",
+                    "source",
+                ]:
+                    asset_nodes.append(
+                        {
+                            "id": node_id,
+                            "type": node_type,
+                            "name": attrs.get("name", node_id),
+                            "path": attrs.get("path") or attrs.get("src_path"),
+                        }
+                    )
 
                 # Artifact types
                 elif node_type in [
@@ -166,12 +181,14 @@ def _export_asset_artifact_mapping(graphs: List[dict], output_path: Path) -> boo
                     "hsp",
                     "target",
                 ]:
-                    artifact_nodes.append({
-                        "id": node_id,
-                        "type": node_type,
-                        "name": attrs.get("name", node_id),
-                        "linkage_kind": attrs.get("linkage_kind"),
-                    })
+                    artifact_nodes.append(
+                        {
+                            "id": node_id,
+                            "type": node_type,
+                            "name": attrs.get("name", node_id),
+                            "linkage_kind": attrs.get("linkage_kind"),
+                        }
+                    )
 
             # Build asset->artifact mapping
             mapping = {}
@@ -204,11 +221,13 @@ def _export_asset_artifact_mapping(graphs: List[dict], output_path: Path) -> boo
                             "hsp",
                             "target",
                         ]:
-                            artifacts.append({
-                                "id": current,
-                                "type": current_type,
-                                "name": current_attrs.get("name", current),
-                            })
+                            artifacts.append(
+                                {
+                                    "id": current,
+                                    "type": current_type,
+                                    "name": current_attrs.get("name", current),
+                                }
+                            )
 
                     # Add successors to queue
                     for successor in nx_graph.successors(current):
@@ -221,13 +240,15 @@ def _export_asset_artifact_mapping(graphs: List[dict], output_path: Path) -> boo
                         "artifacts": artifacts,
                     }
 
-            all_mappings.append({
-                "graph_id": graph_data["metadata"]["graph_id"],
-                "is_main": graph_info["is_main"],
-                "asset_count": len(asset_nodes),
-                "artifact_count": len(artifact_nodes),
-                "mappings": mapping,
-            })
+            all_mappings.append(
+                {
+                    "graph_id": graph_data["metadata"]["graph_id"],
+                    "is_main": graph_info["is_main"],
+                    "asset_count": len(asset_nodes),
+                    "artifact_count": len(artifact_nodes),
+                    "mappings": mapping,
+                }
+            )
 
         # Combine into single output
         output_data = {

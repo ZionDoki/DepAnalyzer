@@ -5,6 +5,9 @@ rate limiting, and failure handling. All phases use the queue for
 execution, avoiding recursion.
 """
 
+# Worker catches unexpected task failures to prevent the coordinator from crashing.
+# pylint: disable=broad-exception-caught
+
 import logging
 import os
 import threading
@@ -130,6 +133,11 @@ class Worker:
 
             logger.debug("Enqueued task %s (priority=%s)", task.task_id, task.priority.name)
             return True
+
+    def queued_task_count(self) -> int:
+        """Return the number of queued tasks (best-effort)."""
+        with self._lock:
+            return len(self._queue)
 
     def enqueue_many(self, tasks: list[Task]) -> int:
         """Enqueue multiple tasks.

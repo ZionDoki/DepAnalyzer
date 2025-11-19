@@ -6,15 +6,22 @@ Following AGENTS.md design: each ecosystem must implement three interfaces:
 3. DepFetcher - Dependency fetching logic specific to the ecosystem
 """
 
+# Parsers catch broad exceptions to keep pipelines moving when repos have malformed inputs.
+# pylint: disable=broad-exception-caught
+
 import logging
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from depanalyzer.graph.manager import GraphManager
-from depanalyzer.graph.linking import LinkClass
+from depanalyzer.runtime.context import TransactionContext
 from depanalyzer.runtime.eventbus import Event, EventBus
+from depanalyzer.runtime.strategies import (
+    CodeDependencyContext,
+    CodeDependencyMapper,
+)
 
 logger = logging.getLogger("depanalyzer.parsers.base")
 
@@ -234,6 +241,68 @@ class BaseCodeParser(ABC):
         return any(file_path.match(glob) for glob in self.CODE_GLOBS)
 
 
+class BaseCodeDependencyMapper(CodeDependencyMapper, ABC):
+    """Base class for per-ecosystem code dependency mappers.
+
+    This base class adapts the ``CodeDependencyMapper`` protocol to the
+    ecosystem-oriented patterns used under ``parsers/``. Implementations
+    declare their ``ECOSYSTEM`` and only receive callbacks for matching
+    parse results.
+
+    Subclasses should implement :meth:`_map_for_file` to perform the
+    actual graph updates.
+    """
+
+    NAME: str = "base_code_mapper"
+    ECOSYSTEM: str = "base"
+
+    def map(self, ctx: CodeDependencyContext) -> None:  # type: ignore[override]
+        """Dispatch mapping for a single parsed source file.
+
+        This method performs common precondition checks and ensures that
+        the mapper runs only for the configured ecosystem. Subclasses
+        should not override this method; instead, implement
+        :meth:`_map_for_file`.
+        """
+        parse_result = ctx.parse_result
+        ecosystem = parse_result.get("ecosystem")
+
+        # If the parse result is ecosystem-tagged and does not match
+        # this mapper's ecosystem, skip without error.
+        if ecosystem and ecosystem != self.ECOSYSTEM:
+            return
+
+        tx: TransactionContext = ctx.transaction_ctx
+        graph = tx.graph
+        if graph is None:
+            return
+
+        self._map_for_file(
+            transaction_ctx=tx,
+            graph=graph,
+            file_path=ctx.file_path,
+            parse_result=parse_result,
+        )
+
+    @abstractmethod
+    def _map_for_file(
+        self,
+        transaction_ctx: TransactionContext,
+        graph: GraphManager,
+        file_path: Path,
+        parse_result: Dict[str, Any],
+    ) -> None:
+        """Perform ecosystem-specific mapping for a parsed source file.
+
+        Args:
+            transaction_ctx: Transaction context snapshot.
+            graph: GraphManager instance for the current transaction.
+            file_path: Path to the parsed source file.
+            parse_result: Parse result dictionary.
+        """
+        raise NotImplementedError
+
+
 class DependencySpec:
     """Specification for a dependency to be fetched.
 
@@ -377,7 +446,7 @@ class BaseDepFetcher(ABC):
         logger.debug("Git clone command: %s", " ".join(cmd))
 
         try:
-            result = subprocess.run(
+            subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -436,8 +505,6 @@ class BaseDepFetcher(ABC):
             bool: True if extraction succeeded, False otherwise.
         """
         try:
-            import shutil
-
             target_dir.mkdir(parents=True, exist_ok=True)
 
             logger.info("Extracting archive: %s", archive_path)

@@ -64,7 +64,7 @@ class PackagesCommandHandler(CommandHandler):
         return False
 
     def _handle_find_package(
-        self, args: List[str], file_path: Path, shared_graph: GraphManager
+        self, args: List[str], _file_path: Path, _shared_graph: GraphManager
     ) -> bool:
         """Handle find_package() command by publishing CMAKE_EXTERNAL_PACKAGE_REFERENCED event.
 
@@ -162,7 +162,10 @@ class PackagesCommandHandler(CommandHandler):
         return True
 
     def _handle_fetchcontent_makeavailable(
-        self, args: List[str], variable_resolver: CMakeVariableResolver, shared_graph: GraphManager
+        self,
+        args: List[str],
+        variable_resolver: CMakeVariableResolver,
+        _shared_graph: GraphManager,
     ) -> bool:
         """Handle FetchContent_MakeAvailable() command by publishing CMAKE_EXTERNAL_PACKAGE_REFERENCED events.
 

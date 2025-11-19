@@ -4,6 +4,9 @@ TransactionCoordinator manages a global ProcessPoolExecutor that executes
 Transaction instances in parallel across multiple processes, avoiding Python's GIL.
 """
 
+# Coordinator protects against worker crashes to keep the scheduler alive.
+# pylint: disable=broad-exception-caught
+
 import logging
 import multiprocessing
 import os

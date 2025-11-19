@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 
 from depanalyzer.graph.identifiers import normalize_node_id
 from depanalyzer.parsers.cpp.cmake.commands.base import CommandHandler
@@ -15,7 +15,7 @@ from depanalyzer.parsers.cpp.cmake.tokens import (
 )
 from depanalyzer.parsers.cpp.cmake.variables import CMakeVariableResolver
 from depanalyzer.graph.manager import GraphManager
-from depanalyzer.runtime.eventbus import Event, EventType, EventBus
+from depanalyzer.runtime.eventbus import Event, EventType
 
 log = logging.getLogger("depanalyzer.parsers.cpp.cmake.commands.target")
 
@@ -150,7 +150,7 @@ class TargetCommandHandler(CommandHandler):
         src_path: str,
         command_name: str,
         file_path: Path,
-        shared_graph: GraphManager,
+        _shared_graph: GraphManager,
         variable_resolver: CMakeVariableResolver,
     ) -> None:
         """Handle alias target creation by publishing CMAKE_TARGET_CREATED event.
@@ -201,7 +201,7 @@ class TargetCommandHandler(CommandHandler):
         src_path: str,
         command_name: str,
         is_imported: bool,
-        shared_graph: GraphManager,
+        _shared_graph: GraphManager,
     ) -> None:
         """Create a target node by publishing CMAKE_TARGET_CREATED event.
 
@@ -245,7 +245,7 @@ class TargetCommandHandler(CommandHandler):
         args: List[str],
         source_start_idx: int,
         file_path: Path,
-        shared_graph: GraphManager,
+        _shared_graph: GraphManager,
         variable_resolver: CMakeVariableResolver,
     ) -> None:
         """Add source file nodes and edges by publishing CMAKE_SOURCE_FILES_ADDED event.

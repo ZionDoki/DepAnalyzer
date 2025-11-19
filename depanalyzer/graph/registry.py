@@ -102,13 +102,13 @@ class GraphRegistry:
                     with cls._lock:
                         instance.cache_root = cache_root
                         instance.cache_root.mkdir(parents=True, exist_ok=True)
-                        instance._registry_file = instance.cache_root / "registry.json"
-                        instance._load_registry_unlocked()
+                        instance._registry_file = instance.cache_root / "registry.json"  # pylint: disable=protected-access
+                        instance._load_registry_unlocked()  # pylint: disable=protected-access
                 else:  # pragma: no cover - defensive fallback
                     instance.cache_root = cache_root
                     instance.cache_root.mkdir(parents=True, exist_ok=True)
-                    instance._registry_file = instance.cache_root / "registry.json"
-                    instance._load_registry_unlocked()
+                    instance._registry_file = instance.cache_root / "registry.json"  # pylint: disable=protected-access
+                    instance._load_registry_unlocked()  # pylint: disable=protected-access
                 logger.info(
                     "Reconfigured GraphRegistry cache_root to %s", instance.cache_root
                 )
@@ -154,7 +154,11 @@ class GraphRegistry:
 
     def _save_registry(self) -> None:
         """Save registry to disk with file locking for multi-process safety."""
-        with GraphRegistry._lock:
+        lock = GraphRegistry._lock
+        if lock is not None:
+            with lock:
+                self._save_registry_unlocked()
+        else:
             self._save_registry_unlocked()
 
     def register(
@@ -170,12 +174,21 @@ class GraphRegistry:
             cache_path: Path to graph cache file.
             summary: Graph summary (node counts, artifacts, etc.).
         """
-        with GraphRegistry._lock:
+        lock = GraphRegistry._lock
+        if lock is not None:
+            with lock:
+                self._registry[graph_id] = {
+                    "cache_path": str(cache_path),
+                    "summary": summary,
+                }
+                # Use unlocked version since we already hold the lock
+                self._save_registry_unlocked()
+                logger.info("Registered graph: %s (PID: %d)", graph_id, os.getpid())
+        else:  # pragma: no cover - defensive fallback
             self._registry[graph_id] = {
                 "cache_path": str(cache_path),
                 "summary": summary,
             }
-            # Use unlocked version since we already hold the lock
             self._save_registry_unlocked()
             logger.info("Registered graph: %s (PID: %d)", graph_id, os.getpid())
 
@@ -188,8 +201,12 @@ class GraphRegistry:
         Returns:
             Optional[Dict[str, Any]]: Registry entry or None if not found.
         """
-        with GraphRegistry._lock:
-            return self._registry.get(graph_id)
+        lock = GraphRegistry._lock
+        if lock is not None:
+            with lock:
+                return self._registry.get(graph_id)
+        # Fallback for missing lock
+        return self._registry.get(graph_id)
 
     def get_cache_path(self, graph_id: str) -> Optional[Path]:
         """Get cache path for a graph.
@@ -228,8 +245,11 @@ class GraphRegistry:
         Returns:
             bool: True if graph is registered.
         """
-        with GraphRegistry._lock:
-            return graph_id in self._registry
+        lock = GraphRegistry._lock
+        if lock is not None:
+            with lock:
+                return graph_id in self._registry
+        return graph_id in self._registry
 
     def list_graphs(self) -> list[str]:
         """List all registered graph IDs.
@@ -237,14 +257,23 @@ class GraphRegistry:
         Returns:
             list[str]: List of graph IDs.
         """
-        with GraphRegistry._lock:
-            return list(self._registry.keys())
+        lock = GraphRegistry._lock
+        if lock is not None:
+            with lock:
+                return list(self._registry.keys())
+        return list(self._registry.keys())
 
     def clear(self) -> None:
         """Clear registry (for testing)."""
-        with GraphRegistry._lock:
+        lock = GraphRegistry._lock
+        if lock is not None:
+            with lock:
+                self._registry.clear()
+                # Use unlocked version since we already hold the lock
+                self._save_registry_unlocked()
+                logger.warning("Registry cleared")
+        else:  # pragma: no cover - defensive fallback
             self._registry.clear()
-            # Use unlocked version since we already hold the lock
             self._save_registry_unlocked()
             logger.warning("Registry cleared")
 

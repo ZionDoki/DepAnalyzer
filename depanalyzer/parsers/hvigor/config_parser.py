@@ -1,5 +1,8 @@
 """HVigor configuration parser producing unified graph structures."""
 
+# Parser must continue operating even when individual config files are malformed.
+# pylint: disable=broad-exception-caught
+
 import logging
 from pathlib import Path
 from typing import Any, Dict
@@ -109,7 +112,7 @@ class HvigorParser(BaseParser):
 
                 # New structure (lockfileVersion 3: packages)
                 packages = config.get("packages", {}) or {}
-                for package_key, info in packages.items():
+                for info in packages.values():
                     if not isinstance(info, dict):
                         continue
 
@@ -702,7 +705,7 @@ class HvigorParser(BaseParser):
                     e,
                 )
 
-    def _process_lock_file(self, result: Dict[str, Any], config_file_id: str):
+    def _process_lock_file(self, result: Dict[str, Any], _config_file_id: str):
         """Process oh-package-lock.json5 file."""
         config_file = result.get("file")
 
@@ -785,7 +788,7 @@ class HvigorParser(BaseParser):
             )
             self.publish_parse_event(event)
 
-    def _process_hvigor_config(self, result: Dict[str, Any], config_file_id: str):
+    def _process_hvigor_config(self, result: Dict[str, Any], _config_file_id: str):
         """Process hvigor-config.json5 file."""
         plugins = result.get("plugins")
         if not plugins:

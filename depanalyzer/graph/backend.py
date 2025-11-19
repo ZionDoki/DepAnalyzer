@@ -4,7 +4,7 @@ Wraps NetworkX for easy backend replacement in the future.
 """
 
 import logging
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional
 
 import networkx as nx
 
@@ -31,6 +31,15 @@ class GraphBackend:
             nx.MultiDiGraph: Native graph instance.
         """
         return self._graph
+
+    def set_native_graph(self, graph: nx.MultiDiGraph) -> None:
+        """Replace the underlying NetworkX graph instance.
+
+        Args:
+            graph: Pre-built MultiDiGraph to install into the backend.
+        """
+        self._graph = graph
+        logger.debug("Graph backend replaced with provided graph")
 
     def add_node(self, node_id: str, **attributes: Any) -> None:
         """Add node to graph.

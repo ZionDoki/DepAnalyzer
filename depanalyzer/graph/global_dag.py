@@ -9,6 +9,8 @@ The implementation is explicitly hardened for multi-process usage:
 - Each write operation performs a load-merge-save cycle under the lock,
   ensuring that edges from different processes are not lost.
 """
+# File I/O paths deliberately catch Exception to keep cache handling resilient.
+# pylint: disable=broad-exception-caught
 
 import json
 import logging
@@ -16,7 +18,7 @@ import os
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import List, Optional, Set
 
 import networkx as nx
 
@@ -82,14 +84,14 @@ class GlobalDAG:
         # Set up cache directory and DAG file paths
         if cache_dir is None:
             cache_dir = Path.cwd() / ".depanalyzer_cache" / "graphs"
-        self._cache_dir = cache_dir
-        self._dag_file = self._cache_dir / "global_dag.json"
+        self.cache_dir = cache_dir
+        self.dag_file = self.cache_dir / "global_dag.json"
 
         # Load existing DAG if available (under lock)
         self._load()
 
         GlobalDAG._initialized = True
-        logger.info("Global DAG initialized (cache: %s)", self._dag_file)
+        logger.info("Global DAG initialized (cache: %s)", self.dag_file)
 
     @classmethod
     def get_instance(cls, cache_dir: Optional[Path] = None) -> "GlobalDAG":
@@ -115,16 +117,16 @@ class GlobalDAG:
         # operate on a previously initialized default location.
         if cache_dir is not None:
             cache_dir = Path(cache_dir)
-            current = getattr(instance, "_cache_dir", None)
+            current = getattr(instance, "cache_dir", None)
             if current is None or cache_dir != current:
-                instance._cache_dir = cache_dir
-                instance._dag_file = instance._cache_dir / "global_dag.json"
+                instance.cache_dir = cache_dir
+                instance.dag_file = instance.cache_dir / "global_dag.json"
                 logger.info(
-                    "Reconfigured GlobalDAG cache directory: %s", instance._dag_file
+                    "Reconfigured GlobalDAG cache directory: %s", instance.dag_file
                 )
                 try:
-                    with instance._acquire_lock():
-                        instance._load_unlocked()
+                    with instance._acquire_lock():  # pylint: disable=protected-access
+                        instance._load_unlocked()  # pylint: disable=protected-access
                 except Exception as e:  # pragma: no cover - defensive logging
                     logger.error("Failed to reload GlobalDAG after reconfigure: %s", e)
 
@@ -133,7 +135,7 @@ class GlobalDAG:
     def _lock_path(self) -> Path:
         """Return path to the lock file used for cross-process coordination."""
         # Use a lock file next to the DAG JSON, e.g. global_dag.json.lock
-        return self._dag_file.with_suffix(self._dag_file.suffix + ".lock")
+        return self.dag_file.with_suffix(self.dag_file.suffix + ".lock")
 
     @contextmanager
     def _acquire_lock(self, timeout: float = 30.0, poll_interval: float = 0.1):
@@ -151,7 +153,7 @@ class GlobalDAG:
         Raises:
             TimeoutError: If the lock cannot be acquired within timeout.
         """
-        self._cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         lock_path = self._lock_path()
 
         if _HAS_FCNTL:
@@ -174,14 +176,14 @@ class GlobalDAG:
                         os.O_CREAT | os.O_EXCL | os.O_RDWR,
                     )
                     break
-                except FileExistsError:
+                except FileExistsError as lock_err:
                     if time.time() - start > timeout:
                         logger.error(
                             "Timeout acquiring GlobalDAG lock: %s", lock_path
                         )
                         raise TimeoutError(
                             f"Timeout acquiring GlobalDAG lock: {lock_path}"
-                        )
+                        ) from lock_err
                     time.sleep(poll_interval)
 
             try:
@@ -208,17 +210,17 @@ class GlobalDAG:
 
         Caller must hold the file lock via _acquire_lock().
         """
-        self._cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         dag_data = {
             "nodes": list(self._dag.nodes()),
             "edges": list(self._dag.edges()),
         }
 
-        with open(self._dag_file, "w", encoding="utf-8") as f:
+        with open(self.dag_file, "w", encoding="utf-8") as f:
             json.dump(dag_data, f, indent=2)
 
-        logger.debug("Saved global DAG to %s", self._dag_file)
+        logger.debug("Saved global DAG to %s", self.dag_file)
 
     def _save(self) -> None:
         """Save DAG to disk under an exclusive file lock."""
@@ -237,11 +239,11 @@ class GlobalDAG:
         # each load reflects the latest on-disk state.
         self._dag.clear()
 
-        if not self._dag_file.exists():
-            logger.debug("No existing global DAG file found at %s", self._dag_file)
+        if not self.dag_file.exists():
+            logger.debug("No existing global DAG file found at %s", self.dag_file)
             return
 
-        with open(self._dag_file, "r", encoding="utf-8") as f:
+        with open(self.dag_file, "r", encoding="utf-8") as f:
             dag_data = json.load(f)
 
         # Reconstruct DAG from saved data
@@ -253,7 +255,7 @@ class GlobalDAG:
 
         logger.info(
             "Loaded global DAG from %s (%d nodes, %d edges)",
-            self._dag_file,
+            self.dag_file,
             len(nodes),
             len(edges),
         )

@@ -6,7 +6,7 @@ wrapper to maintain interface consistency with the existing codebase.
 
 from __future__ import annotations
 
-from typing import Iterator, Any
+from typing import Iterator
 import tree_sitter_cmake
 from tree_sitter import Language, Parser, Node, Tree
 
@@ -167,9 +167,9 @@ class CMakeParser:
             if error_node:
                 line = source_bytes[:error_node.start_byte].count(b'\n') + 1
                 col = error_node.start_byte - source_bytes.rfind(b'\n', 0, error_node.start_byte)
-                raise Exception(f"Parse error at line {line}, column {col}")
+                raise ValueError(f"Parse error at line {line}, column {col}")
             else:
-                raise Exception("Parse error in CMake file")
+                raise ValueError("Parse error in CMake file")
 
         return ParseTreeWrapper(tree, source_bytes)
 

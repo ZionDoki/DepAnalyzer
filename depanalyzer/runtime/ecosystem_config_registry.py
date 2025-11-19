@@ -6,6 +6,9 @@ GraphBuildConfig can consume when loading user configuration files
 (.toml/.json or inline config strings).
 """
 
+# Registry methods catch unexpected factory errors to avoid crashing import-time wiring.
+# pylint: disable=broad-exception-caught
+
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional
@@ -77,4 +80,3 @@ class EcosystemConfigRegistry:
 
 
 __all__ = ["EcosystemConfigRegistry"]
-

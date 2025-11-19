@@ -4,7 +4,6 @@ Each ecosystem (cpp, hvigor, npm, etc.) registers its three components here.
 """
 
 import logging
-from pathlib import Path
 from typing import Dict, List, Optional, Type
 
 from depanalyzer.parsers.base import (

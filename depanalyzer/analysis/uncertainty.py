@@ -52,7 +52,7 @@ class UncertaintyAnalyzer:
             logger.info("Uncertainty analysis disabled by config, skipping")
             return
 
-        native_graph = self._gm._backend.native_graph
+        native_graph = self._gm.backend.native_graph
         logger.info(
             "Starting uncertainty analysis on graph (%d nodes, %d edges)",
             native_graph.number_of_nodes(),

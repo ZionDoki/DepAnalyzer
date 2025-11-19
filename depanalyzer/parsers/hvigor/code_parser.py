@@ -4,6 +4,9 @@ Extracts import dependencies from ArkTS/TypeScript source files using tree-sitte
 Designed for process-pool execution.
 """
 
+# Parser intentionally swallows tree-sitter failures so the pool keeps running.
+# pylint: disable=broad-exception-caught
+
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set

@@ -99,7 +99,7 @@ registry.register(BuildInterfaceContract(
 ))
 ```
 
-**代码位置**：`depanalyzer/hooks/cmake_graph_builder.py:120-176`
+**代码位置**：`depanalyzer/parsers/cpp/cmake_graph_builder.py:120-176`
 
 ### 阶段2: JOIN - 契约匹配
 
@@ -119,7 +119,7 @@ def _phase_join(self):
 3. 合并成完整契约，设置置信度=0.85
 4. 返回匹配结果
 
-**代码位置**：`depanalyzer/hooks/contract_matcher.py:44-111`
+**代码位置**：`depanalyzer/graph/contract_registry.py:182-213`
 
 ### 阶段3: 图边创建
 

@@ -116,7 +116,7 @@ def merge_graph_with_dependencies(
             new_attrs.setdefault("orig_id", str(node_id))
             merged.add_node(new_id, **new_attrs)
 
-        for u, v, key, attrs in graph.edges(data=True, keys=True):
+        for u, v, _key, attrs in graph.edges(data=True, keys=True):
             new_u = f"{prefix}{u}" if prefix else u
             new_v = f"{prefix}{v}" if prefix else v
             new_attrs = dict(attrs or {})
@@ -198,4 +198,3 @@ def merge_graph_with_dependencies(
     }
 
     return {"metadata": merged_metadata, "graph": merged_graph_data}
-

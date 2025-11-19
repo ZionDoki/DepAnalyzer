@@ -5,6 +5,9 @@ target using 'sources' edges. Supports basic scope keywords and variable/list
 expansion for conservative, compliance-safe mapping.
 """
 
+# Command handlers keep running even if individual source items are malformed.
+# pylint: disable=broad-exception-caught
+
 from __future__ import annotations
 
 import logging
@@ -54,7 +57,9 @@ class SourcesCommandHandler(CommandHandler):
         target_tok = clean_token(args[0])
         if not target_tok:
             return False
-        target_id = normalize_node_id(file_path, self.repo_root, variable_resolver.resolve(target_tok))
+        target_id = normalize_node_id(
+            file_path, self.repo_root, variable_resolver.resolve(target_tok)
+        )
 
         # Collect candidate source tokens, skipping scope keywords
         candidates: list[str] = []
@@ -97,7 +102,11 @@ class SourcesCommandHandler(CommandHandler):
                 except (OSError, RuntimeError, ValueError):
                     # Fall back to a repo-relative label if possible
                     try:
-                        rel = (cmake_dir / resolved).resolve().relative_to(Path(self.repo_root).resolve())
+                        rel = (
+                            (cmake_dir / resolved)
+                            .resolve()
+                            .relative_to(Path(self.repo_root).resolve())
+                        )
                         source_id = f"//{rel.as_posix()}"
                     except Exception:
                         source_id = f"//{resolved}"
@@ -106,7 +115,9 @@ class SourcesCommandHandler(CommandHandler):
                 if "${" in source_id:
                     for m in CMAKE_VAR_PATTERN.finditer(source_id):
                         var_expr = m.group(0)
-                        source_id = source_id.replace(var_expr, variable_resolver.resolve(var_expr))
+                        source_id = source_id.replace(
+                            var_expr, variable_resolver.resolve(var_expr)
+                        )
 
                 source_file_data.append({"source_id": source_id, "node_type": "code"})
 
@@ -122,6 +133,10 @@ class SourcesCommandHandler(CommandHandler):
                 },
             )
             self.eventbus.publish(event)
-            log.debug("Published CMAKE_SOURCE_FILES_ADDED for %s (%d files)", target_id, len(source_file_data))
+            log.debug(
+                "Published CMAKE_SOURCE_FILES_ADDED for %s (%d files)",
+                target_id,
+                len(source_file_data),
+            )
 
         return True

@@ -6,8 +6,11 @@ managing all nodes, edges, and metadata for that analysis session.
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
+
+import networkx as nx
 
 from depanalyzer.graph.backend import GraphBackend
 from depanalyzer.graph.schema import (
@@ -55,6 +58,16 @@ class GraphManager:
         logger.info("GraphManager initialized with ID: %s", self.graph_id)
         if self.root_path:
             logger.info("Root path set to: %s", self.root_path)
+
+    @property
+    def backend(self) -> GraphBackend:
+        """Return the underlying graph backend.
+
+        Exposing the backend is useful for analysis utilities that need to
+        inspect low-level graph structures (e.g., reachability checks) while
+        keeping the attribute access explicit instead of touching _backend.
+        """
+        return self._backend
 
     def add_node(
         self,
@@ -848,11 +861,8 @@ class GraphManager:
             if nd.get("type") in artifact_types:
                 src_path = nd.get("src_path")
                 if isinstance(src_path, str) and src_path:
-                    try:
-                        import os
-                        artifact_dirs[node] = os.path.dirname(src_path.replace("\\", "/"))
-                    except Exception:
-                        pass
+                    normalized = src_path.replace("\\", "/")
+                    artifact_dirs[node] = os.path.dirname(normalized)
                 else:
                     if isinstance(node, str) and node.startswith("//"):
                         path_part = node[2:].split(":")[0]
@@ -861,7 +871,7 @@ class GraphManager:
                         )
 
         def has_part_of(n: str) -> bool:
-            for a, b, ed in graph.out_edges(n, data=True):
+            for _, _, ed in graph.out_edges(n, data=True):
                 if edge_kind(ed) == "part_of":
                     return True
             return False
@@ -1013,7 +1023,7 @@ class GraphManager:
                     c = float(d.get("confidence", 0.0))
                     if c > max_conf:
                         max_conf = c
-                except Exception:
+                except (TypeError, ValueError):
                     pass
                 df = d.get("derived_from")
                 if isinstance(df, str):
@@ -1032,7 +1042,7 @@ class GraphManager:
             for _, _, key, _ in items:
                 try:
                     self.remove_edge(u, v, key)
-                except Exception:
+                except nx.NetworkXError:
                     continue
 
             # add a fused edge
@@ -1047,57 +1057,53 @@ class GraphManager:
                 attrs["fallback_rule"] = sorted(rules)
             self.add_edge(u, v, edge_kind=k, **attrs)
 
-    def save(self, file_path: Path, format: str = "json") -> None:
+    def save(self, file_path: Path, file_format: str = "json") -> None:
         """Save graph to file.
 
         Args:
             file_path: Output file path.
-            format: Output format ('json' or 'gml').
+            file_format: Output format ('json' or 'gml').
         """
-        import networkx as nx
-
         file_path = Path(file_path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if format == "json":
+        if file_format == "json":
             data = nx.readwrite.json_graph.node_link_data(
                 self._backend.native_graph, edges="edges"
             )
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             logger.info("Graph saved to: %s", file_path)
-        elif format == "gml":
+        elif file_format == "gml":
             nx.write_gml(self._backend.native_graph, str(file_path))
             logger.info("Graph saved to: %s", file_path)
         else:
-            raise ValueError(f"Unsupported format: {format}")
+            raise ValueError(f"Unsupported format: {file_format}")
 
     @classmethod
-    def load(cls, file_path: Path, format: str = "json") -> "GraphManager":
+    def load(cls, file_path: Path, file_format: str = "json") -> "GraphManager":
         """Load graph from file.
 
         Args:
             file_path: Input file path.
-            format: Input format ('json' or 'gml').
+            file_format: Input format ('json' or 'gml').
 
         Returns:
             GraphManager: Loaded graph manager.
         """
-        import networkx as nx
-
         manager = cls()
 
-        if format == "json":
+        if file_format == "json":
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            manager._backend._graph = nx.readwrite.json_graph.node_link_graph(
-                data, edges="edges"
+            manager._backend.set_native_graph(  # pylint: disable=no-member
+                nx.readwrite.json_graph.node_link_graph(data, edges="edges")
             )
             logger.info("Graph loaded from: %s", file_path)
-        elif format == "gml":
-            manager._backend._graph = nx.read_gml(str(file_path))
+        elif file_format == "gml":
+            manager._backend.set_native_graph(nx.read_gml(str(file_path)))  # pylint: disable=no-member
             logger.info("Graph loaded from: %s", file_path)
         else:
-            raise ValueError(f"Unsupported format: {format}")
+            raise ValueError(f"Unsupported format: {file_format}")
 
         return manager

@@ -1,5 +1,8 @@
 """Scan command implementation."""
 
+# CLI must gracefully handle unexpected failures to present user-friendly errors.
+# pylint: disable=broad-exception-caught
+
 import json
 import logging
 import shutil
@@ -32,10 +35,10 @@ def scan_command(args) -> int:
     except Exception as e:
         # Print to stderr directly to ensure it's visible even if logging is broken
         print(f"\n{'=' * 70}", file=sys.stderr)
-        print(f"FATAL ERROR in scan_command:", file=sys.stderr)
+        print("FATAL ERROR in scan_command:", file=sys.stderr)
         print(f"{'=' * 70}", file=sys.stderr)
         print(f"Exception: {e}", file=sys.stderr)
-        print(f"\nTraceback:", file=sys.stderr)
+        print("\nTraceback:", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
         print(f"{'=' * 70}\n", file=sys.stderr)
         return 1
@@ -65,26 +68,23 @@ def _scan_command_impl(args) -> int:
 
     start_time = time.time()
 
-    # Resolve work directory and derived cache roots, if provided
-    from pathlib import Path as _Path
-
-    sources_root: Optional[_Path] = None
-    graphs_root: Optional[_Path] = None
-    workspace_cache_root: Optional[_Path] = None
+    sources_root: Optional[Path] = None
+    graphs_root: Optional[Path] = None
+    workspace_cache_root: Optional[Path] = None
 
     # Derive cache directory layout:
     # base_cache_dir / <source_stem> / {sources, graphs}
     try:
         base_cache_dir = (
-            _Path(cache_dir_arg).expanduser().resolve()
+            Path(cache_dir_arg).expanduser().resolve()
             if cache_dir_arg
-            else _Path(".dep_cache").resolve()
+            else Path(".dep_cache").resolve()
         )
     except Exception as e:
         logger.error("Failed to resolve cache-dir %s: %s", cache_dir_arg, e)
         return 1
 
-    source_stem = _Path(args.source).stem
+    source_stem = Path(args.source).stem
     cache_root = base_cache_dir / source_stem
 
     sources_root = cache_root / "sources"
@@ -314,12 +314,12 @@ def _scan_command_impl(args) -> int:
         # Ensure cleanup of coordinator
         try:
             TransactionCoordinator.get_instance().shutdown(wait=False)
-        except:
+        except Exception:  # pragma: no cover - best effort cleanup
             pass
 
         # Ensure cleanup of GraphRegistry manager
         try:
             from depanalyzer.graph.registry import GraphRegistry
             GraphRegistry.shutdown()
-        except:
+        except Exception:  # pragma: no cover - best effort cleanup
             pass

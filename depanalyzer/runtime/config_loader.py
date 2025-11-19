@@ -11,10 +11,11 @@ that accepts various configuration sources:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Dict, Optional, Union
+import importlib
 import json
 import logging
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
 
 from depanalyzer.runtime.graph_config import GraphBuildConfig
 
@@ -31,18 +32,17 @@ def _parse_toml(text: str) -> Dict[str, Any]:
     avoid hard dependency at import time.
     """
     try:
-        import tomllib  # type: ignore[attr-defined]
-        return tomllib.loads(text)
-    except ImportError as exc:  # pragma: no cover - Python <3.11 path
+        toml_module = importlib.import_module("tomllib")
+    except ModuleNotFoundError:
         try:
-            import tomli  # type: ignore[import-not-found]
-
-            return tomli.loads(text)
-        except Exception as inner_exc:  # noqa: BLE001
+            toml_module = importlib.import_module("tomli")
+        except ModuleNotFoundError as inner_exc:  # pragma: no cover - requires tomli
             raise RuntimeError(
                 "TOML configuration requires Python 3.11+ (tomllib) or the "
                 "`tomli` package installed"
             ) from inner_exc
+
+    return toml_module.loads(text)
 
 
 def load_graph_build_config(source: ConfigSource) -> GraphBuildConfig:
@@ -109,4 +109,3 @@ def load_graph_build_config(source: ConfigSource) -> GraphBuildConfig:
 
 
 __all__ = ["load_graph_build_config"]
-

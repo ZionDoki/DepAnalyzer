@@ -4,7 +4,7 @@ This module provides a singleton registry for managing cross-language build
 contracts throughout the analysis lifecycle. Parsers register contracts during
 parsing, and hooks match them during the JOIN phase.
 """
-from typing import List, Dict, Tuple, Optional
+from typing import Dict, List, Optional
 from collections import defaultdict
 import threading
 
@@ -34,10 +34,11 @@ class ContractRegistry:
             graph.add_edge(contract.consumer_artifact, contract.provider_artifact, ...)
     """
 
-    _instance: Optional['ContractRegistry'] = None
+    _instance: Optional["ContractRegistry"] = None
     _lock = threading.Lock()
+    _initialized: bool = False
 
-    def __new__(cls):
+    def __new__(cls) -> "ContractRegistry":
         """Ensure singleton instance."""
         if cls._instance is None:
             with cls._lock:
@@ -45,6 +46,19 @@ class ContractRegistry:
                     cls._instance = super().__new__(cls)
                     cls._instance._initialized = False
         return cls._instance
+
+    @classmethod
+    def get_instance(cls) -> "ContractRegistry":
+        """Return the singleton ContractRegistry instance.
+
+        This helper mirrors the pattern used by other global registries
+        (for example GraphRegistry) and makes it easier to depend on the
+        registry from context construction code.
+
+        Returns:
+            ContractRegistry: Global registry instance.
+        """
+        return cls()
 
     def __init__(self):
         """Initialize registry (only once)."""
@@ -139,7 +153,6 @@ class ContractRegistry:
         cfg = config or ContractMatchConfig()
 
         # Collect all incomplete contracts
-        providers = [c for c in self._contracts if c.is_provider_only]
         consumers = [c for c in self._contracts if c.is_consumer_only]
 
         # Already complete contracts (registered as complete)

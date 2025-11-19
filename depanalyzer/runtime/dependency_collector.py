@@ -1,8 +1,12 @@
-"""Dependency Collector Hook.
+"""Dependency collector for event-driven dependency discovery.
 
-Subscribes to DEPENDENCY_DISCOVERED events and collects dependency specifications
-for later resolution and fetching.
+This component subscribes to ``DEPENDENCY_DISCOVERED`` events on the
+runtime event bus and accumulates ``DependencySpec`` instances for
+later resolution during the RESOLVE_DEPS phase.
 """
+
+# Event handlers intentionally catch all exceptions to avoid disrupting transactions.
+# pylint: disable=broad-exception-caught
 
 from __future__ import annotations
 
@@ -12,18 +16,20 @@ from typing import List
 from depanalyzer.runtime.eventbus import Event, EventType, EventBus
 from depanalyzer.parsers.base import DependencySpec
 
-logger = logging.getLogger("depanalyzer.hooks.dependency_collector")
+logger = logging.getLogger("depanalyzer.runtime.dependency_collector")
 
 
 class DependencyCollector:
-    """Hook that collects dependency specifications from parser events.
+    """Collect dependency specifications from parser events.
 
-    This hook subscribes to DEPENDENCY_DISCOVERED events and maintains a list
-    of all third-party dependencies discovered during the parsing phase.
+    Parsers emit ``DEPENDENCY_DISCOVERED`` events when they encounter
+    third-party dependencies. The collector subscribes to these events
+    and stores the corresponding ``DependencySpec`` objects so that the
+    transaction can resolve them in a later phase.
     """
 
-    def __init__(self, eventbus: EventBus):
-        """Initialize the dependency collector hook.
+    def __init__(self, eventbus: EventBus) -> None:
+        """Initialize the dependency collector.
 
         Args:
             eventbus: Event bus for subscribing to events.
@@ -58,7 +64,6 @@ class DependencyCollector:
                 )
                 return
 
-            # Ensure spec is a DependencySpec instance
             if not isinstance(spec, DependencySpec):
                 logger.warning(
                     "Expected DependencySpec instance, got %s from %s",
@@ -67,7 +72,6 @@ class DependencyCollector:
                 )
                 return
 
-            # Add to discovered dependencies
             self._discovered_deps.append(spec)
             logger.debug(
                 "Collected dependency: %s/%s (ecosystem=%s) from %s",
@@ -76,24 +80,26 @@ class DependencyCollector:
                 spec.ecosystem,
                 event.source,
             )
-
-        except Exception as e:
+        except Exception as exc:
             logger.error(
                 "Failed to handle DEPENDENCY_DISCOVERED event from %s: %s",
                 event.source,
-                e,
+                exc,
                 exc_info=True,
             )
 
     def get_discovered_dependencies(self) -> List[DependencySpec]:
-        """Get all discovered dependencies.
+        """Return all discovered dependencies.
 
         Returns:
-            List[DependencySpec]: List of all discovered dependency specifications.
+            List[DependencySpec]: Collected dependency specifications.
         """
         return self._discovered_deps.copy()
 
     def clear(self) -> None:
-        """Clear all collected dependencies."""
+        """Clear all collected dependency specifications."""
         self._discovered_deps.clear()
         logger.debug("Cleared all collected dependencies")
+
+
+__all__ = ["DependencyCollector"]

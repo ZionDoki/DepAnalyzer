@@ -1,0 +1,112 @@
+"""Default strategy implementations for runtime extension points.
+
+This module adapts existing Transaction and GraphManager behavior to
+the public strategy interfaces so that callers can override them
+without changing CLI semantics.
+"""
+
+# Default strategies keep running even when hooks raise unexpected exceptions.
+# pylint: disable=broad-exception-caught
+
+from __future__ import annotations
+
+from typing import Any, Dict
+
+from depanalyzer.runtime.strategies import (
+    AssetProjectionStrategy,
+    CodeDependencyContext,
+    CodeDependencyMapper,
+    ProjectionContext,
+)
+
+
+class DefaultAssetProjectionStrategy(AssetProjectionStrategy):
+    """Default asset→artifact projection strategy.
+
+    This implementation simply forwards to the existing
+    ``GraphManager.derive_asset_artifact_projection`` method using the
+    provided ``ProjectionConfig``.
+    """
+
+    def project(self, ctx: ProjectionContext) -> None:
+        """Execute projection using the GraphManager's built-in method.
+
+        Args:
+            ctx: ProjectionContext with graph and configuration.
+        """
+        ctx.graph.derive_asset_artifact_projection(config=ctx.projection_config)
+
+
+class DefaultCodeDependencyMapper(CodeDependencyMapper):
+    """Default code dependency mapper.
+
+    This implementation preserves the behavior of
+    ``Transaction._process_code_parse_result`` by mapping parsed
+    includes/imports into graph nodes and edges for the supported
+    ecosystems (currently C/C++ and Hvigor/ArkTS).
+    """
+
+    def map(self, ctx: CodeDependencyContext) -> None:
+        """Map a single code parse result into the transaction graph.
+
+        Args:
+            ctx: CodeDependencyContext describing the parsed file.
+        """
+        tx = ctx.transaction_ctx
+        graph = tx.graph
+        if graph is None:
+            return
+
+        from depanalyzer.graph.linking import LinkClass  # local import
+        from depanalyzer.graph.manager import EdgeKind, NodeType
+        from depanalyzer.graph.schema import EdgeSpec, NodeSpec
+
+        file_path = ctx.file_path
+        parse_result: Dict[str, Any] = ctx.parse_result
+
+        parser_name = parse_result.get("parser_name") or "code_parser"
+
+        # Normalize file node ID.
+        try:
+            if graph.root_path:
+                file_node_id = graph.normalize_path(file_path)
+            else:
+                file_node_id = str(file_path)
+        except Exception:
+            file_node_id = str(file_path)
+
+        if not graph.has_node(file_node_id):
+            file_spec = NodeSpec(
+                id=file_node_id,
+                type=NodeType.CODE,
+                src_path=str(file_path.resolve()),
+                path=str(file_path),
+                name=file_path.name,
+                parser_name=parser_name,
+            )
+            graph.add_node_spec(file_spec)
+
+        includes = parse_result.get("includes")
+        if includes is None:
+            includes = parse_result.get("imports", [])
+
+        # Fallback behavior: create INCLUDE edges by path only.
+        for include_path in includes:
+            include_node_id = str(include_path)
+            edge_spec = EdgeSpec(
+                source=file_node_id,
+                target=include_node_id,
+                kind=EdgeKind.INCLUDE,
+                parser_name=parser_name,
+                attrs={
+                    "path": include_node_id,
+                    "link_class": LinkClass.SEMANTIC.value,
+                },
+            )
+            graph.add_edge_spec(edge_spec)
+
+
+__all__ = [
+    "DefaultAssetProjectionStrategy",
+    "DefaultCodeDependencyMapper",
+]

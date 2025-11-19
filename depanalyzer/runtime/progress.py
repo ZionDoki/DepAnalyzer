@@ -4,6 +4,9 @@ Provides hierarchical progress display with live panel for metrics,
 active tasks, and phase execution tracking.
 """
 
+# Progress manager shields live rendering errors so builds continue even if the UI fails.
+# pylint: disable=broad-exception-caught
+
 import logging
 import threading
 import time
@@ -12,8 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Set, Deque
 
-from rich.console import Console, Group, RenderableType
-from rich.layout import Layout
+from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import (
@@ -25,7 +27,6 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
 )
-from rich.table import Table
 from rich.text import Text
 
 from depanalyzer.runtime.lifecycle import LifecyclePhase
@@ -452,7 +453,7 @@ class ProgressManager:
                         )
                     self._live.update(renderable)
             except Exception as e:
-                logger.debug(f"Live display update error: {e}")
+                logger.debug("Live display update error: %s", e)
 
             # Sleep with early exit on stop event
             self._stop_event.wait(0.25)
@@ -515,7 +516,7 @@ class ProgressManager:
                     yield self
 
         except Exception as e:
-            logger.error(f"Progress display error: {e}")
+            logger.error("Progress display error: %s", e)
             yield self
 
     def stop(self) -> None:

@@ -6,18 +6,45 @@ maintains a single GraphManager instance, and coordinates with the global regist
 Supports multi-process execution via serialization.
 """
 
+# Transaction intentionally guards every lifecycle stage to report deterministic failures.
+# pylint: disable=broad-exception-caught
+
 import logging
 import os
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence
 
+from depanalyzer.graph.contract_registry import ContractRegistry
+from depanalyzer.graph.manager import GraphManager
+from depanalyzer.runtime.context import (
+    AnalyzeContext,
+    DetectContext,
+    ExportContext,
+    JoinContext,
+    ParseContext,
+    ResolveDepsContext,
+    TransactionContext,
+)
+from depanalyzer.runtime.default_strategies import (
+    DefaultAssetProjectionStrategy,
+    DefaultCodeDependencyMapper,
+)
 from depanalyzer.runtime.eventbus import EventBus
+from depanalyzer.runtime.graph_config import GraphBuildConfig
 from depanalyzer.runtime.lifecycle import LifecyclePhase
+from depanalyzer.runtime.strategies import (
+    AnalyzeStrategy,
+    AssetProjectionStrategy,
+    CodeDependencyContext,
+    CodeDependencyMapper,
+    JoinStrategy,
+    LifecycleHook,
+    ProjectionContext,
+)
 from depanalyzer.runtime.worker import Task, TaskPriority, Worker
 from depanalyzer.runtime.workspace import Workspace
-from depanalyzer.runtime.graph_config import GraphBuildConfig
 
 if TYPE_CHECKING:
     from depanalyzer.runtime.coordinator import TransactionResult
@@ -52,6 +79,11 @@ class Transaction:
         dep_cache_root: Optional[Path] = None,
         workspace_cache_root: Optional[Path] = None,
         graph_build_config: Optional[GraphBuildConfig] = None,
+        lifecycle_hooks: Optional[Sequence[LifecycleHook]] = None,
+        code_dependency_mappers: Optional[Mapping[str, CodeDependencyMapper]] = None,
+        asset_projection_strategy: Optional[AssetProjectionStrategy] = None,
+        join_strategies: Optional[Sequence[JoinStrategy]] = None,
+        analyze_strategies: Optional[Sequence[AnalyzeStrategy]] = None,
     ) -> None:
         """Initialize transaction.
 
@@ -73,6 +105,13 @@ class Transaction:
                 If None, defaults to .depanalyzer_cache/workspaces.
             graph_build_config: Optional GraphBuildConfig controlling how the
                 dependency construct graph is built across all lifecycle phases.
+            lifecycle_hooks: Optional lifecycle hooks invoked before/after phases.
+            code_dependency_mappers: Optional mapping from ecosystem name to
+                CodeDependencyMapper. When omitted, a default mapper is used.
+            asset_projection_strategy: Optional AssetProjectionStrategy to use
+                during ANALYZE. Defaults to an adapter over GraphManager.
+            join_strategies: Optional additional JOIN phase strategies.
+            analyze_strategies: Optional additional ANALYZE phase strategies.
         """
         self.transaction_id = transaction_id or str(uuid.uuid4())
         self.source = source
@@ -88,28 +127,68 @@ class Transaction:
             graph_build_config or GraphBuildConfig.default()
         )
 
-        # Cache roots (can be overridden by CLI work-dir)
+        # Cache roots (can be overridden by CLI work-dir).
         self.graph_cache_root = Path(graph_cache_root) if graph_cache_root else None
         self.dep_cache_root = Path(dep_cache_root) if dep_cache_root else None
         self.workspace_cache_root = (
             Path(workspace_cache_root) if workspace_cache_root else None
         )
 
-        # Core components (will be initialized in __setstate__ for deserialization)
+        # Core components (will be initialized in __setstate__ for deserialization).
         self.workspace = Workspace(source, cache_root=self.workspace_cache_root)
         self.worker: Optional[Worker] = None
         self.eventbus: Optional[EventBus] = None
 
-        # Progress tracking
+        # Progress tracking.
         self._progress_manager = progress_manager
 
-        # Will be initialized during run
+        # Strategies and hooks.
+        self._lifecycle_hooks: List[LifecycleHook] = list(lifecycle_hooks or [])
+        self._code_dependency_mappers: Dict[str, CodeDependencyMapper] = dict()
+        if code_dependency_mappers is not None:
+            self._code_dependency_mappers.update(code_dependency_mappers)
+        else:
+            # Install built-in per-ecosystem mappers by default so that
+            # behavior matches the pre-strategy implementation.
+            try:
+                from depanalyzer.parsers.cpp.code_dependency_mapper import (
+                    CppCodeDependencyMapper,
+                )
+                from depanalyzer.parsers.hvigor.code_dependency_mapper import (
+                    HvigorCodeDependencyMapper,
+                )
+
+                self._code_dependency_mappers.setdefault(
+                    "cpp", CppCodeDependencyMapper()
+                )
+                self._code_dependency_mappers.setdefault(
+                    "hvigor", HvigorCodeDependencyMapper()
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to initialize built-in code dependency mappers",
+                    exc_info=True,
+                )
+
+        self._default_code_dependency_mapper: CodeDependencyMapper = (
+            DefaultCodeDependencyMapper()
+        )
+        self._asset_projection_strategy: AssetProjectionStrategy = (
+            asset_projection_strategy or DefaultAssetProjectionStrategy()
+        )
+        self._join_strategies: List[JoinStrategy] = list(join_strategies or [])
+        self._analyze_strategies: List[AnalyzeStrategy] = list(analyze_strategies or [])
+        self._detected_targets: Dict[str, List[Path]] = {}
+
+        # Will be initialized during run.
         self._graph_manager = None
         self._dependency_collector = None
-        self._current_phase = None
+        self._current_phase: Optional[LifecyclePhase] = None
         self._start_time = 0.0
 
-        logger.info("Transaction %s initialized for source: %s", self.transaction_id, source)
+        logger.info(
+            "Transaction %s initialized for source: %s", self.transaction_id, source
+        )
         if parent_transaction_id:
             logger.info("  Parent transaction: %s", parent_transaction_id)
 
@@ -170,16 +249,74 @@ class Transaction:
 
             # Initialize DependencyCollector hook after eventbus is created
             if self._dependency_collector is None:
-                from depanalyzer.hooks.dependency_collector import DependencyCollector
+                from depanalyzer.runtime.dependency_collector import DependencyCollector
+
                 self._dependency_collector = DependencyCollector(self.eventbus)
                 logger.debug("DependencyCollector initialized")
 
         return self.eventbus
 
+    # ------------------------------------------------------------------
+    # Context construction and lifecycle hooks
+    # ------------------------------------------------------------------
+
+    def _make_base_context(self) -> TransactionContext:
+        """Build a TransactionContext snapshot for the current state.
+
+        Returns:
+            TransactionContext: Snapshot of transaction-wide state.
+        """
+        return TransactionContext(
+            transaction_id=self.transaction_id,
+            graph_id=self.graph_id,
+            source=self.source,
+            workspace=self.workspace,
+            graph=self._graph_manager,
+            graph_build_config=self._graph_build_config,
+            eventbus=self._ensure_eventbus(),
+            contract_registry=ContractRegistry.get_instance(),
+            progress_manager=self._progress_manager,
+            enable_dependency_resolution=self.enable_dependency_resolution,
+            max_dependency_depth=self.max_dependency_depth,
+            max_dependencies=self.max_dependencies,
+            current_phase=self._current_phase,
+        )
+
+    def _run_lifecycle_hooks_before(self, ctx: TransactionContext) -> None:
+        """Run before-phase lifecycle hooks for the current phase.
+
+        Args:
+            ctx: Context snapshot for this phase.
+        """
+        for hook in self._lifecycle_hooks:
+            if hook.phase == self._current_phase:
+                try:
+                    hook.before(ctx)
+                except Exception:
+                    logger.exception("Lifecycle hook %r before() failed", hook)
+
+    def _run_lifecycle_hooks_after(self, ctx: TransactionContext) -> None:
+        """Run after-phase lifecycle hooks for the current phase.
+
+        Args:
+            ctx: Context snapshot for this phase.
+        """
+        for hook in self._lifecycle_hooks:
+            if hook.phase == self._current_phase:
+                try:
+                    hook.after(ctx)
+                except Exception:
+                    logger.exception("Lifecycle hook %r after() failed", hook)
+
     def _phase_acquire(self) -> None:
         """Phase A: Acquire source code."""
         logger.info("=== Phase: %s ===", LifecyclePhase.ACQUIRE)
         self._current_phase = LifecyclePhase.ACQUIRE
+
+        # Hooks: before ACQUIRE.
+        base_ctx = self._make_base_context()
+        acquire_ctx = TransactionContext(**vars(base_ctx))
+        self._run_lifecycle_hooks_before(acquire_ctx)
 
         # Start progress tracking for this phase
         phase_id = None
@@ -202,10 +339,24 @@ class Transaction:
         if self._progress_manager and phase_id:
             self._progress_manager.complete_phase(phase_id)
 
+        # Hooks: after ACQUIRE.
+        base_ctx = self._make_base_context()
+        acquire_ctx = TransactionContext(**vars(base_ctx))
+        self._run_lifecycle_hooks_after(acquire_ctx)
+
     def _phase_detect(self) -> None:
         """Phase B: Parallel detection of targets."""
         logger.info("=== Phase: %s ===", LifecyclePhase.DETECT)
         self._current_phase = LifecyclePhase.DETECT
+
+        # Prepare context and run hooks.
+        base_ctx = self._make_base_context()
+        self._detected_targets: Dict[str, List[Path]] = {}
+        detect_ctx = DetectContext(
+            **vars(base_ctx),
+            detected_targets=self._detected_targets,
+        )
+        self._run_lifecycle_hooks_before(detect_ctx)
 
         from depanalyzer.parsers.registry import EcosystemRegistry
 
@@ -228,9 +379,6 @@ class Transaction:
                 total=len(ecosystems),
                 description=f"Detecting targets ({len(ecosystems)} ecosystems)",
             )
-
-        # Store detected targets for parse phase
-        self._detected_targets: Dict[str, List[Path]] = {}
 
         # Create detection tasks
         worker = self._ensure_worker()
@@ -257,7 +405,12 @@ class Transaction:
                     return {"ecosystem": eco, "targets": targets, "success": True}
                 except Exception as e:
                     logger.error("Detector %s failed: %s", eco, e)
-                    return {"ecosystem": eco, "targets": [], "success": False, "error": str(e)}
+                    return {
+                        "ecosystem": eco,
+                        "targets": [],
+                        "success": False,
+                        "error": str(e),
+                    }
 
             task = Task(
                 task_id=f"detect_{ecosystem}",
@@ -267,7 +420,7 @@ class Transaction:
             worker.enqueue(task)
 
         # Log task count before execution
-        task_count = len(worker._queue)
+        task_count = worker.queued_task_count()  # pylint: disable=no-member
         logger.info("Enqueued %d detection tasks for execution", task_count)
 
         # Execute all detection tasks and collect results
@@ -276,18 +429,22 @@ class Transaction:
 
         # Process results and store detected targets
         completed_count = 0
-        for task_id, result in results.items():
+        for _task_id, result in results.items():
             if result.success and result.result:
                 ecosystem = result.result.get("ecosystem")
                 targets = result.result.get("targets", [])
                 if ecosystem and targets:
                     self._detected_targets[ecosystem] = targets
-                    logger.info("Stored %d targets for ecosystem: %s", len(targets), ecosystem)
+                    logger.info(
+                        "Stored %d targets for ecosystem: %s", len(targets), ecosystem
+                    )
 
             completed_count += 1
             # Update progress after each ecosystem
             if self._progress_manager and phase_id:
-                total_targets = sum(len(targets) for targets in self._detected_targets.values())
+                total_targets = sum(
+                    len(targets) for targets in self._detected_targets.values()
+                )
                 self._progress_manager.update_phase(
                     phase_id,
                     completed=completed_count,
@@ -295,12 +452,23 @@ class Transaction:
                 )
 
         total_targets = sum(len(targets) for targets in self._detected_targets.values())
-        logger.info("Detection phase completed: %d ecosystems, %d total targets",
-                    len(self._detected_targets), total_targets)
+        logger.info(
+            "Detection phase completed: %d ecosystems, %d total targets",
+            len(self._detected_targets),
+            total_targets,
+        )
 
         # Complete phase
         if self._progress_manager and phase_id:
             self._progress_manager.complete_phase(phase_id)
+
+        # Hooks: after DETECT.
+        after_base_ctx = self._make_base_context()
+        after_detect_ctx = DetectContext(
+            **vars(after_base_ctx),
+            detected_targets=self._detected_targets,
+        )
+        self._run_lifecycle_hooks_after(after_detect_ctx)
 
     def _phase_parse(self) -> None:
         """Phase C: Parallel parsing of detected targets.
@@ -312,10 +480,18 @@ class Transaction:
         logger.info("=== Phase: %s ===", LifecyclePhase.PARSE)
         self._current_phase = LifecyclePhase.PARSE
 
+        # Hooks: before PARSE (detected targets may have been populated).
+        base_ctx = self._make_base_context()
+        detected_targets: Dict[str, List[Path]] = getattr(self, "_detected_targets", {})
+        parse_ctx = ParseContext(
+            **vars(base_ctx),
+            detected_targets=detected_targets,
+            code_files_to_parse={},
+        )
+        self._run_lifecycle_hooks_before(parse_ctx)
+
         # Initialize GraphManager if not already done
         if self._graph_manager is None:
-            from depanalyzer.graph.manager import GraphManager
-
             # For third-party dependency transactions, use a namespace prefix
             # based on the workspace root directory name so that normalized
             # node IDs remain globally unique and clearly identify the
@@ -342,16 +518,26 @@ class Transaction:
 
         # Initialize dependency collector to collect DEPENDENCY_DISCOVERED events
         if self._dependency_collector is None:
-            from depanalyzer.hooks.dependency_collector import DependencyCollector
+            from depanalyzer.runtime.dependency_collector import DependencyCollector
+
             eventbus = self._ensure_eventbus()
             self._dependency_collector = DependencyCollector(eventbus)
             logger.info("Initialized DependencyCollector")
 
-        if not hasattr(self, '_detected_targets') or not self._detected_targets:
+        if not hasattr(self, "_detected_targets") or not self._detected_targets:
             logger.info("No targets detected, skipping parse phase")
+            # Hooks: after PARSE (no targets).
+            after_base_ctx = self._make_base_context()
+            after_ctx = ParseContext(
+                **vars(after_base_ctx),
+                detected_targets=getattr(self, "_detected_targets", {}),
+                code_files_to_parse={},
+            )
+            self._run_lifecycle_hooks_after(after_ctx)
             return
 
         from depanalyzer.parsers.registry import EcosystemRegistry
+
         registry = EcosystemRegistry.get_instance()
 
         # Calculate total targets for progress tracking
@@ -383,9 +569,14 @@ class Transaction:
                 logger.warning("No parser registered for ecosystem: %s", ecosystem)
                 continue
 
-            logger.info("Creating parse tasks for ecosystem %s: %d targets", ecosystem, len(targets))
+            logger.info(
+                "Creating parse tasks for ecosystem %s: %d targets",
+                ecosystem,
+                len(targets),
+            )
 
             for target_path in targets:
+
                 def parse_task(eco=ecosystem, p_cls=parser_class, tgt=target_path):
                     """Config parsing task wrapper."""
                     try:
@@ -401,13 +592,17 @@ class Transaction:
                         # Discover code files from config parser
                         code_files = parser.discover_code_files()
 
-                        logger.info("Parser %s processed %s, discovered %d code files",
-                                   eco, tgt.name, len(code_files))
+                        logger.info(
+                            "Parser %s processed %s, discovered %d code files",
+                            eco,
+                            tgt.name,
+                            len(code_files),
+                        )
                         return {
                             "ecosystem": eco,
                             "target": str(tgt),
                             "code_files": code_files,
-                            "success": True
+                            "success": True,
                         }
                     except Exception as e:
                         logger.error("Parser %s failed for %s: %s", eco, tgt, e)
@@ -416,7 +611,7 @@ class Transaction:
                             "target": str(tgt),
                             "code_files": [],
                             "success": False,
-                            "error": str(e)
+                            "error": str(e),
                         }
 
                 # Use a stable, path-specific task_id to avoid deduplicating
@@ -439,7 +634,7 @@ class Transaction:
 
         # Collect discovered code files and update progress
         config_parsed = 0
-        for task_id, result in results.items():
+        for _task_id, result in results.items():
             config_parsed += 1
             if result.success and result.result:
                 ecosystem = result.result.get("ecosystem")
@@ -459,8 +654,12 @@ class Transaction:
 
         total_config_success = sum(1 for r in results.values() if r.success)
         total_code_files = sum(len(files) for files in code_files_to_parse.values())
-        logger.info("Stage 1 completed: %d/%d config files parsed, %d code files discovered",
-                   total_config_success, len(results), total_code_files)
+        logger.info(
+            "Stage 1 completed: %d/%d config files parsed, %d code files discovered",
+            total_config_success,
+            len(results),
+            total_code_files,
+        )
 
         # Stage 2: Code parsing
         if not code_files_to_parse:
@@ -488,7 +687,6 @@ class Transaction:
             self._progress_manager.complete_phase(phase_id_tmp)
 
         from depanalyzer.runtime.code_parser_pool import CodeParserPool
-        from concurrent.futures import as_completed
 
         code_pool = CodeParserPool.get_instance()
 
@@ -501,7 +699,9 @@ class Transaction:
                 ecosystem,
             )
             code_cfg = self._graph_build_config.get_code_parser_config(ecosystem)
-            batch_futures = code_pool.submit_batch(file_paths, ecosystem, config=code_cfg)
+            batch_futures = code_pool.submit_batch(
+                file_paths, ecosystem, config=code_cfg
+            )
             futures_list.extend(batch_futures)
 
         # Wait for code parsing to complete and collect results
@@ -519,8 +719,11 @@ class Transaction:
                 skipped += 1
             elif parse_result.get("error"):
                 failed += 1
-                logger.warning("Code parsing failed for %s: %s",
-                             file_path, parse_result.get("error"))
+                logger.warning(
+                    "Code parsing failed for %s: %s",
+                    file_path,
+                    parse_result.get("error"),
+                )
             else:
                 # Add code file node and dependencies to graph
                 self._process_code_parse_result(file_path, parse_result)
@@ -541,13 +744,35 @@ class Transaction:
                         edge_count=self._graph_manager.edge_count(),
                     )
 
-        logger.info("Stage 2 completed: %d successful, %d skipped, %d failed",
-                   successful, skipped, failed)
-        logger.info("Parse phase completed: graph has %d nodes, %d edges",
-                   self._graph_manager.node_count(), self._graph_manager.edge_count())
+        logger.info(
+            "Stage 2 completed: %d successful, %d skipped, %d failed",
+            successful,
+            skipped,
+            failed,
+        )
+        logger.info(
+            "Parse phase completed: graph has %d nodes, %d edges",
+            self._graph_manager.node_count(),
+            self._graph_manager.edge_count(),
+        )
 
-    def _process_code_parse_result(self, file_path: Path, parse_result: Dict[str, Any]) -> None:
+        # Hooks: after PARSE.
+        after_base_ctx = self._make_base_context()
+        after_ctx = ParseContext(
+            **vars(after_base_ctx),
+            detected_targets=self._detected_targets,
+            code_files_to_parse=code_files_to_parse,
+        )
+        self._run_lifecycle_hooks_after(after_ctx)
+
+    def _process_code_parse_result(
+        self, file_path: Path, parse_result: Dict[str, Any]
+    ) -> None:
         """Process code parse result and update graph.
+
+        The default implementation forwards to the configured
+        CodeDependencyMapper. This preserves the public method as a
+        stable entry point while making the mapping logic pluggable.
 
         Args:
             file_path: Path to parsed code file.
@@ -556,233 +781,24 @@ class Transaction:
         if not self._graph_manager:
             return
 
-        from depanalyzer.graph.manager import EdgeKind, NodeType
-        from depanalyzer.graph.schema import NodeSpec, EdgeSpec
-        from depanalyzer.graph.linking import LinkClass
-        from depanalyzer.graph.identifiers import (
-            make_include_placeholder_id,
-            make_system_header_id,
+        tx_ctx = self._make_base_context()
+        code_ctx = CodeDependencyContext(
+            transaction_ctx=tx_ctx,
+            file_path=file_path,
+            parse_result=parse_result,
         )
 
         ecosystem = parse_result.get("ecosystem")
-        parser_name = parse_result.get("parser_name") or (
-            f"{ecosystem}_code" if ecosystem else "code_parser"
-        )
+        mapper: CodeDependencyMapper
+        if ecosystem and ecosystem in self._code_dependency_mappers:
+            mapper = self._code_dependency_mappers[ecosystem]
+        else:
+            mapper = self._default_code_dependency_mapper
 
-        # Normalize file node ID to //relative form when possible
         try:
-            if self._graph_manager.root_path:
-                file_node_id = self._graph_manager.normalize_path(file_path)
-            else:
-                file_node_id = str(file_path)
+            mapper.map(code_ctx)
         except Exception:
-            file_node_id = str(file_path)
-
-        # Ensure file node exists as a CODE node using the structured schema.
-        if not self._graph_manager.has_node(file_node_id):
-            file_spec = NodeSpec(
-                id=file_node_id,
-                type=NodeType.CODE,
-                src_path=str(file_path.resolve()),
-                path=str(file_path),
-                name=file_path.name,
-                parser_name=parser_name,
-            )
-            self._graph_manager.add_node_spec(file_spec)
-
-        # Determine dependencies from parse result
-        includes = parse_result.get("includes")
-        if includes is None:
-            includes = parse_result.get("imports", [])
-
-        # C/C++ ecosystem: map includes to headers with canonical IDs, using CMake
-        # configuration (target membership + include_dirs) as the primary source
-        # of truth.
-        if ecosystem == "cpp":
-            system_headers = {
-                # C standard headers
-                "stdio.h",
-                "stdlib.h",
-                "string.h",
-                "stdint.h",
-                "unistd.h",
-                "fcntl.h",
-                "sys/stat.h",
-                "errno.h",
-                # C++ standard library headers commonly seen in native code
-                "cstring",
-                "cstdint",
-            }
-
-            # Discover owning targets and their include_dirs from the skeleton graph
-            owning_targets: list[str] = []
-            include_dirs_for_targets: dict[str, list[str]] = {}
-            if self._graph_manager:
-                graph = self._graph_manager._backend.native_graph  # type: ignore[attr-defined]
-                nodes_data = dict(graph.nodes(data=True))
-
-                for u, v, ed in graph.in_edges(file_node_id, data=True):
-                    kind = ed.get("kind") or ed.get("label") or ed.get("type")
-                    if kind == EdgeKind.SOURCES.value or kind == "sources":
-                        owning_targets.append(u)
-
-                for tgt in owning_targets:
-                    nd = nodes_data.get(tgt, {}) or {}
-                    incs = nd.get("include_dirs") or []
-                    if isinstance(incs, list):
-                        # Normalize to posix-style repo-relative paths
-                        include_dirs_for_targets[tgt] = [
-                            i.replace("\\", "/").lstrip("/")
-                            for i in incs
-                            if isinstance(i, str)
-                        ]
-
-            repo_root = getattr(self.workspace, "root_path", None)
-
-            for include_path in includes:
-                include_str = (
-                    str(include_path).replace("\\", "/")
-                    if not isinstance(include_path, Path)
-                    else str(include_path).replace("\\", "/")
-                )
-
-                # 1) System headers (independent of build config)
-                if include_str.startswith("/") or include_str in system_headers:
-                    header_id = make_system_header_id(include_str)
-                    header_type = NodeType.SYSTEM_HEADER
-                    header_src: Path | None = None
-                else:
-                    header_id = None
-                    header_type = NodeType.CODE
-                    header_src = None
-
-                    # 2) Language-level relative includes: resolve against source dir
-                    try:
-                        candidate = (file_path.parent / include_str).resolve()
-                    except (OSError, ValueError):
-                        candidate = None
-
-                    if candidate and candidate.is_file():
-                        header_src = candidate
-                    else:
-                        # 3) Use CMake include_dirs as the primary configuration-driven
-                        # search space for project headers.
-                        if isinstance(repo_root, Path):
-                            for tgt, inc_dirs in include_dirs_for_targets.items():
-                                for inc in inc_dirs:
-                                    base_dir = (repo_root / inc).resolve()
-                                    cand = (base_dir / include_str).resolve()
-                                    if cand.is_file():
-                                        header_src = cand
-                                        break
-                                if header_src:
-                                    break
-
-                    # 4) Still not resolved: fall back to a project-relative
-                    # include placeholder and let later projection logic
-                    # (include_dir_resolve) decide where it lands.
-                    if header_src is None:
-                        header_id = make_include_placeholder_id(include_str)
-                        header_type = NodeType.PROJECT_HEADER
-
-                # Derive header_id for resolved headers when src_path is known
-                if header_id is None and header_src is not None:
-                    try:
-                        if self._graph_manager.root_path:
-                            header_id = self._graph_manager.normalize_path(header_src)
-                        else:
-                            header_id = str(header_src)
-                    except Exception:
-                        header_id = str(header_src)
-
-                # Ensure header node exists with proper type
-                if not self._graph_manager.has_node(header_id):
-                    header_spec = NodeSpec(
-                        id=header_id,
-                        type=header_type,
-                        src_path=str(header_src) if header_src is not None else None,
-                        name=include_str.split("/")[-1],
-                        parser_name=parser_name,
-                    )
-                    self._graph_manager.add_node_spec(header_spec)
-
-                # Connect code file -> header with semantic "include" edge
-                edge_spec = EdgeSpec(
-                    source=file_node_id,
-                    target=header_id,
-                    kind=EdgeKind.INCLUDE,
-                    parser_name=parser_name,
-                    attrs={"link_class": LinkClass.SEMANTIC.value},
-                )
-                self._graph_manager.add_edge_spec(edge_spec)
-
-            return
-
-        # Hvigor/ArkTS ecosystem: treat results as import relationships
-        if ecosystem == "hvigor":
-            for include_path in includes:
-                if isinstance(include_path, Path):
-                    target_path = include_path
-                    target_path_str = str(include_path)
-                else:
-                    target_path = Path(str(include_path))
-                    target_path_str = str(include_path)
-
-                try:
-                    if self._graph_manager.root_path and target_path.is_absolute():
-                        include_node_id = self._graph_manager.normalize_path(
-                            target_path
-                        )
-                    elif self._graph_manager.root_path:
-                        include_node_id = self._graph_manager.normalize_path(
-                            (file_path.parent / target_path).resolve()
-                        )
-                    else:
-                        include_node_id = target_path_str
-                except Exception:
-                    include_node_id = target_path_str
-
-                if not self._graph_manager.has_node(include_node_id):
-                    # Treat imported ArkTS/TS/JS as code nodes
-                    include_spec = NodeSpec(
-                        id=include_node_id,
-                        type=NodeType.CODE,
-                        path=target_path_str,
-                        src_path=str(target_path.resolve())
-                        if target_path.exists()
-                        else target_path_str,
-                        name=target_path.name,
-                        parser_name=parser_name,
-                    )
-                    self._graph_manager.add_node_spec(include_spec)
-
-                edge_spec = EdgeSpec(
-                    source=file_node_id,
-                    target=include_node_id,
-                    kind=EdgeKind.IMPORT,
-                    parser_name=parser_name,
-                    attrs={"link_class": LinkClass.SEMANTIC.value},
-                )
-                self._graph_manager.add_edge_spec(edge_spec)
-
-            return
-
-        # Fallback for other ecosystems: keep behavior but standardize edge kind
-        for include_path in includes:
-            include_node_id = (
-                str(include_path) if isinstance(include_path, Path) else include_path
-            )
-            edge_spec = EdgeSpec(
-                source=file_node_id,
-                target=include_node_id,
-                kind=EdgeKind.INCLUDE,
-                parser_name=parser_name,
-                attrs={
-                    "path": include_node_id,
-                    "link_class": LinkClass.SEMANTIC.value,
-                },
-            )
-            self._graph_manager.add_edge_spec(edge_spec)
+            logger.exception("CodeDependencyMapper failed for file %s", file_path)
 
     def _phase_resolve_deps(self) -> None:
         """Phase D: Unified dependency resolution.
@@ -792,13 +808,39 @@ class Transaction:
         logger.info("=== Phase: %s ===", LifecyclePhase.RESOLVE_DEPS)
         self._current_phase = LifecyclePhase.RESOLVE_DEPS
 
+        # Hooks: before RESOLVE_DEPS.
+        base_ctx = self._make_base_context()
+        before_ctx = ResolveDepsContext(
+            **vars(base_ctx),
+            resolved_deps=[],
+            dependency_specs=[],
+        )
+        self._run_lifecycle_hooks_before(before_ctx)
+
         if not self.enable_dependency_resolution:
-            logger.info("Dependency resolution is disabled for this transaction, skipping phase")
+            logger.info(
+                "Dependency resolution is disabled for this transaction, skipping phase"
+            )
+            # Hooks: after RESOLVE_DEPS with no work performed.
+            after_base_ctx = self._make_base_context()
+            after_ctx = ResolveDepsContext(
+                **vars(after_base_ctx),
+                resolved_deps=[],
+                dependency_specs=[],
+            )
+            self._run_lifecycle_hooks_after(after_ctx)
             return
 
         # Check if we've reached max depth
         if self.max_dependency_depth <= 0:
             logger.info("Max dependency depth reached, skipping dependency resolution")
+            after_base_ctx = self._make_base_context()
+            after_ctx = ResolveDepsContext(
+                **vars(after_base_ctx),
+                resolved_deps=[],
+                dependency_specs=[],
+            )
+            self._run_lifecycle_hooks_after(after_ctx)
             return
 
         # Discover dependencies (returns List[DependencySpec])
@@ -828,6 +870,13 @@ class Transaction:
                         e,
                         exc_info=True,
                     )
+            after_base_ctx = self._make_base_context()
+            after_ctx = ResolveDepsContext(
+                **vars(after_base_ctx),
+                resolved_deps=[],
+                dependency_specs=dep_specs,
+            )
+            self._run_lifecycle_hooks_after(after_ctx)
             return
 
         logger.info("Found %d dependencies to resolve", len(dep_specs))
@@ -837,7 +886,7 @@ class Transaction:
                 "Applying max dependency limit: %d of %d",
                 self.max_dependencies,
                 len(dep_specs),
-                )
+            )
             dep_specs = dep_specs[: self.max_dependencies]
 
         # Start progress tracking for this phase
@@ -853,8 +902,7 @@ class Transaction:
         from depanalyzer.runtime.dependency_resolver import resolve_dependencies
 
         resolved_deps = resolve_dependencies(
-            dep_specs,
-            cache_root=self.dep_cache_root or Path(".depanalyzer_cache/deps")
+            dep_specs, cache_root=self.dep_cache_root or Path(".depanalyzer_cache/deps")
         )
 
         # Filter out failed dependencies
@@ -866,9 +914,7 @@ class Transaction:
         # package version and repository, which would otherwise create a
         # spurious self-loop in the GlobalDAG.
         try:
-            from pathlib import Path as _Path
-
-            workspace_root = _Path(self.workspace.root_path).resolve()
+            workspace_root = Path(self.workspace.root_path).resolve()
         except Exception:  # pragma: no cover - defensive
             workspace_root = None
 
@@ -881,7 +927,7 @@ class Transaction:
                     continue
 
                 try:
-                    dep_root = _Path(source).resolve()
+                    dep_root = Path(source).resolve()
                 except Exception:
                     filtered_successful.append(dep)
                     continue
@@ -908,7 +954,7 @@ class Transaction:
         logger.info(
             "Successfully fetched %d/%d dependencies",
             len(successful_deps),
-            len(resolved_deps)
+            len(resolved_deps),
         )
 
         # Import coordinator
@@ -945,8 +991,6 @@ class Transaction:
 
         # Wait for all child transactions to complete
         logger.info("Waiting for %d child transactions to complete", len(futures))
-
-        from concurrent.futures import as_completed
 
         completed_count = 0
         failed_count = 0
@@ -1029,6 +1073,15 @@ class Transaction:
         if self._progress_manager and phase_id:
             self._progress_manager.complete_phase(phase_id)
 
+        # Hooks: after RESOLVE_DEPS with resolved dependencies.
+        after_base_ctx = self._make_base_context()
+        after_ctx = ResolveDepsContext(
+            **vars(after_base_ctx),
+            resolved_deps=resolved_deps,
+            dependency_specs=dep_specs,
+        )
+        self._run_lifecycle_hooks_after(after_ctx)
+
         self._emit_progress_event(
             kind="phase_complete",
             phase=LifecyclePhase.RESOLVE_DEPS,
@@ -1091,7 +1144,8 @@ class Transaction:
                         ecosystem=node_attrs.get("ecosystem", "unknown"),
                         name=node_attrs.get("name", node_id),
                         version=node_attrs.get("version"),
-                        source_url=node_attrs.get("git_repository") or node_attrs.get("source_url"),
+                        source_url=node_attrs.get("git_repository")
+                        or node_attrs.get("source_url"),
                     )
                     graph_deps.append(dep_spec)
 
@@ -1109,7 +1163,9 @@ class Transaction:
         logger.info("Total unique dependencies discovered: %d", len(result))
         return result
 
-    def _link_dependency_graph(self, child_graph_id: str, dep_info: Dict[str, Any]) -> None:
+    def _link_dependency_graph(
+        self, child_graph_id: str, dep_info: Dict[str, Any]
+    ) -> None:
         """Link a child dependency graph to the current graph.
 
         This method:
@@ -1134,10 +1190,9 @@ class Transaction:
         source_root = dep_info.get("source")
         if source_root:
             try:
-                from pathlib import Path as _Path
                 import json as _json
 
-                meta_path = _Path(source_root) / ".hvigor_meta.json"
+                meta_path = Path(source_root) / ".hvigor_meta.json"
                 if meta_path.exists():
                     with meta_path.open("r", encoding="utf-8") as f:
                         meta = _json.load(f)
@@ -1219,11 +1274,7 @@ class Transaction:
             )
 
     def _phase_join(self) -> None:
-        """Phase E: Hook execution for cross-domain associations.
-
-        This phase executes all registered hooks to establish cross-language
-        and cross-ecosystem connections (e.g., Hvigor ↔ CMake).
-        """
+        """Phase E: Join phase for hooks and cross-domain wiring."""
         logger.info("=== Phase: %s ===", LifecyclePhase.JOIN)
         self._current_phase = LifecyclePhase.JOIN
 
@@ -1231,16 +1282,16 @@ class Transaction:
             logger.warning("GraphManager not initialized, skipping join phase")
             return
 
+        # Hooks: before JOIN.
+        base_ctx = self._make_base_context()
+        join_ctx = JoinContext(**vars(base_ctx))
+        self._run_lifecycle_hooks_before(join_ctx)
+
         # Event bus remains available for hooks that consume parse events,
         # but cross-ecosystem linking is now handled by per-ecosystem linkers.
-        eventbus = self._ensure_eventbus()
+        self._ensure_eventbus()
 
-        # In the simplified architecture we do not execute any join-time
-        # hooks by default; all cross-ecosystem wiring is delegated to
-        # ecosystem linkers. The event bus is kept for parsers such as
-        # CMakeParser that rely on CMakeGraphBuilder during parsing.
-
-        # Run per-ecosystem linkers
+        # Run per-ecosystem linkers.
         from depanalyzer.parsers.registry import EcosystemRegistry
         from depanalyzer.graph.linker_contract import GlobalContractLinker
 
@@ -1273,6 +1324,18 @@ class Transaction:
         except Exception as e:
             logger.error("GlobalContractLinker failed: %s", e, exc_info=True)
 
+        # Run additional join strategies.
+        after_base_ctx = self._make_base_context()
+        final_join_ctx = JoinContext(**vars(after_base_ctx))
+        for strategy in self._join_strategies:
+            try:
+                strategy.join(final_join_ctx)
+            except Exception:
+                logger.exception("JoinStrategy %r failed", strategy)
+
+        # Hooks: after JOIN.
+        self._run_lifecycle_hooks_after(final_join_ctx)
+
     def _phase_analyze(self) -> None:
         """Phase F: Analysis on transaction graph."""
         logger.info("=== Phase: %s ===", LifecyclePhase.ANALYZE)
@@ -1281,6 +1344,11 @@ class Transaction:
         if not self._graph_manager:
             logger.warning("GraphManager not initialized, skipping analyze phase")
             return
+
+        # Hooks: before ANALYZE.
+        base_ctx = self._make_base_context()
+        analyze_ctx = AnalyzeContext(**vars(base_ctx))
+        self._run_lifecycle_hooks_before(analyze_ctx)
 
         # Start progress tracking for this phase (3 steps)
         phase_id = None
@@ -1297,9 +1365,12 @@ class Transaction:
             if self._progress_manager and phase_id:
                 self._progress_manager.add_active_task("Asset-artifact projection")
 
-            self._graph_manager.derive_asset_artifact_projection(
-                config=self._graph_build_config.projection
+            projection_ctx = ProjectionContext(
+                transaction_ctx=self._make_base_context(),
+                graph=self._graph_manager,
+                projection_config=self._graph_build_config.projection,
             )
+            self._asset_projection_strategy.project(projection_ctx)
             logger.info("Asset-to-artifact projection completed")
 
             if self._progress_manager and phase_id:
@@ -1310,7 +1381,9 @@ class Transaction:
                     description="Completed projection (1/3)",
                 )
         except Exception as e:
-            logger.error("Failed to derive asset-artifact projection: %s", e, exc_info=True)
+            logger.error(
+                "Failed to derive asset-artifact projection: %s", e, exc_info=True
+            )
             if self._progress_manager and phase_id:
                 self._progress_manager.remove_active_task("Asset-artifact projection")
 
@@ -1383,9 +1456,20 @@ class Transaction:
 
         logger.info("Analysis phase completed")
 
+        # Run additional analyze strategies.
+        analyze_ctx_after = AnalyzeContext(**vars(self._make_base_context()))
+        for strategy in self._analyze_strategies:
+            try:
+                strategy.analyze(analyze_ctx_after)
+            except Exception:
+                logger.exception("AnalyzeStrategy %r failed", strategy)
+
         # Complete phase
         if self._progress_manager and phase_id:
             self._progress_manager.complete_phase(phase_id)
+
+        # Hooks: after ANALYZE.
+        self._run_lifecycle_hooks_after(analyze_ctx_after)
 
     def _phase_export(self, output_path: Optional[Path] = None) -> None:
         """Phase G: Export results.
@@ -1399,6 +1483,14 @@ class Transaction:
         if not self._graph_manager:
             logger.warning("No graph manager to export")
             return
+
+        # Hooks: before EXPORT.
+        base_ctx = self._make_base_context()
+        export_ctx = ExportContext(
+            **vars(base_ctx),
+            output_path=output_path,
+        )
+        self._run_lifecycle_hooks_before(export_ctx)
 
         # Start progress tracking for this phase
         phase_id = None
@@ -1423,7 +1515,7 @@ class Transaction:
                 output_path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Get the native NetworkX graph
-                native_graph = self._graph_manager._backend.native_graph
+                native_graph = self._graph_manager.backend.native_graph  # pylint: disable=no-member
 
                 # Convert to node-link format
                 graph_data = node_link_data(native_graph, edges="links")
@@ -1469,6 +1561,9 @@ class Transaction:
         if self._progress_manager and phase_id:
             self._progress_manager.complete_phase(phase_id)
 
+        # Hooks: after EXPORT.
+        self._run_lifecycle_hooks_after(export_ctx)
+
     def _flush_graph_to_disk(self) -> Optional[Path]:
         """Serialize graph to disk and return cache path.
 
@@ -1500,10 +1595,13 @@ class Transaction:
             from networkx import MultiDiGraph
             from networkx.readwrite import node_link_data
 
-            from depanalyzer.graph.schema_utils import canonicalize_edge, canonicalize_node
+            from depanalyzer.graph.schema_utils import (
+                canonicalize_edge,
+                canonicalize_node,
+            )
 
             # Build an export-only graph with canonical IDs and schemas
-            native_graph = self._graph_manager._backend.native_graph
+            native_graph = self._graph_manager.backend.native_graph  # pylint: disable=no-member
             export_graph = MultiDiGraph()
 
             node_id_map: Dict[str, str] = {}
@@ -1519,7 +1617,7 @@ class Transaction:
                 export_graph.add_node(canonical_id, **canonical_attrs)
 
             # Normalize edges
-            for u, v, key, attrs in native_graph.edges(data=True, keys=True):
+            for u, v, _key, attrs in native_graph.edges(data=True, keys=True):
                 source_id = node_id_map.get(str(u), str(u))
                 target_id = node_id_map.get(str(v), str(v))
                 canonical_attrs = canonicalize_edge(attrs or {})
@@ -1592,11 +1690,14 @@ class Transaction:
 
         # CRITICAL: Force ecosystem registration in subprocess
         # This ensures that ecosystems are registered even when running in a subprocess
-        import depanalyzer.parsers  # noqa: F401
+        import depanalyzer.parsers  # noqa: F401  # pylint: disable=unused-import
         from depanalyzer.parsers.registry import EcosystemRegistry
+
         registry = EcosystemRegistry.get_instance()
         ecosystems = registry.list_ecosystems()
-        logger.info("[PID %d] Available ecosystems in this process: %s", os.getpid(), ecosystems)
+        logger.info(
+            "[PID %d] Available ecosystems in this process: %s", os.getpid(), ecosystems
+        )
 
         self._start_time = time.time()
         logger.info(
@@ -1628,9 +1729,6 @@ class Transaction:
             self._phase_export(output_path)
 
             elapsed = time.time() - self._start_time
-
-            # Import here to avoid circular dependency
-            from depanalyzer.graph.manager import GraphManager
 
             # Return graph manager (will be properly initialized in later implementation)
             if not self._graph_manager:
@@ -1681,8 +1779,12 @@ class Transaction:
                 transaction_id=self.transaction_id,
                 graph_id=self.graph_id or "unknown",
                 success=True,
-                node_count=self._graph_manager.node_count() if self._graph_manager else 0,
-                edge_count=self._graph_manager.edge_count() if self._graph_manager else 0,
+                node_count=(
+                    self._graph_manager.node_count() if self._graph_manager else 0
+                ),
+                edge_count=(
+                    self._graph_manager.edge_count() if self._graph_manager else 0
+                ),
                 execution_time=elapsed,
                 parent_transaction_id=self.parent_transaction_id,
             )
@@ -1705,9 +1807,6 @@ class Transaction:
                 elapsed,
                 e,
             )
-
-            # Import here to avoid circular dependency
-            from depanalyzer.runtime.coordinator import TransactionResult
 
             return TransactionResult(
                 transaction_id=self.transaction_id,

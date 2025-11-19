@@ -3,7 +3,7 @@
 import logging
 from typing import List, Set
 
-from depanalyzer.graph.manager import EdgeKind, GraphManager, NodeType
+from depanalyzer.graph.manager import GraphManager
 
 logger = logging.getLogger("depanalyzer.analysis.deadcode")
 
@@ -81,7 +81,7 @@ class DeadcodeAnalyzer:
             reachable.add(current)
 
             # Add predecessors (dependencies)
-            for pred in self.graph_manager._backend.predecessors(current):
+            for pred in self.graph_manager.backend.predecessors(current):
                 if pred not in reachable:
                     stack.append(pred)
 

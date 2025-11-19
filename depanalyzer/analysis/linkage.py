@@ -1,7 +1,7 @@
 """Linkage analysis for determining static/dynamic/module dependencies."""
 
 import logging
-from typing import Dict, List, Set
+from typing import Dict
 
 from depanalyzer.graph.manager import EdgeKind, GraphManager
 

@@ -17,6 +17,9 @@ Per-graph license maps are also cached under the graphs directory as
 `<graph_id>.licenses.json` for incremental reuse.
 """
 
+# CLI intentionally shields unexpected ScanCode failures to keep process exit codes consistent.
+# pylint: disable=broad-exception-caught
+
 from __future__ import annotations
 
 import json

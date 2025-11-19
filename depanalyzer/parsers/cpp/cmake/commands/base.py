@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from depanalyzer.graph.manager import GraphManager
 from depanalyzer.parsers.cpp.cmake.variables import CMakeVariableResolver

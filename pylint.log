@@ -1,0 +1,845 @@
+************* Module main
+depanalyzer/main.py:68:0: C0301: Line too long (106/100) (line-too-long)
+depanalyzer/main.py:119:0: C0301: Line too long (119/100) (line-too-long)
+depanalyzer/main.py:124:0: C0301: Line too long (106/100) (line-too-long)
+depanalyzer/main.py:18:0: C0413: Import "import depanalyzer.parsers" should be placed at the top of the module (wrong-import-position)
+depanalyzer/main.py:20:0: C0413: Import "from depanalyzer.cli.scan import scan_command" should be placed at the top of the module (wrong-import-position)
+depanalyzer/main.py:21:0: C0413: Import "from depanalyzer.cli.export import export_command" should be placed at the top of the module (wrong-import-position)
+depanalyzer/main.py:22:0: C0413: Import "from depanalyzer.cli.scancode import scancode_command" should be placed at the top of the module (wrong-import-position)
+depanalyzer/main.py:23:0: C0413: Import "from depanalyzer.cli.dag import dag_command" should be placed at the top of the module (wrong-import-position)
+depanalyzer/main.py:61:4: C0415: Import outside toplevel (depanalyzer.parsers.registry.EcosystemRegistry) (import-outside-toplevel)
+depanalyzer/main.py:273:4: R1705: Unnecessary "elif" after "return", remove the leading "el" from "elif" (no-else-return)
+depanalyzer/main.py:54:0: R0911: Too many return statements (7/6) (too-many-return-statements)
+depanalyzer/main.py:54:0: R0915: Too many statements (53/50) (too-many-statements)
+depanalyzer/main.py:9:0: W0611: Unused Path imported from pathlib (unused-import)
+depanalyzer/main.py:18:0: W0611: Unused import depanalyzer.parsers (unused-import)
+************* Module analysis.deadcode
+depanalyzer/analysis/deadcode.py:84:24: W0212: Access to a protected member _backend of a client class (protected-access)
+depanalyzer/analysis/deadcode.py:11:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/analysis/deadcode.py:6:0: W0611: Unused EdgeKind imported from depanalyzer.graph.manager (unused-import)
+depanalyzer/analysis/deadcode.py:6:0: W0611: Unused NodeType imported from depanalyzer.graph.manager (unused-import)
+************* Module analysis.linkage
+depanalyzer/analysis/linkage.py:39:15: R1714: Consider merging these comparisons with 'in' by using 'edge_kind in (EdgeKind.LINKS, 'link_libraries')'. Use a set instead if elements are hashable. (consider-using-in)
+depanalyzer/analysis/linkage.py:81:8: R1705: Unnecessary "elif" after "return", remove the leading "el" from "elif" (no-else-return)
+depanalyzer/analysis/linkage.py:47:4: R0911: Too many return statements (8/6) (too-many-return-statements)
+depanalyzer/analysis/linkage.py:11:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/analysis/linkage.py:4:0: W0611: Unused List imported from typing (unused-import)
+depanalyzer/analysis/linkage.py:4:0: W0611: Unused Set imported from typing (unused-import)
+************* Module analysis.uncertainty
+depanalyzer/analysis/uncertainty.py:55:23: W0212: Access to a protected member _backend of a client class (protected-access)
+depanalyzer/analysis/uncertainty.py:118:4: R0912: Too many branches (14/12) (too-many-branches)
+depanalyzer/analysis/uncertainty.py:118:4: R1711: Useless return at end of function or method (useless-return)
+depanalyzer/analysis/uncertainty.py:25:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+************* Module cli.dag
+depanalyzer/cli/dag.py:94:0: C0305: Trailing newlines (trailing-newlines)
+depanalyzer/cli/dag.py:20:0: R0914: Too many local variables (18/15) (too-many-locals)
+depanalyzer/cli/dag.py:91:11: W0718: Catching too general exception Exception (broad-exception-caught)
+************* Module cli.export
+depanalyzer/cli/export.py:150:0: C0301: Line too long (105/100) (line-too-long)
+depanalyzer/cli/export.py:11:0: R0914: Too many local variables (20/15) (too-many-locals)
+depanalyzer/cli/export.py:108:11: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/export.py:27:8: C0415: Import outside toplevel (depanalyzer.graph.registry.GraphRegistry) (import-outside-toplevel)
+depanalyzer/cli/export.py:28:8: C0415: Import outside toplevel (depanalyzer.graph.global_dag.GlobalDAG) (import-outside-toplevel)
+depanalyzer/cli/export.py:86:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/export.py:102:8: R1705: Unnecessary "else" after "return", remove the "else" and de-indent the code inside it (no-else-return)
+depanalyzer/cli/export.py:11:0: R0912: Too many branches (14/12) (too-many-branches)
+depanalyzer/cli/export.py:113:0: R0914: Too many local variables (27/15) (too-many-locals)
+depanalyzer/cli/export.py:253:11: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/export.py:124:8: C0415: Import outside toplevel (networkx) (import-outside-toplevel)
+depanalyzer/cli/export.py:125:8: C0415: Import outside toplevel (networkx.readwrite.node_link_graph) (import-outside-toplevel)
+depanalyzer/cli/export.py:123:4: R1702: Too many nested blocks (6/5) (too-many-nested-blocks)
+depanalyzer/cli/export.py:123:4: R1702: Too many nested blocks (6/5) (too-many-nested-blocks)
+depanalyzer/cli/export.py:113:0: R0912: Too many branches (13/12) (too-many-branches)
+depanalyzer/cli/export.py:124:8: W0611: Unused networkx imported as nx (unused-import)
+depanalyzer/cli/export.py:320:11: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/export.py:302:19: W0718: Catching too general exception Exception (broad-exception-caught)
+************* Module cli.scan
+depanalyzer/cli/scan.py:27:4: C0415: Import outside toplevel (sys) (import-outside-toplevel)
+depanalyzer/cli/scan.py:28:4: C0415: Import outside toplevel (traceback) (import-outside-toplevel)
+depanalyzer/cli/scan.py:32:11: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scan.py:35:14: W1309: Using an f-string that does not have any interpolated variables (f-string-without-interpolation)
+depanalyzer/cli/scan.py:38:14: W1309: Using an f-string that does not have any interpolated variables (f-string-without-interpolation)
+depanalyzer/cli/scan.py:44:0: R0914: Too many local variables (39/15) (too-many-locals)
+depanalyzer/cli/scan.py:69:4: W0404: Reimport 'Path' (imported line 7) (reimported)
+depanalyzer/cli/scan.py:69:4: C0415: Import outside toplevel (pathlib.Path) (import-outside-toplevel)
+depanalyzer/cli/scan.py:83:11: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scan.py:97:11: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scan.py:310:11: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scan.py:130:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scan.py:144:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scan.py:162:8: C0415: Import outside toplevel (depanalyzer.graph.registry.GraphRegistry) (import-outside-toplevel)
+depanalyzer/cli/scan.py:217:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scan.py:180:24: C0415: Import outside toplevel (depanalyzer.graph.merge.merge_graph_with_dependencies) (import-outside-toplevel)
+depanalyzer/cli/scan.py:214:31: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scan.py:101:4: R1702: Too many nested blocks (6/5) (too-many-nested-blocks)
+depanalyzer/cli/scan.py:250:27: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scan.py:231:24: C0415: Import outside toplevel (depanalyzer.graph.merge.merge_graph_with_dependencies) (import-outside-toplevel)
+depanalyzer/cli/scan.py:295:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scan.py:256:16: C0415: Import outside toplevel (depanalyzer.graph.global_dag.GlobalDAG) (import-outside-toplevel)
+depanalyzer/cli/scan.py:101:4: R1702: Too many nested blocks (6/5) (too-many-nested-blocks)
+depanalyzer/cli/scan.py:317:8: W0702: No exception type(s) specified (bare-except)
+depanalyzer/cli/scan.py:324:8: W0702: No exception type(s) specified (bare-except)
+depanalyzer/cli/scan.py:322:12: C0415: Import outside toplevel (depanalyzer.graph.registry.GraphRegistry) (import-outside-toplevel)
+depanalyzer/cli/scan.py:44:0: R0911: Too many return statements (10/6) (too-many-return-statements)
+depanalyzer/cli/scan.py:44:0: R0912: Too many branches (27/12) (too-many-branches)
+depanalyzer/cli/scan.py:44:0: R0915: Too many statements (139/50) (too-many-statements)
+************* Module cli.scancode
+depanalyzer/cli/scancode.py:75:0: R0914: Too many local variables (16/15) (too-many-locals)
+depanalyzer/cli/scancode.py:170:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scancode.py:174:0: R0914: Too many local variables (22/15) (too-many-locals)
+depanalyzer/cli/scancode.py:297:11: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scancode.py:256:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scancode.py:266:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scancode.py:277:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/cli/scancode.py:174:0: R0912: Too many branches (13/12) (too-many-branches)
+depanalyzer/cli/scancode.py:174:0: R0915: Too many statements (66/50) (too-many-statements)
+************* Module graph.backend
+depanalyzer/graph/backend.py:7:0: W0611: Unused List imported from typing (unused-import)
+depanalyzer/graph/backend.py:7:0: W0611: Unused Tuple imported from typing (unused-import)
+************* Module graph.contract
+depanalyzer/graph/contract.py:63:0: C0325: Unnecessary parens after 'not' keyword (superfluous-parens)
+depanalyzer/graph/contract.py:21:0: R0902: Too many instance attributes (9/7) (too-many-instance-attributes)
+depanalyzer/graph/contract.py:7:0: W0611: Unused Optional imported from typing (unused-import)
+************* Module graph.contract_registry
+depanalyzer/graph/contract_registry.py:156:8: W0612: Unused variable 'providers' (unused-variable)
+depanalyzer/graph/contract_registry.py:7:0: W0611: Unused Tuple imported from typing (unused-import)
+************* Module graph.global_dag
+depanalyzer/graph/global_dag.py:120:16: W0212: Access to a protected member _cache_dir of a client class (protected-access)
+depanalyzer/graph/global_dag.py:121:16: W0212: Access to a protected member _dag_file of a client class (protected-access)
+depanalyzer/graph/global_dag.py:121:37: W0212: Access to a protected member _cache_dir of a client class (protected-access)
+depanalyzer/graph/global_dag.py:123:66: W0212: Access to a protected member _dag_file of a client class (protected-access)
+depanalyzer/graph/global_dag.py:128:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/global_dag.py:126:25: W0212: Access to a protected member _acquire_lock of a client class (protected-access)
+depanalyzer/graph/global_dag.py:127:24: W0212: Access to a protected member _load_unlocked of a client class (protected-access)
+depanalyzer/graph/global_dag.py:182:24: W0707: Consider explicitly re-raising using 'except FileExistsError as exc' and 'raise TimeoutError(f'Timeout acquiring GlobalDAG lock: {lock_path}') from exc' (raise-missing-from)
+depanalyzer/graph/global_dag.py:228:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/global_dag.py:266:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/global_dag.py:343:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/global_dag.py:327:27: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/global_dag.py:434:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/global_dag.py:418:27: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/global_dag.py:457:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/global_dag.py:481:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/global_dag.py:503:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/global_dag.py:579:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/global_dag.py:576:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/global_dag.py:595:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/global_dag.py:19:0: W0611: Unused Dict imported from typing (unused-import)
+************* Module graph.identifiers
+depanalyzer/graph/identifiers.py:114:0: C0305: Trailing newlines (trailing-newlines)
+************* Module graph.linker_contract
+depanalyzer/graph/linker_contract.py:21:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+************* Module graph.linking
+depanalyzer/graph/linking.py:35:0: C0305: Trailing newlines (trailing-newlines)
+************* Module graph.manager
+depanalyzer/graph/manager.py:301:0: C0301: Line too long (109/100) (line-too-long)
+depanalyzer/graph/manager.py:376:0: C0301: Line too long (105/100) (line-too-long)
+depanalyzer/graph/manager.py:1:0: C0302: Too many lines in module (1103/1000) (too-many-lines)
+depanalyzer/graph/manager.py:59:4: R0913: Too many arguments (6/5) (too-many-arguments)
+depanalyzer/graph/manager.py:59:4: R0917: Too many positional arguments (6/5) (too-many-positional-arguments)
+depanalyzer/graph/manager.py:120:4: R0913: Too many arguments (7/5) (too-many-arguments)
+depanalyzer/graph/manager.py:120:4: R0917: Too many positional arguments (7/5) (too-many-positional-arguments)
+depanalyzer/graph/manager.py:237:4: R0913: Too many arguments (6/5) (too-many-arguments)
+depanalyzer/graph/manager.py:237:4: R0917: Too many positional arguments (6/5) (too-many-positional-arguments)
+depanalyzer/graph/manager.py:269:4: R0913: Too many arguments (7/5) (too-many-arguments)
+depanalyzer/graph/manager.py:269:4: R0917: Too many positional arguments (7/5) (too-many-positional-arguments)
+depanalyzer/graph/manager.py:494:4: R0913: Too many arguments (14/5) (too-many-arguments)
+depanalyzer/graph/manager.py:494:4: R0914: Too many local variables (92/15) (too-many-locals)
+depanalyzer/graph/manager.py:537:8: C0415: Import outside toplevel (collections.defaultdict) (import-outside-toplevel)
+depanalyzer/graph/manager.py:711:8: R1702: Too many nested blocks (6/5) (too-many-nested-blocks)
+depanalyzer/graph/manager.py:747:8: R1702: Too many nested blocks (6/5) (too-many-nested-blocks)
+depanalyzer/graph/manager.py:791:8: R1702: Too many nested blocks (6/5) (too-many-nested-blocks)
+depanalyzer/graph/manager.py:854:27: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/manager.py:852:24: C0415: Import outside toplevel (os) (import-outside-toplevel)
+depanalyzer/graph/manager.py:864:16: W0612: Unused variable 'a' (unused-variable)
+depanalyzer/graph/manager.py:864:19: W0612: Unused variable 'b' (unused-variable)
+depanalyzer/graph/manager.py:870:8: R1702: Too many nested blocks (6/5) (too-many-nested-blocks)
+depanalyzer/graph/manager.py:927:12: R1702: Too many nested blocks (6/5) (too-many-nested-blocks)
+depanalyzer/graph/manager.py:494:4: R0912: Too many branches (85/12) (too-many-branches)
+depanalyzer/graph/manager.py:494:4: R0915: Too many statements (203/50) (too-many-statements)
+depanalyzer/graph/manager.py:973:4: R0914: Too many local variables (21/15) (too-many-locals)
+depanalyzer/graph/manager.py:986:8: C0415: Import outside toplevel (collections.defaultdict) (import-outside-toplevel)
+depanalyzer/graph/manager.py:1016:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/manager.py:1014:20: R1731: Consider using 'max_conf = max(max_conf, c)' instead of unnecessary if block (consider-using-max-builtin)
+depanalyzer/graph/manager.py:1035:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/graph/manager.py:973:4: R0912: Too many branches (22/12) (too-many-branches)
+depanalyzer/graph/manager.py:973:4: R0915: Too many statements (51/50) (too-many-statements)
+depanalyzer/graph/manager.py:1050:36: W0622: Redefining built-in 'format' (redefined-builtin)
+depanalyzer/graph/manager.py:1057:8: C0415: Import outside toplevel (networkx) (import-outside-toplevel)
+depanalyzer/graph/manager.py:1076:35: W0622: Redefining built-in 'format' (redefined-builtin)
+depanalyzer/graph/manager.py:1086:8: C0415: Import outside toplevel (networkx) (import-outside-toplevel)
+depanalyzer/graph/manager.py:1093:12: W0212: Access to a protected member _graph of a client class (protected-access)
+depanalyzer/graph/manager.py:1098:12: W0212: Access to a protected member _graph of a client class (protected-access)
+depanalyzer/graph/manager.py:27:0: R0904: Too many public methods (27/20) (too-many-public-methods)
+************* Module graph.merge
+depanalyzer/graph/merge.py:201:0: C0305: Trailing newlines (trailing-newlines)
+depanalyzer/graph/merge.py:50:0: R0914: Too many local variables (26/15) (too-many-locals)
+depanalyzer/graph/merge.py:119:18: W0612: Unused variable 'key' (unused-variable)
+************* Module graph.projection_config
+depanalyzer/graph/projection_config.py:59:0: C0305: Trailing newlines (trailing-newlines)
+depanalyzer/graph/projection_config.py:19:0: R0902: Too many instance attributes (12/7) (too-many-instance-attributes)
+************* Module parsers.base
+depanalyzer/parsers/base.py:334:0: C0301: Line too long (102/100) (line-too-long)
+depanalyzer/parsers/base.py:158:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/parsers/base.py:242:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/parsers/base.py:310:4: R0913: Too many arguments (6/5) (too-many-arguments)
+depanalyzer/parsers/base.py:310:4: R0917: Too many positional arguments (6/5) (too-many-positional-arguments)
+depanalyzer/parsers/base.py:304:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/parsers/base.py:398:4: R0913: Too many arguments (7/5) (too-many-arguments)
+depanalyzer/parsers/base.py:398:4: R0917: Too many positional arguments (7/5) (too-many-positional-arguments)
+depanalyzer/parsers/base.py:424:16: C0415: Import outside toplevel (shutil) (import-outside-toplevel)
+depanalyzer/parsers/base.py:465:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/base.py:447:12: W0612: Unused variable 'result' (unused-variable)
+depanalyzer/parsers/base.py:489:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/base.py:480:12: C0415: Import outside toplevel (urllib.request) (import-outside-toplevel)
+depanalyzer/parsers/base.py:535:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/base.py:506:12: C0415: Import outside toplevel (shutil) (import-outside-toplevel)
+depanalyzer/parsers/base.py:513:16: C0415: Import outside toplevel (zipfile) (import-outside-toplevel)
+depanalyzer/parsers/base.py:517:16: C0415: Import outside toplevel (tarfile) (import-outside-toplevel)
+depanalyzer/parsers/base.py:521:16: C0415: Import outside toplevel (tarfile) (import-outside-toplevel)
+depanalyzer/parsers/base.py:525:16: C0415: Import outside toplevel (tarfile) (import-outside-toplevel)
+depanalyzer/parsers/base.py:506:12: W0611: Unused import shutil (unused-import)
+depanalyzer/parsers/base.py:13:0: W0611: Unused Set imported from typing (unused-import)
+depanalyzer/parsers/base.py:16:0: W0611: Unused LinkClass imported from depanalyzer.graph.linking (unused-import)
+************* Module parsers.registry
+depanalyzer/parsers/registry.py:162:4: R0913: Too many arguments (7/5) (too-many-arguments)
+depanalyzer/parsers/registry.py:162:4: R0917: Too many positional arguments (7/5) (too-many-positional-arguments)
+depanalyzer/parsers/registry.py:293:0: R0913: Too many arguments (6/5) (too-many-arguments)
+depanalyzer/parsers/registry.py:293:0: R0917: Too many positional arguments (6/5) (too-many-positional-arguments)
+depanalyzer/parsers/registry.py:7:0: W0611: Unused Path imported from pathlib (unused-import)
+************* Module parsers
+depanalyzer/parsers/__init__.py:77:11: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/__init__.py:99:11: W0718: Catching too general exception Exception (broad-exception-caught)
+************* Module parsers.cpp.cmake_graph_builder
+depanalyzer/parsers/cpp/cmake_graph_builder.py:186:4: R0914: Too many local variables (19/15) (too-many-locals)
+depanalyzer/parsers/cpp/cmake_graph_builder.py:247:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/cpp/cmake_graph_builder.py:24:0: R0903: Too few public methods (0/2) (too-few-public-methods)
+depanalyzer/parsers/cpp/cmake_graph_builder.py:12:0: W0611: Unused Path imported from pathlib (unused-import)
+************* Module parsers.cpp.code_dependency_mapper
+depanalyzer/parsers/cpp/code_dependency_mapper.py:31:4: R0914: Too many local variables (34/15) (too-many-locals)
+depanalyzer/parsers/cpp/code_dependency_mapper.py:47:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/cpp/code_dependency_mapper.py:84:23: W0212: Access to a protected member _backend of a client class (protected-access)
+depanalyzer/parsers/cpp/code_dependency_mapper.py:89:15: R1714: Consider merging these comparisons with 'in' by using 'kind in (EdgeKind.SOURCES.value, 'sources')'. Use a set instead if elements are hashable. (consider-using-in)
+depanalyzer/parsers/cpp/code_dependency_mapper.py:104:8: R1702: Too many nested blocks (7/5) (too-many-nested-blocks)
+depanalyzer/parsers/cpp/code_dependency_mapper.py:104:8: R1702: Too many nested blocks (6/5) (too-many-nested-blocks)
+depanalyzer/parsers/cpp/code_dependency_mapper.py:156:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/cpp/code_dependency_mapper.py:165:25: C0207: Use include_str.rsplit('/', maxsplit=1)[-1] instead (use-maxsplit-arg)
+depanalyzer/parsers/cpp/code_dependency_mapper.py:31:4: R0912: Too many branches (25/12) (too-many-branches)
+depanalyzer/parsers/cpp/code_dependency_mapper.py:31:4: R0915: Too many statements (67/50) (too-many-statements)
+depanalyzer/parsers/cpp/code_dependency_mapper.py:87:15: W0612: Unused variable 'v' (unused-variable)
+depanalyzer/parsers/cpp/code_dependency_mapper.py:25:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+************* Module parsers.cpp.code_parser
+depanalyzer/parsers/cpp/code_parser.py:17:0: C0103: Variable name "_TREE_SITTER_AVAILABLE" doesn't conform to snake_case naming style (invalid-name)
+depanalyzer/parsers/cpp/code_parser.py:25:4: C0103: Variable name "_TREE_SITTER_AVAILABLE" doesn't conform to snake_case naming style (invalid-name)
+depanalyzer/parsers/cpp/code_parser.py:62:4: R0914: Too many local variables (18/15) (too-many-locals)
+depanalyzer/parsers/cpp/code_parser.py:94:8: R1702: Too many nested blocks (6/5) (too-many-nested-blocks)
+depanalyzer/parsers/cpp/code_parser.py:94:8: R1702: Too many nested blocks (6/5) (too-many-nested-blocks)
+depanalyzer/parsers/cpp/code_parser.py:62:4: R0912: Too many branches (18/12) (too-many-branches)
+depanalyzer/parsers/cpp/code_parser.py:62:4: R0915: Too many statements (54/50) (too-many-statements)
+************* Module parsers.cpp.config_model
+depanalyzer/parsers/cpp/config_model.py:116:0: C0305: Trailing newlines (trailing-newlines)
+************* Module parsers.cpp.config_parser
+depanalyzer/parsers/cpp/config_parser.py:108:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/cpp/config_parser.py:211:4: R0913: Too many arguments (6/5) (too-many-arguments)
+depanalyzer/parsers/cpp/config_parser.py:211:4: R0917: Too many positional arguments (6/5) (too-many-positional-arguments)
+************* Module parsers.cpp.dep_fetcher
+depanalyzer/parsers/cpp/dep_fetcher.py:107:8: R1705: Unnecessary "else" after "return", remove the "else" and de-indent the code inside it (no-else-return)
+depanalyzer/parsers/cpp/dep_fetcher.py:133:12: C0415: Import outside toplevel (hashlib) (import-outside-toplevel)
+************* Module parsers.cpp.linker
+depanalyzer/parsers/cpp/linker.py:46:18: W0212: Access to a protected member _backend of a client class (protected-access)
+depanalyzer/parsers/cpp/linker.py:50:12: W0612: Unused variable 'source' (unused-variable)
+depanalyzer/parsers/cpp/linker.py:50:28: W0612: Unused variable 'key' (unused-variable)
+depanalyzer/parsers/cpp/linker.py:72:4: R0911: Too many return statements (8/6) (too-many-return-statements)
+depanalyzer/parsers/cpp/linker.py:22:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+************* Module parsers.cpp.cmake.detector
+depanalyzer/parsers/cpp/cmake/detector.py:33:0: C0301: Line too long (104/100) (line-too-long)
+depanalyzer/parsers/cpp/cmake/detector.py:70:16: W1203: Use lazy % formatting in logging functions (logging-fstring-interpolation)
+depanalyzer/parsers/cpp/cmake/detector.py:72:8: W1203: Use lazy % formatting in logging functions (logging-fstring-interpolation)
+************* Module parsers.cpp.cmake.grammar
+depanalyzer/parsers/cpp/cmake/grammar.py:87:0: C0301: Line too long (109/100) (line-too-long)
+depanalyzer/parsers/cpp/cmake/grammar.py:96:0: C0301: Line too long (105/100) (line-too-long)
+depanalyzer/parsers/cpp/cmake/grammar.py:14:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/parsers/cpp/cmake/grammar.py:167:12: R1720: Unnecessary "else" after "raise", remove the "else" and de-indent the code inside it (no-else-raise)
+depanalyzer/parsers/cpp/cmake/grammar.py:170:16: W0719: Raising too general exception: Exception (broad-exception-raised)
+depanalyzer/parsers/cpp/cmake/grammar.py:172:16: W0719: Raising too general exception: Exception (broad-exception-raised)
+depanalyzer/parsers/cpp/cmake/grammar.py:125:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/parsers/cpp/cmake/grammar.py:9:0: W0611: Unused Any imported from typing (unused-import)
+************* Module parsers.cpp.cmake.tokens
+depanalyzer/parsers/cpp/cmake/tokens.py:271:0: C0305: Trailing newlines (trailing-newlines)
+depanalyzer/parsers/cpp/cmake/tokens.py:161:0: R0911: Too many return statements (8/6) (too-many-return-statements)
+************* Module parsers.cpp.cmake.variables
+depanalyzer/parsers/cpp/cmake/variables.py:50:0: C0301: Line too long (107/100) (line-too-long)
+depanalyzer/parsers/cpp/cmake/variables.py:205:0: C0305: Trailing newlines (trailing-newlines)
+depanalyzer/parsers/cpp/cmake/variables.py:20:0: R0902: Too many instance attributes (8/7) (too-many-instance-attributes)
+************* Module parsers.cpp.cmake.__init__
+depanalyzer/parsers/cpp/cmake/__init__.py:8:0: C0305: Trailing newlines (trailing-newlines)
+************* Module parsers.cpp.cmake.commands.base
+depanalyzer/parsers/cpp/cmake/commands/base.py:40:4: R0913: Too many arguments (6/5) (too-many-arguments)
+depanalyzer/parsers/cpp/cmake/commands/base.py:40:4: R0917: Too many positional arguments (6/5) (too-many-positional-arguments)
+depanalyzer/parsers/cpp/cmake/commands/base.py:10:0: W0611: Unused Optional imported from typing (unused-import)
+************* Module parsers.cpp.cmake.commands.includes
+depanalyzer/parsers/cpp/cmake/commands/includes.py:39:0: C0301: Line too long (101/100) (line-too-long)
+depanalyzer/parsers/cpp/cmake/commands/includes.py:31:4: R0913: Too many arguments (6/5) (too-many-arguments)
+depanalyzer/parsers/cpp/cmake/commands/includes.py:31:4: R0917: Too many positional arguments (6/5) (too-many-positional-arguments)
+depanalyzer/parsers/cpp/cmake/commands/includes.py:31:4: R0914: Too many local variables (21/15) (too-many-locals)
+************* Module parsers.cpp.cmake.commands.linking
+depanalyzer/parsers/cpp/cmake/commands/linking.py:118:0: C0301: Line too long (114/100) (line-too-long)
+depanalyzer/parsers/cpp/cmake/commands/linking.py:26:4: R0913: Too many arguments (6/5) (too-many-arguments)
+depanalyzer/parsers/cpp/cmake/commands/linking.py:26:4: R0917: Too many positional arguments (6/5) (too-many-positional-arguments)
+depanalyzer/parsers/cpp/cmake/commands/linking.py:26:4: R0914: Too many local variables (17/15) (too-many-locals)
+depanalyzer/parsers/cpp/cmake/commands/linking.py:26:4: R0912: Too many branches (14/12) (too-many-branches)
+************* Module parsers.cpp.cmake.commands.packages
+depanalyzer/parsers/cpp/cmake/commands/packages.py:44:0: C0301: Line too long (101/100) (line-too-long)
+depanalyzer/parsers/cpp/cmake/commands/packages.py:167:0: C0301: Line too long (110/100) (line-too-long)
+depanalyzer/parsers/cpp/cmake/commands/packages.py:215:0: C0301: Line too long (112/100) (line-too-long)
+depanalyzer/parsers/cpp/cmake/commands/packages.py:236:0: C0301: Line too long (104/100) (line-too-long)
+depanalyzer/parsers/cpp/cmake/commands/packages.py:36:4: R0913: Too many arguments (6/5) (too-many-arguments)
+depanalyzer/parsers/cpp/cmake/commands/packages.py:36:4: R0917: Too many positional arguments (6/5) (too-many-positional-arguments)
+depanalyzer/parsers/cpp/cmake/commands/packages.py:56:8: R1705: Unnecessary "elif" after "return", remove the leading "el" from "elif" (no-else-return)
+depanalyzer/parsers/cpp/cmake/commands/packages.py:67:31: W0613: Unused argument 'file_path' (unused-argument)
+depanalyzer/parsers/cpp/cmake/commands/packages.py:67:48: W0613: Unused argument 'shared_graph' (unused-argument)
+depanalyzer/parsers/cpp/cmake/commands/packages.py:165:73: W0613: Unused argument 'shared_graph' (unused-argument)
+************* Module parsers.cpp.cmake.commands.sources
+depanalyzer/parsers/cpp/cmake/commands/sources.py:57:0: C0301: Line too long (103/100) (line-too-long)
+depanalyzer/parsers/cpp/cmake/commands/sources.py:100:0: C0301: Line too long (106/100) (line-too-long)
+depanalyzer/parsers/cpp/cmake/commands/sources.py:125:0: C0301: Line too long (111/100) (line-too-long)
+depanalyzer/parsers/cpp/cmake/commands/sources.py:31:4: R0913: Too many arguments (6/5) (too-many-arguments)
+depanalyzer/parsers/cpp/cmake/commands/sources.py:31:4: R0917: Too many positional arguments (6/5) (too-many-positional-arguments)
+depanalyzer/parsers/cpp/cmake/commands/sources.py:31:4: R0914: Too many local variables (27/15) (too-many-locals)
+depanalyzer/parsers/cpp/cmake/commands/sources.py:102:27: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/cpp/cmake/commands/sources.py:31:4: R0912: Too many branches (18/12) (too-many-branches)
+************* Module parsers.cpp.cmake.commands.target
+depanalyzer/parsers/cpp/cmake/commands/target.py:325:0: C0301: Line too long (111/100) (line-too-long)
+depanalyzer/parsers/cpp/cmake/commands/target.py:33:4: R1705: Unnecessary "elif" after "return", remove the leading "el" from "elif" (no-else-return)
+depanalyzer/parsers/cpp/cmake/commands/target.py:36:8: R1705: Unnecessary "elif" after "return", remove the leading "el" from "elif" (no-else-return)
+depanalyzer/parsers/cpp/cmake/commands/target.py:23:0: R0911: Too many return statements (7/6) (too-many-return-statements)
+depanalyzer/parsers/cpp/cmake/commands/target.py:67:4: R0913: Too many arguments (6/5) (too-many-arguments)
+depanalyzer/parsers/cpp/cmake/commands/target.py:67:4: R0917: Too many positional arguments (6/5) (too-many-positional-arguments)
+depanalyzer/parsers/cpp/cmake/commands/target.py:67:4: R0914: Too many local variables (17/15) (too-many-locals)
+depanalyzer/parsers/cpp/cmake/commands/target.py:145:4: R0913: Too many arguments (9/5) (too-many-arguments)
+depanalyzer/parsers/cpp/cmake/commands/target.py:145:4: R0917: Too many positional arguments (9/5) (too-many-positional-arguments)
+depanalyzer/parsers/cpp/cmake/commands/target.py:153:8: W0613: Unused argument 'shared_graph' (unused-argument)
+depanalyzer/parsers/cpp/cmake/commands/target.py:197:4: R0913: Too many arguments (7/5) (too-many-arguments)
+depanalyzer/parsers/cpp/cmake/commands/target.py:197:4: R0917: Too many positional arguments (7/5) (too-many-positional-arguments)
+depanalyzer/parsers/cpp/cmake/commands/target.py:204:8: W0613: Unused argument 'shared_graph' (unused-argument)
+depanalyzer/parsers/cpp/cmake/commands/target.py:242:4: R0913: Too many arguments (7/5) (too-many-arguments)
+depanalyzer/parsers/cpp/cmake/commands/target.py:242:4: R0917: Too many positional arguments (7/5) (too-many-positional-arguments)
+depanalyzer/parsers/cpp/cmake/commands/target.py:242:4: R0914: Too many local variables (25/15) (too-many-locals)
+depanalyzer/parsers/cpp/cmake/commands/target.py:242:4: R0912: Too many branches (18/12) (too-many-branches)
+depanalyzer/parsers/cpp/cmake/commands/target.py:248:8: W0613: Unused argument 'shared_graph' (unused-argument)
+depanalyzer/parsers/cpp/cmake/commands/target.py:7:0: W0611: Unused Dict imported from typing (unused-import)
+depanalyzer/parsers/cpp/cmake/commands/target.py:7:0: W0611: Unused Any imported from typing (unused-import)
+depanalyzer/parsers/cpp/cmake/commands/target.py:18:0: W0611: Unused EventBus imported from depanalyzer.runtime.eventbus (unused-import)
+************* Module parsers.cpp.cmake.commands.variables
+depanalyzer/parsers/cpp/cmake/commands/variables.py:31:4: R0913: Too many arguments (6/5) (too-many-arguments)
+depanalyzer/parsers/cpp/cmake/commands/variables.py:31:4: R0917: Too many positional arguments (6/5) (too-many-positional-arguments)
+depanalyzer/parsers/cpp/cmake/commands/variables.py:51:8: R1705: Unnecessary "elif" after "return", remove the leading "el" from "elif" (no-else-return)
+************* Module parsers.hvigor.code_dependency_mapper
+depanalyzer/parsers/hvigor/code_dependency_mapper.py:42:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/hvigor/code_dependency_mapper.py:77:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/hvigor/code_dependency_mapper.py:26:4: R0912: Too many branches (13/12) (too-many-branches)
+depanalyzer/parsers/hvigor/code_dependency_mapper.py:20:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+************* Module parsers.hvigor.code_parser
+depanalyzer/parsers/hvigor/code_parser.py:16:0: C0103: Variable name "_TREE_SITTER_AVAILABLE" doesn't conform to snake_case naming style (invalid-name)
+depanalyzer/parsers/hvigor/code_parser.py:24:4: C0103: Variable name "_TREE_SITTER_AVAILABLE" doesn't conform to snake_case naming style (invalid-name)
+depanalyzer/parsers/hvigor/code_parser.py:64:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/hvigor/code_parser.py:69:4: R0914: Too many local variables (18/15) (too-many-locals)
+depanalyzer/parsers/hvigor/code_parser.py:69:4: R0912: Too many branches (18/12) (too-many-branches)
+depanalyzer/parsers/hvigor/code_parser.py:180:4: R0912: Too many branches (15/12) (too-many-branches)
+************* Module parsers.hvigor.config_model
+depanalyzer/parsers/hvigor/config_model.py:134:0: C0305: Trailing newlines (trailing-newlines)
+************* Module parsers.hvigor.config_parser
+depanalyzer/parsers/hvigor/config_parser.py:438:0: C0301: Line too long (102/100) (line-too-long)
+depanalyzer/parsers/hvigor/config_parser.py:60:4: R0914: Too many local variables (17/15) (too-many-locals)
+depanalyzer/parsers/hvigor/config_parser.py:112:20: W0612: Unused variable 'package_key' (unused-variable)
+depanalyzer/parsers/hvigor/config_parser.py:171:4: R0912: Too many branches (13/12) (too-many-branches)
+depanalyzer/parsers/hvigor/config_parser.py:359:4: R0914: Too many local variables (51/15) (too-many-locals)
+depanalyzer/parsers/hvigor/config_parser.py:691:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/hvigor/config_parser.py:359:4: R0912: Too many branches (34/12) (too-many-branches)
+depanalyzer/parsers/hvigor/config_parser.py:359:4: R0915: Too many statements (115/50) (too-many-statements)
+depanalyzer/parsers/hvigor/config_parser.py:705:57: W0613: Unused argument 'config_file_id' (unused-argument)
+depanalyzer/parsers/hvigor/config_parser.py:788:61: W0613: Unused argument 'config_file_id' (unused-argument)
+************* Module parsers.hvigor.dep_fetcher
+depanalyzer/parsers/hvigor/dep_fetcher.py:40:0: C0413: Import "from depanalyzer.parsers.base import BaseDepFetcher, DependencySpec" should be placed at the top of the module (wrong-import-position)
+depanalyzer/parsers/hvigor/dep_fetcher.py:153:8: R1705: Unnecessary "else" after "return", remove the "else" and de-indent the code inside it (no-else-return)
+depanalyzer/parsers/hvigor/dep_fetcher.py:178:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/hvigor/dep_fetcher.py:235:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/hvigor/dep_fetcher.py:160:4: R0911: Too many return statements (7/6) (too-many-return-statements)
+depanalyzer/parsers/hvigor/dep_fetcher.py:266:8: W0621: Redefining name 'requests' from outer scope (line 25) (redefined-outer-name)
+depanalyzer/parsers/hvigor/dep_fetcher.py:266:8: C0415: Import outside toplevel (requests) (import-outside-toplevel)
+depanalyzer/parsers/hvigor/dep_fetcher.py:320:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/parsers/hvigor/dep_fetcher.py:457:15: W0718: Catching too general exception Exception (broad-exception-caught)
+************* Module parsers.hvigor.detector
+depanalyzer/parsers/hvigor/detector.py:82:16: W1203: Use lazy % formatting in logging functions (logging-fstring-interpolation)
+depanalyzer/parsers/hvigor/detector.py:84:8: W1203: Use lazy % formatting in logging functions (logging-fstring-interpolation)
+depanalyzer/parsers/hvigor/detector.py:96:8: R1705: Unnecessary "elif" after "return", remove the leading "el" from "elif" (no-else-return)
+************* Module parsers.hvigor.linker
+depanalyzer/parsers/hvigor/linker.py:69:4: R0912: Too many branches (15/12) (too-many-branches)
+depanalyzer/parsers/hvigor/linker.py:218:4: R0914: Too many local variables (19/15) (too-many-locals)
+depanalyzer/parsers/hvigor/linker.py:218:4: R0912: Too many branches (21/12) (too-many-branches)
+depanalyzer/parsers/hvigor/linker.py:218:4: R0915: Too many statements (53/50) (too-many-statements)
+depanalyzer/parsers/hvigor/linker.py:338:4: R0914: Too many local variables (16/15) (too-many-locals)
+depanalyzer/parsers/hvigor/linker.py:29:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/parsers/hvigor/linker.py:449:14: W0212: Access to a protected member _backend of a client class (protected-access)
+depanalyzer/parsers/hvigor/linker.py:488:14: W0212: Access to a protected member _backend of a client class (protected-access)
+depanalyzer/parsers/hvigor/linker.py:519:14: W0212: Access to a protected member _backend of a client class (protected-access)
+************* Module runtime.api
+depanalyzer/runtime/api.py:66:0: C0305: Trailing newlines (trailing-newlines)
+depanalyzer/runtime/api.py:24:0: R0913: Too many arguments (7/5) (too-many-arguments)
+depanalyzer/runtime/api.py:24:0: R0917: Too many positional arguments (7/5) (too-many-positional-arguments)
+************* Module runtime.code_parser_pool
+depanalyzer/runtime/code_parser_pool.py:63:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/code_parser_pool.py:39:12: C0415: Import outside toplevel (depanalyzer.parsers.registry.EcosystemRegistry) (import-outside-toplevel)
+depanalyzer/runtime/code_parser_pool.py:45:16: W1203: Use lazy % formatting in logging functions (logging-fstring-interpolation)
+depanalyzer/runtime/code_parser_pool.py:64:12: W1203: Use lazy % formatting in logging functions (logging-fstring-interpolation)
+depanalyzer/runtime/code_parser_pool.py:114:11: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/code_parser_pool.py:115:8: W1203: Use lazy % formatting in logging functions (logging-fstring-interpolation)
+depanalyzer/runtime/code_parser_pool.py:279:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/code_parser_pool.py:13:0: W0611: Unused as_completed imported from concurrent.futures (unused-import)
+************* Module runtime.config_loader
+depanalyzer/runtime/config_loader.py:34:8: C0415: Import outside toplevel (tomllib) (import-outside-toplevel)
+depanalyzer/runtime/config_loader.py:39:12: C0415: Import outside toplevel (tomli) (import-outside-toplevel)
+depanalyzer/runtime/config_loader.py:39:12: E0401: Unable to import 'tomli' (import-error)
+depanalyzer/runtime/config_loader.py:37:4: W0612: Unused variable 'exc' (unused-variable)
+************* Module runtime.context
+depanalyzer/runtime/context.py:138:0: C0305: Trailing newlines (trailing-newlines)
+depanalyzer/runtime/context.py:27:0: R0902: Too many instance attributes (13/7) (too-many-instance-attributes)
+************* Module runtime.coordinator
+depanalyzer/runtime/coordinator.py:191:0: C0301: Line too long (108/100) (line-too-long)
+depanalyzer/runtime/coordinator.py:18:0: R0902: Too many instance attributes (8/7) (too-many-instance-attributes)
+depanalyzer/runtime/coordinator.py:53:4: C0415: Import outside toplevel (pickle) (import-outside-toplevel)
+depanalyzer/runtime/coordinator.py:54:4: C0415: Import outside toplevel (time) (import-outside-toplevel)
+depanalyzer/runtime/coordinator.py:86:11: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/coordinator.py:180:8: C0415: Import outside toplevel (pickle) (import-outside-toplevel)
+depanalyzer/runtime/coordinator.py:243:23: W0718: Catching too general exception Exception (broad-exception-caught)
+************* Module runtime.default_strategies
+depanalyzer/runtime/default_strategies.py:21:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/runtime/default_strategies.py:47:4: R0914: Too many local variables (18/15) (too-many-locals)
+depanalyzer/runtime/default_strategies.py:58:8: C0415: Import outside toplevel (depanalyzer.graph.linking.LinkClass) (import-outside-toplevel)
+depanalyzer/runtime/default_strategies.py:59:8: C0415: Import outside toplevel (depanalyzer.graph.manager.EdgeKind, depanalyzer.graph.manager.NodeType) (import-outside-toplevel)
+depanalyzer/runtime/default_strategies.py:60:8: C0415: Import outside toplevel (depanalyzer.graph.schema.EdgeSpec, depanalyzer.graph.schema.NodeSpec) (import-outside-toplevel)
+depanalyzer/runtime/default_strategies.py:73:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/default_strategies.py:38:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/runtime/default_strategies.py:12:0: W0611: Unused TransactionContext imported from depanalyzer.runtime.context (unused-import)
+************* Module runtime.dependency_collector
+depanalyzer/runtime/dependency_collector.py:103:0: C0305: Trailing newlines (trailing-newlines)
+depanalyzer/runtime/dependency_collector.py:80:15: W0718: Catching too general exception Exception (broad-exception-caught)
+************* Module runtime.dependency_resolver
+depanalyzer/runtime/dependency_resolver.py:19:0: R0914: Too many local variables (20/15) (too-many-locals)
+depanalyzer/runtime/dependency_resolver.py:116:15: W0718: Catching too general exception Exception (broad-exception-caught)
+************* Module runtime.ecosystem_config_registry
+depanalyzer/runtime/ecosystem_config_registry.py:80:0: C0305: Trailing newlines (trailing-newlines)
+depanalyzer/runtime/ecosystem_config_registry.py:72:15: W0718: Catching too general exception Exception (broad-exception-caught)
+************* Module runtime.eventbus
+depanalyzer/runtime/eventbus.py:131:23: W0718: Catching too general exception Exception (broad-exception-caught)
+************* Module runtime.graph_config
+depanalyzer/runtime/graph_config.py:199:0: R0902: Too many instance attributes (8/7) (too-many-instance-attributes)
+depanalyzer/runtime/graph_config.py:227:0: R0902: Too many instance attributes (8/7) (too-many-instance-attributes)
+************* Module runtime.progress
+depanalyzer/runtime/progress.py:396:0: C0301: Line too long (102/100) (line-too-long)
+depanalyzer/runtime/progress.py:101:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/progress.py:145:0: R0902: Too many instance attributes (13/7) (too-many-instance-attributes)
+depanalyzer/runtime/progress.py:454:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/progress.py:455:16: W1203: Use lazy % formatting in logging functions (logging-fstring-interpolation)
+depanalyzer/runtime/progress.py:517:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/progress.py:518:12: W1203: Use lazy % formatting in logging functions (logging-fstring-interpolation)
+depanalyzer/runtime/progress.py:531:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/progress.py:538:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/progress.py:15:0: W0611: Unused RenderableType imported from rich.console (unused-import)
+depanalyzer/runtime/progress.py:16:0: W0611: Unused Layout imported from rich.layout (unused-import)
+depanalyzer/runtime/progress.py:28:0: W0611: Unused Table imported from rich.table (unused-import)
+************* Module runtime.strategies
+depanalyzer/runtime/strategies.py:81:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/runtime/strategies.py:108:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/runtime/strategies.py:120:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/runtime/strategies.py:132:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/runtime/strategies.py:144:0: R0903: Too few public methods (1/2) (too-few-public-methods)
+depanalyzer/runtime/strategies.py:16:0: W0611: Unused Optional imported from typing (unused-import)
+depanalyzer/runtime/strategies.py:20:0: W0611: Unused DetectContext imported from depanalyzer.runtime.context (unused-import)
+depanalyzer/runtime/strategies.py:20:0: W0611: Unused ParseContext imported from depanalyzer.runtime.context (unused-import)
+depanalyzer/runtime/strategies.py:20:0: W0611: Unused ResolveDepsContext imported from depanalyzer.runtime.context (unused-import)
+************* Module runtime.transaction
+depanalyzer/runtime/transaction.py:446:0: C0301: Line too long (120/100) (line-too-long)
+depanalyzer/runtime/transaction.py:736:0: C0301: Line too long (125/100) (line-too-long)
+depanalyzer/runtime/transaction.py:1043:0: C0301: Line too long (136/100) (line-too-long)
+depanalyzer/runtime/transaction.py:1:0: C0302: Too many lines in module (1845/1000) (too-many-lines)
+depanalyzer/runtime/transaction.py:52:0: R0902: Too many instance attributes (27/7) (too-many-instance-attributes)
+depanalyzer/runtime/transaction.py:63:4: R0913: Too many arguments (19/5) (too-many-arguments)
+depanalyzer/runtime/transaction.py:63:4: R0917: Too many positional arguments (19/5) (too-many-positional-arguments)
+depanalyzer/runtime/transaction.py:63:4: R0914: Too many local variables (21/15) (too-many-locals)
+depanalyzer/runtime/transaction.py:143:73: R1735: Consider using '{}' instead of a call to 'dict'. (use-dict-literal)
+depanalyzer/runtime/transaction.py:163:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:150:16: C0415: Import outside toplevel (depanalyzer.parsers.cpp.code_dependency_mapper.CppCodeDependencyMapper) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:153:16: C0415: Import outside toplevel (depanalyzer.parsers.hvigor.code_dependency_mapper.HvigorCodeDependencyMapper) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:247:16: C0415: Import outside toplevel (depanalyzer.runtime.dependency_collector.DependencyCollector) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:290:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:303:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:342:4: R0914: Too many local variables (22/15) (too-many-locals)
+depanalyzer/runtime/transaction.py:356:8: C0415: Import outside toplevel (depanalyzer.parsers.registry.EcosystemRegistry) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:401:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:418:25: W0212: Access to a protected member _queue of a client class (protected-access)
+depanalyzer/runtime/transaction.py:342:4: R0915: Too many statements (54/50) (too-many-statements)
+depanalyzer/runtime/transaction.py:427:12: W0612: Unused variable 'task_id' (unused-variable)
+depanalyzer/runtime/transaction.py:468:4: R0914: Too many local variables (47/15) (too-many-locals)
+depanalyzer/runtime/transaction.py:490:12: C0415: Import outside toplevel (depanalyzer.graph.manager.GraphManager) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:501:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:518:12: C0415: Import outside toplevel (depanalyzer.runtime.dependency_collector.DependencyCollector) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:536:8: C0415: Import outside toplevel (depanalyzer.parsers.registry.EcosystemRegistry) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:604:27: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:686:8: C0415: Import outside toplevel (depanalyzer.runtime.code_parser_pool.CodeParserPool) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:687:8: C0415: Import outside toplevel (concurrent.futures.as_completed) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:468:4: R0912: Too many branches (26/12) (too-many-branches)
+depanalyzer/runtime/transaction.py:468:4: R0915: Too many statements (116/50) (too-many-statements)
+depanalyzer/runtime/transaction.py:634:12: W0612: Unused variable 'task_id' (unused-variable)
+depanalyzer/runtime/transaction.py:687:8: W0611: Unused as_completed imported from concurrent.futures (unused-import)
+depanalyzer/runtime/transaction.py:798:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:801:4: R0914: Too many local variables (31/15) (too-many-locals)
+depanalyzer/runtime/transaction.py:864:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:855:20: C0415: Import outside toplevel (depanalyzer.graph.global_dag.GlobalDAG) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:900:8: C0415: Import outside toplevel (depanalyzer.runtime.dependency_resolver.resolve_dependencies) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:918:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:915:12: W0404: Reimport 'Path' (imported line 13) (reimported)
+depanalyzer/runtime/transaction.py:915:12: C0415: Import outside toplevel (pathlib.Path) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:931:23: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:961:8: C0415: Import outside toplevel (depanalyzer.runtime.coordinator.TransactionCoordinator) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:995:8: C0415: Import outside toplevel (concurrent.futures.as_completed) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1031:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1066:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1057:16: C0415: Import outside toplevel (depanalyzer.graph.global_dag.GlobalDAG) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:801:4: R0912: Too many branches (25/12) (too-many-branches)
+depanalyzer/runtime/transaction.py:801:4: R0915: Too many statements (110/50) (too-many-statements)
+depanalyzer/runtime/transaction.py:995:8: W0611: Unused as_completed imported from concurrent.futures (unused-import)
+depanalyzer/runtime/transaction.py:1112:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1126:8: C0415: Import outside toplevel (depanalyzer.parsers.base.DependencySpec) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1168:4: R0914: Too many local variables (23/15) (too-many-locals)
+depanalyzer/runtime/transaction.py:1203:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1195:16: W0404: Reimport 'Path' (imported line 13) (reimported)
+depanalyzer/runtime/transaction.py:1195:16: C0415: Import outside toplevel (pathlib.Path) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1196:16: C0415: Import outside toplevel (json) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1271:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1221:12: C0415: Import outside toplevel (depanalyzer.graph.manager.EdgeKind, depanalyzer.graph.manager.NodeType) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1222:12: C0415: Import outside toplevel (depanalyzer.graph.linking.LinkClass) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1279:4: R0914: Too many local variables (16/15) (too-many-locals)
+depanalyzer/runtime/transaction.py:1298:8: C0415: Import outside toplevel (depanalyzer.parsers.registry.EcosystemRegistry) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1299:8: C0415: Import outside toplevel (depanalyzer.graph.linker_contract.GlobalContractLinker) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1316:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1327:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1336:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1295:8: W0612: Unused variable 'eventbus' (unused-variable)
+depanalyzer/runtime/transaction.py:1342:4: R0914: Too many local variables (18/15) (too-many-locals)
+depanalyzer/runtime/transaction.py:1386:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1415:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1399:12: C0415: Import outside toplevel (depanalyzer.analysis.deadcode.DeadcodeAnalyzer) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1442:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1426:12: C0415: Import outside toplevel (depanalyzer.analysis.linkage.LinkageAnalyzer) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1457:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1449:12: C0415: Import outside toplevel (depanalyzer.analysis.uncertainty.UncertaintyAnalyzer) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1450:12: C0415: Import outside toplevel (depanalyzer.runtime.graph_config.UncertaintyPolicyConfig) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1467:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1342:4: R0912: Too many branches (19/12) (too-many-branches)
+depanalyzer/runtime/transaction.py:1342:4: R0915: Too many statements (76/50) (too-many-statements)
+depanalyzer/runtime/transaction.py:1556:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1513:16: C0415: Import outside toplevel (json) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1514:16: C0415: Import outside toplevel (networkx.readwrite.node_link_data) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1521:31: W0212: Access to a protected member _backend of a client class (protected-access)
+depanalyzer/runtime/transaction.py:1570:4: R0914: Too many local variables (26/15) (too-many-locals)
+depanalyzer/runtime/transaction.py:1678:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1597:12: C0415: Import outside toplevel (json) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1598:12: C0415: Import outside toplevel (networkx.MultiDiGraph) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1599:12: C0415: Import outside toplevel (networkx.readwrite.node_link_data) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1601:12: C0415: Import outside toplevel (depanalyzer.graph.schema_utils.canonicalize_edge, depanalyzer.graph.schema_utils.canonicalize_node) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1607:27: W0212: Access to a protected member _backend of a client class (protected-access)
+depanalyzer/runtime/transaction.py:1635:19: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1623:22: W0612: Unused variable 'key' (unused-variable)
+depanalyzer/runtime/transaction.py:1692:8: C0415: Import outside toplevel (depanalyzer.runtime.coordinator.TransactionResult) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1696:8: C0415: Import outside toplevel (depanalyzer.parsers) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1697:8: C0415: Import outside toplevel (depanalyzer.parsers.registry.EcosystemRegistry) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1807:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1737:12: C0415: Import outside toplevel (depanalyzer.graph.manager.GraphManager) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1746:27: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/transaction.py:1760:16: C0415: Import outside toplevel (depanalyzer.graph.registry.GraphRegistry) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1818:12: W0404: Reimport 'TransactionResult' (imported line 1692) (reimported)
+depanalyzer/runtime/transaction.py:1818:12: C0415: Import outside toplevel (depanalyzer.runtime.coordinator.TransactionResult) (import-outside-toplevel)
+depanalyzer/runtime/transaction.py:1696:8: W0611: Unused import depanalyzer.parsers (unused-import)
+depanalyzer/runtime/transaction.py:349:8: W0201: Attribute '_detected_targets' defined outside __init__ (attribute-defined-outside-init)
+************* Module runtime.worker
+depanalyzer/runtime/worker.py:176:15: W0718: Catching too general exception Exception (broad-exception-caught)
+depanalyzer/runtime/worker.py:235:35: W0718: Catching too general exception Exception (broad-exception-caught)
+************* Module runtime.workspace
+depanalyzer/runtime/workspace.py:178:15: W0718: Catching too general exception Exception (broad-exception-caught)
+************* Module utils.path_utils
+depanalyzer/utils/path_utils.py:76:4: R1705: Unnecessary "elif" after "return", remove the leading "el" from "elif" (no-else-return)
+depanalyzer/utils/path_utils.py:121:7: R1714: Consider merging these comparisons with 'in' by using 'node_id in ('//', '//../')'. Use a set instead if elements are hashable. (consider-using-in)
+************* Module analysis.test_license
+tests/analysis/test_license.py:1:0: C0114: Missing module docstring (missing-module-docstring)
+tests/analysis/test_license.py:3:0: E0401: Unable to import 'depanalyzer.analysis.license' (import-error)
+tests/analysis/test_license.py:3:0: E0611: No name 'license' in module 'depanalyzer.analysis' (no-name-in-module)
+tests/analysis/test_license.py:41:0: C0116: Missing function or method docstring (missing-function-docstring)
+tests/analysis/test_license.py:68:0: C0116: Missing function or method docstring (missing-function-docstring)
+************* Module analysis.test_uncertainty
+tests/analysis/test_uncertainty.py:1:0: C0114: Missing module docstring (missing-module-docstring)
+tests/analysis/test_uncertainty.py:11:0: C0116: Missing function or method docstring (missing-function-docstring)
+tests/analysis/test_uncertainty.py:34:13: W0212: Access to a protected member _backend of a client class (protected-access)
+tests/analysis/test_uncertainty.py:47:0: C0116: Missing function or method docstring (missing-function-docstring)
+tests/analysis/test_uncertainty.py:78:13: W0212: Access to a protected member _backend of a client class (protected-access)
+************* Module cli.test_license_report
+tests/cli/test_license_report.py:84:0: C0305: Trailing newlines (trailing-newlines)
+tests/cli/test_license_report.py:1:0: C0114: Missing module docstring (missing-module-docstring)
+tests/cli/test_license_report.py:10:0: E0401: Unable to import 'depanalyzer.cli.license_report' (import-error)
+tests/cli/test_license_report.py:10:0: E0611: No name 'license_report' in module 'depanalyzer.cli' (no-name-in-module)
+tests/cli/test_license_report.py:59:0: C0116: Missing function or method docstring (missing-function-docstring)
+tests/cli/test_license_report.py:59:59: W0613: Unused argument 'monkeypatch' (unused-argument)
+tests/cli/test_license_report.py:61:4: W0612: Unused variable 'graphs_root' (unused-variable)
+************* Module parsers.hvigor.test_dep_fetcher
+tests/parsers/hvigor/test_dep_fetcher.py:1:0: C0114: Missing module docstring (missing-module-docstring)
+tests/parsers/hvigor/test_dep_fetcher.py:45:19: W0613: Unused argument 'repo_url' (unused-argument)
+tests/parsers/hvigor/test_dep_fetcher.py:45:51: W0613: Unused argument 'release_time_iso' (unused-argument)
+************* Module runtime.test_dependency_resolver
+tests/runtime/test_dependency_resolver.py:54:0: C0305: Trailing newlines (trailing-newlines)
+tests/runtime/test_dependency_resolver.py:1:0: C0114: Missing module docstring (missing-module-docstring)
+tests/runtime/test_dependency_resolver.py:23:58: W0613: Unused argument 'monkeypatch' (unused-argument)
+tests/runtime/test_dependency_resolver.py:1:0: R0801: Similar lines in 2 files
+==parsers.hvigor.code_dependency_mapper:[36:60]
+==runtime.default_strategies:[67:92]
+        try:
+            if graph.root_path:
+                file_node_id = graph.normalize_path(file_path)
+            else:
+                file_node_id = str(file_path)
+        except Exception:
+            file_node_id = str(file_path)
+
+        if not graph.has_node(file_node_id):
+            file_spec = NodeSpec(
+                id=file_node_id,
+                type=NodeType.CODE,
+                src_path=str(file_path.resolve()),
+                path=str(file_path),
+                name=file_path.name,
+                parser_name=parser_name,
+            )
+            graph.add_node_spec(file_spec)
+
+        includes = parse_result.get("includes")
+        if includes is None:
+            includes = parse_result.get("imports", [])
+
+        # Fallback behavior: create INCLUDE edges by path only.
+        for include_path in includes: (duplicate-code)
+tests/runtime/test_dependency_resolver.py:1:0: R0801: Similar lines in 2 files
+==parsers.cpp.code_dependency_mapper:[41:65]
+==parsers.hvigor.code_dependency_mapper:[36:59]
+        try:
+            if graph.root_path:
+                file_node_id = graph.normalize_path(file_path)
+            else:
+                file_node_id = str(file_path)
+        except Exception:
+            file_node_id = str(file_path)
+
+        # Ensure file node exists as a CODE node using the structured schema.
+        if not graph.has_node(file_node_id):
+            file_spec = NodeSpec(
+                id=file_node_id,
+                type=NodeType.CODE,
+                src_path=str(file_path.resolve()),
+                path=str(file_path),
+                name=file_path.name,
+                parser_name=parser_name,
+            )
+            graph.add_node_spec(file_spec)
+
+        includes = parse_result.get("includes")
+        if includes is None:
+            includes = parse_result.get("imports", [])
+ (duplicate-code)
+tests/runtime/test_dependency_resolver.py:1:0: R0801: Similar lines in 2 files
+==parsers.cpp.dep_fetcher:[93:125]
+==parsers.hvigor.dep_fetcher:[139:168]
+        branch = dep_spec.metadata.get("branch")
+        tag = dep_spec.metadata.get("tag") or dep_spec.version
+
+        # Clone repository
+        success = self.git_clone(
+            url=url,
+            target_dir=cache_dir,
+            branch=branch,
+            tag=tag,
+            depth=1,
+            force=False,
+        )
+
+        if success:
+            logger.info("Successfully fetched %s to %s", dep_spec.name, cache_dir)
+            return cache_dir
+        else:
+            logger.error("Failed to fetch %s from %s", dep_spec.name, url)
+            return None
+
+    def _fetch_from_ohpm(self, dep_spec: DependencySpec) -> Optional[Path]:
+        """Fetch dependency from OHPM registry.
+
+        Args:
+            dep_spec: Dependency specification.
+
+        Returns:
+            Optional[Path]: Local path if successful, None otherwise.
+        """ (duplicate-code)
+tests/runtime/test_dependency_resolver.py:1:0: R0801: Similar lines in 2 files
+==parsers.cpp.cmake.commands.sources:[110:126]
+==parsers.cpp.cmake.commands.target:[311:325]
+                source_file_data.append({"source_id": source_id, "node_type": "code"})
+
+        # Publish event with all source files
+        if source_file_data:
+            event = Event(
+                event_type=EventType.CMAKE_SOURCE_FILES_ADDED,
+                source=self.parser_name,
+                data={
+                    "target_id": target_id,
+                    "source_files": source_file_data,
+                    "confidence": 1.0,
+                },
+            )
+            self.eventbus.publish(event)
+            log.debug("Published CMAKE_SOURCE_FILES_ADDED for %s (%d files)", target_id, len(source_file_data))
+ (duplicate-code)
+tests/runtime/test_dependency_resolver.py:1:0: R0801: Similar lines in 2 files
+==parsers.cpp.cmake.detector:[57:71]
+==parsers.hvigor.detector:[69:83]
+                event = Event(
+                    event_type=EventType.TARGET_DETECTED,
+                    source=self.NAME,
+                    data={
+                        "target_path": str(file_path),
+                        "target_type": target_type,
+                        "file_name": file_path.name,
+                        "parser_name": self.NAME,
+                    },
+                )
+                self.publish_detection_event(event)
+
+                logger.debug(f"Detected {target_type}: {file_path}")
+ (duplicate-code)
+tests/runtime/test_dependency_resolver.py:1:0: R0801: Similar lines in 2 files
+==parsers.cpp.code_parser:[103:118]
+==parsers.hvigor.code_parser:[119:133]
+            try:
+                cursor = QueryCursor(query)
+                capture_dict = cursor.captures(tree.root_node)
+
+                path_nodes = []
+                if isinstance(capture_dict, dict):
+                    path_nodes = capture_dict.get("path", [])
+                else:
+                    for node, capture_name in capture_dict:
+                        if capture_name == "path":
+                            path_nodes.append(node)
+
+                for node in path_nodes:
+                    try: (duplicate-code)
+tests/runtime/test_dependency_resolver.py:1:0: R0801: Similar lines in 2 files
+==parsers.cpp.config_model:[102:114]
+==parsers.hvigor.config_model:[120:132]
+                )
+            ),
+        )
+
+        return cls(
+            detect=detect_cfg,
+            parser=parser_cfg,
+            code_parser=code_parser_cfg,
+            linker=linker_cfg,
+        )
+
+ (duplicate-code)
+tests/runtime/test_dependency_resolver.py:1:0: R0801: Similar lines in 2 files
+==runtime.code_parser_pool:[183:200]
+==runtime.coordinator:[160:185]
+        return cls._instance
+
+    @classmethod
+    def reset_instance(cls) -> None:
+        """Reset the singleton instance (mainly for testing)."""
+        if cls._instance is not None:
+            cls._instance.shutdown()
+        cls._instance = None
+        cls._initialized = False
+
+    def submit(self, transaction: "Transaction") -> Future:
+        """Submit a transaction for parallel execution.
+
+        Args:
+            transaction: Transaction instance to execute.
+
+        Returns:
+            Future: Future object for tracking execution.
+        """
+        import pickle
+
+        # Ensure executor is created
+        if self._executor is None:
+            # Use explicit 'spawn' context for Windows compatibility
+            # On Unix, this is harmless; on Windows, it's required to avoid bootstrap errors (duplicate-code)
+tests/runtime/test_dependency_resolver.py:1:0: R0801: Similar lines in 2 files
+==cli.dag:[37:45]
+==cli.scancode:[192:201]
+        if cache_dir_arg:
+            cache_dir = Path(cache_dir_arg).expanduser().resolve()
+        else:
+            cache_dir = Path(".dep_cache").expanduser().resolve()
+
+        graphs_root = cache_dir / "graphs"
+        graphs_root.mkdir(parents=True, exist_ok=True)
+ (duplicate-code)
+tests/runtime/test_dependency_resolver.py:1:0: R0801: Similar lines in 2 files
+==parsers.cpp.config_parser:[164:186]
+==parsers.hvigor.config_parser:[222:238]
+            if resolved in seen:
+                continue
+
+            seen.add(resolved)
+            unique_files.append(resolved)
+
+        return unique_files
+
+    def _discover_module_code_files(self, module_root: Path) -> list[Path]:
+        """Discover ArkTS/TS/JS files under a module root.
+
+        Args:
+            module_root: Module root directory path.
+        Returns:
+            list[Path]: Source files discovered under the module root.
+        """ (duplicate-code)
+tests/runtime/test_dependency_resolver.py:1:0: R0801: Similar lines in 2 files
+==parsers.cpp.cmake.commands.linking:[46:53]
+==parsers.cpp.cmake.commands.target:[87:95]
+            return False
+
+        target = clean_token(args[0])
+        if not target:
+            return False
+
+        target = variable_resolver.resolve(target)
+ (duplicate-code)
+tests/runtime/test_dependency_resolver.py:1:0: R0801: Similar lines in 2 files
+==parsers.cpp.cmake.commands.includes:[50:57]
+==parsers.cpp.cmake.commands.sources:[50:56]
+        if not args:
+            return False
+
+        target_tok = clean_token(args[0])
+        if not target_tok:
+            return False (duplicate-code)
+tests/runtime/test_dependency_resolver.py:1:0: R0801: Similar lines in 2 files
+==parsers.cpp.code_parser:[124:131]
+==parsers.hvigor.code_parser:[139:144]
+            except AttributeError:
+                for node, capture_name in query.captures(tree.root_node):
+                    if capture_name != "path":
+                        continue
+                    try: (duplicate-code)
+
+------------------------------------------------------------------
+Your code has been rated at 9.17/10 (previous run: 9.17/10, +0.00)
+

@@ -67,7 +67,7 @@ class CMakeDetector(BaseDetector):
                 )
                 self.publish_detection_event(event)
 
-                logger.debug(f"Detected {target_type}: {file_path}")
+                logger.debug("Detected %s: %s", target_type, file_path)
 
-        logger.info(f"CMakeDetector found {len(detected)} CMake files")
+        logger.info("CMakeDetector found %d CMake files", len(detected))
         return detected

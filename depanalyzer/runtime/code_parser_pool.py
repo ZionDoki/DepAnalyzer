@@ -8,9 +8,12 @@ Unlike Transaction-level parallelism (which uses ProcessPoolExecutor for entire
 transactions), this pool provides file-level parallelism for fine-grained code parsing.
 """
 
+# Worker pool paths intentionally catch Exception to surface failures per file rather than crash.
+# pylint: disable=broad-exception-caught
+
 import logging
 import os
-from concurrent.futures import Future, ProcessPoolExecutor, as_completed
+from concurrent.futures import Future, ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -42,7 +45,7 @@ def _get_code_parser(ecosystem: str, config: Any | None = None):
             parser_class = registry.get_code_parser(ecosystem)
 
             if parser_class is None:
-                logger.warning(f"No code parser registered for ecosystem: {ecosystem}")
+                logger.warning("No code parser registered for ecosystem: %s", ecosystem)
                 return None
 
             # Instantiate and cache; prefer passing through configuration
@@ -61,7 +64,7 @@ def _get_code_parser(ecosystem: str, config: Any | None = None):
             )
 
         except Exception as e:
-            logger.error(f"Failed to create code parser for {ecosystem}: {e}")
+            logger.error("Failed to create code parser for %s: %s", ecosystem, e)
             return None
 
     return _CODE_PARSER_CACHE[ecosystem]
@@ -112,7 +115,9 @@ def _code_worker_dispatch(task_data: Tuple[str, str, Any | None]) -> Dict[str, A
             result.setdefault("ecosystem", ecosystem)
         return result
     except Exception as e:
-        logger.error(f"[PID {os.getpid()}] Failed to parse {file_path}: {e}")
+        logger.error(
+            "[PID %d] Failed to parse %s: %s", os.getpid(), file_path, e
+        )
         return {
             "file": file_path_str,
             "error": str(e),
@@ -165,9 +170,7 @@ class CodeParserPool:
         self.max_workers = max_workers or os.cpu_count() or 4
         self._executor: Optional[ProcessPoolExecutor] = None
 
-        logger.info(
-            "CodeParserPool initialized with %d max workers", self.max_workers
-        )
+        logger.info("CodeParserPool initialized with %d max workers", self.max_workers)
 
         CodeParserPool._initialized = True
 
@@ -201,10 +204,14 @@ class CodeParserPool:
         """
         if self._executor is None:
             self._executor = ProcessPoolExecutor(max_workers=self.max_workers)
-            logger.info("Process pool executor started with %d workers", self.max_workers)
+            logger.info(
+                "Process pool executor started with %d workers", self.max_workers
+            )
         return self._executor
 
-    def submit_file(self, file_path: Path, ecosystem: str, config: Any | None = None) -> Future:
+    def submit_file(
+        self, file_path: Path, ecosystem: str, config: Any | None = None
+    ) -> Future:
         """Submit a single file for parsing.
 
         Args:

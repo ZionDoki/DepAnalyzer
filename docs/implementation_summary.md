@@ -27,11 +27,11 @@
   - `match_contracts()` - 自动匹配
   - `get_providers()` / `get_consumers()` - 查询接口
 
-#### Hook系统
-- **`depanalyzer/hooks/contract_matcher.py`** (181行) - 契约匹配Hook
-  - JOIN阶段执行
-  - 多抓手融合策略
-  - 创建跨语言DEPENDS_ON边
+#### 契约匹配逻辑
+- **`depanalyzer/graph/contract_registry.py`** 中的 `match_contracts()`
+  - 在 JOIN 阶段由 GlobalContractLinker 调用
+  - 多抓手融合策略（当前实现主要是 artifact_name）
+  - 创建跨语言 `DEPENDS_ON` 边
 
 #### 文档
 - **`docs/mixed_language_linking.md`** (500+行) - 完整使用文档
@@ -103,7 +103,7 @@ for abi in ["arm64-v8a", "armeabi-v7a", "x86_64"]:
 ---
 
 #### CMakeGraphBuilder契约注册（Provider侧）
-**文件**: `depanalyzer/hooks/cmake_graph_builder.py`
+**文件**: `depanalyzer/parsers/cpp/cmake_graph_builder.py`
 
 **改动**：
 ```python

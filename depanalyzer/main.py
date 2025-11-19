@@ -6,7 +6,6 @@ Provides commands: scan, query, explain, export
 import argparse
 import logging
 import sys
-from pathlib import Path
 from typing import Optional
 
 from rich.console import Console
@@ -15,7 +14,7 @@ from rich.logging import RichHandler
 logger = logging.getLogger("depanalyzer.cli")
 
 # Trigger ecosystem registration by importing parsers package
-import depanalyzer.parsers  # noqa: F401
+import depanalyzer.parsers  # noqa: F401  # pylint: disable=unused-import
 
 from depanalyzer.cli.scan import scan_command
 from depanalyzer.cli.export import export_command

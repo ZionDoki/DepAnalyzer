@@ -43,14 +43,18 @@ class CppLinker(BaseLinker):
     def _enrich_linkage_edges(self) -> None:
         """Infer linkage_type for CMake link edges and tag them as build_config."""
         graph_manager: GraphManager = self.graph_manager
-        backend = graph_manager._backend.native_graph  # type: ignore[attr-defined]
+        backend = graph_manager.backend.native_graph  # type: ignore[attr-defined]
 
         enriched_count = 0
 
-        for source, target, key, attrs in backend.edges(data=True, keys=True):
+        for _source, target, _key, attrs in backend.edges(data=True, keys=True):
             edge_kind = attrs.get("kind") or attrs.get("label") or attrs.get("type")
 
-            if edge_kind not in (EdgeKind.LINKS.value, EdgeKind.LINK_LIBRARIES.value, "link_libraries"):
+            if edge_kind not in (
+                EdgeKind.LINKS.value,
+                EdgeKind.LINK_LIBRARIES.value,
+                "link_libraries",
+            ):
                 continue
 
             linkage_type = self._infer_linkage_type(graph_manager, target, attrs)
@@ -91,9 +95,15 @@ class CppLinker(BaseLinker):
         target_type = target_attrs.get("type")
         target_linkage_kind = target_attrs.get("linkage_kind")
 
-        if target_type == NodeType.SHARED_LIBRARY.value or target_linkage_kind == "shared":
+        if (
+            target_type == NodeType.SHARED_LIBRARY.value
+            or target_linkage_kind == "shared"
+        ):
             return "dynamic"
-        if target_type == NodeType.STATIC_LIBRARY.value or target_linkage_kind == "static":
+        if (
+            target_type == NodeType.STATIC_LIBRARY.value
+            or target_linkage_kind == "static"
+        ):
             return "static"
         if target_type == NodeType.MODULE.value or target_linkage_kind == "module":
             return "module"

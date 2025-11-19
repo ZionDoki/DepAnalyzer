@@ -1,7 +1,10 @@
 """Parsers package.
 
-Language‑specific code and config parsers are registered from here.
+Language-specific code and config parsers are registered from here.
 """
+
+# Ecosystem registration must tolerate arbitrary import failures for resilience.
+# pylint: disable=broad-exception-caught
 
 import logging
 
