@@ -13,7 +13,12 @@ transactions), this pool provides file-level parallelism for fine-grained code p
 
 import logging
 import os
-from concurrent.futures import Future, ProcessPoolExecutor
+from concurrent.futures import (
+    BrokenExecutor,
+    CancelledError,
+    Future,
+    ProcessPoolExecutor,
+)
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -62,7 +67,7 @@ def _get_code_parser(ecosystem: str, config: Any | None = None):
                 "[PID %d] Cached code parser for ecosystem: %s", os.getpid(), ecosystem
             )
 
-        except Exception as e:
+        except (ImportError, AttributeError, TypeError, ValueError, RuntimeError) as e:
             logger.error("Failed to create code parser for %s: %s", ecosystem, e)
             return None
 
@@ -113,7 +118,7 @@ def _code_worker_dispatch(task_data: Tuple[str, str, Any | None]) -> Dict[str, A
             # Propagate ecosystem so Transaction can specialize handling
             result.setdefault("ecosystem", ecosystem)
         return result
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError, UnicodeDecodeError) as e:
         logger.error("[PID %d] Failed to parse %s: %s", os.getpid(), file_path, e)
         return {
             "file": file_path_str,
@@ -278,7 +283,7 @@ class CodeParserPool:
                 try:
                     result = future.result(timeout=timeout)
                     results[file_path] = result
-                except Exception as e:
+                except (CancelledError, BrokenExecutor, OSError, ValueError, RuntimeError) as e:
                     logger.error("Failed to get result for %s: %s", file_path, e)
                     results[file_path] = {
                         "file": str(file_path),

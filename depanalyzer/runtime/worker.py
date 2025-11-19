@@ -192,9 +192,17 @@ class Worker:
                 error=e,
                 execution_time=execution_time,
             )
-        except BaseException as e:
-            # Catch-all for unexpected exceptions (including KeyboardInterrupt/SystemExit);
-            # logs and returns failure. This is intentional to prevent coordinator crash.
+        except (
+            TypeError,
+            AttributeError,
+            KeyError,
+            IndexError,
+            OSError,
+            ImportError,
+            LookupError,
+            ArithmeticError,
+            MemoryError,
+        ) as e:
             execution_time = time.time() - start_time
             logger.error(
                 "[PID %d] Task %s failed with unexpected error: %s",
@@ -276,7 +284,17 @@ class Worker:
                                         error=e,
                                         execution_time=0.0,
                                     )
-                            except BaseException as e:
+                            except (
+                                TypeError,
+                                AttributeError,
+                                KeyError,
+                                IndexError,
+                                OSError,
+                                ImportError,
+                                LookupError,
+                                ArithmeticError,
+                                MemoryError,
+                            ) as e:
                                 logger.error(
                                     "[PID %d] Task %s failed with unexpected error: %s",
                                     os.getpid(),

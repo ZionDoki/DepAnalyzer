@@ -99,7 +99,7 @@ class LogBufferHandler(logging.Handler):
         try:
             message = self.format(record)
             self.log_buffer.add(message)
-        except Exception:
+        except (ValueError, TypeError, AttributeError, OSError):
             self.handleError(record)
 
 
@@ -456,7 +456,7 @@ class ProgressManager:
                             self._build_live_panel(),
                         )
                     self._live.update(renderable)
-            except Exception as e:
+            except (RuntimeError, ValueError, TypeError, AttributeError, OSError) as e:
                 logger.debug("Live display update error: %s", e)
 
             # Sleep with early exit on stop event
@@ -519,7 +519,7 @@ class ProgressManager:
                 with self._progress:
                     yield self
 
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError, AttributeError, OSError) as e:
             logger.error("Progress display error: %s", e)
             yield self
 
@@ -533,12 +533,12 @@ class ProgressManager:
         if self._live:
             try:
                 self._live.stop()
-            except Exception:
+            except (RuntimeError, ValueError, AttributeError):
                 pass
             self._live = None
 
         if self._progress:
             try:
                 self._progress.stop()
-            except Exception:
+            except (RuntimeError, ValueError, AttributeError):
                 pass

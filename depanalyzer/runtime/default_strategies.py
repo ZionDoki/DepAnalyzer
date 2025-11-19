@@ -71,7 +71,7 @@ class DefaultCodeDependencyMapper(CodeDependencyMapper):
                 file_node_id = graph.normalize_path(file_path)
             else:
                 file_node_id = str(file_path)
-        except Exception:
+        except AttributeError:
             file_node_id = str(file_path)
 
         if not graph.has_node(file_node_id):

@@ -80,7 +80,7 @@ class DependencyCollector:
                 spec.ecosystem,
                 event.source,
             )
-        except Exception as exc:
+        except (KeyError, AttributeError, TypeError) as exc:
             logger.error(
                 "Failed to handle DEPENDENCY_DISCOVERED event from %s: %s",
                 event.source,

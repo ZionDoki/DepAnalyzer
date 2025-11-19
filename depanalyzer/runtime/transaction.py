@@ -20,8 +20,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence
 from networkx import MultiDiGraph
 from networkx.readwrite import node_link_data
 
-import depanalyzer.parsers
-
 from depanalyzer.analysis.deadcode import DeadcodeAnalyzer
 from depanalyzer.analysis.linkage import LinkageAnalyzer
 from depanalyzer.analysis.uncertainty import (
@@ -301,7 +299,17 @@ class Transaction:
             if hook.phase == self._current_phase:
                 try:
                     hook.before(ctx)
-                except Exception:
+                except (
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                    KeyError,
+                    IndexError,
+                    OSError,
+                    ImportError,
+                    LookupError,
+                ):
                     logger.exception("Lifecycle hook %r before() failed", hook)
 
     def _run_lifecycle_hooks_after(self, ctx: TransactionContext) -> None:
@@ -314,7 +322,17 @@ class Transaction:
             if hook.phase == self._current_phase:
                 try:
                     hook.after(ctx)
-                except Exception:
+                except (
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                    KeyError,
+                    IndexError,
+                    OSError,
+                    ImportError,
+                    LookupError,
+                ):
                     logger.exception("Lifecycle hook %r after() failed", hook)
 
     def _phase_acquire(self) -> None:
@@ -410,7 +428,17 @@ class Transaction:
                     targets = detector.detect()
                     logger.info("Detector %s found %d targets", eco, len(targets))
                     return {"ecosystem": eco, "targets": targets, "success": True}
-                except Exception as e:
+                except (
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                    KeyError,
+                    IndexError,
+                    OSError,
+                    ImportError,
+                    LookupError,
+                ) as e:
                     logger.error("Detector %s failed: %s", eco, e)
                     return {
                         "ecosystem": eco,
@@ -512,7 +540,17 @@ class Transaction:
                 try:
                     if self.workspace.root_path:
                         path_namespace = Path(self.workspace.root_path).name
-                except Exception:
+                except (
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                    KeyError,
+                    IndexError,
+                    OSError,
+                    ImportError,
+                    LookupError,
+                ):
                     path_namespace = None
 
             self._graph_manager = GraphManager(
@@ -611,7 +649,17 @@ class Transaction:
                             "code_files": code_files,
                             "success": True,
                         }
-                    except Exception as e:
+                    except (
+                        RuntimeError,
+                        ValueError,
+                        TypeError,
+                        AttributeError,
+                        KeyError,
+                        IndexError,
+                        OSError,
+                        ImportError,
+                        LookupError,
+                    ) as e:
                         logger.error("Parser %s failed for %s: %s", eco, tgt, e)
                         return {
                             "ecosystem": eco,
@@ -806,7 +854,17 @@ class Transaction:
 
         try:
             mapper.map(code_ctx)
-        except Exception:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+            IndexError,
+            OSError,
+            ImportError,
+            LookupError,
+        ):
             logger.exception("CodeDependencyMapper failed for file %s", file_path)
 
     def _phase_resolve_deps(self) -> None:
@@ -870,7 +928,17 @@ class Transaction:
                         "(no dependencies discovered)",
                         self.graph_id,
                     )
-                except Exception as e:
+                except (
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                    KeyError,
+                    IndexError,
+                    OSError,
+                    ImportError,
+                    LookupError,
+                ) as e:
                     logger.error(
                         "Failed to clear GlobalDAG dependencies for %s: %s",
                         self.graph_id,
@@ -920,7 +988,17 @@ class Transaction:
         # spurious self-loop in the GlobalDAG.
         try:
             workspace_root = Path(self.workspace.root_path).resolve()
-        except Exception:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+            IndexError,
+            OSError,
+            ImportError,
+            LookupError,
+        ):
             workspace_root = None
 
         if workspace_root is not None:
@@ -933,7 +1011,17 @@ class Transaction:
 
                 try:
                     dep_root = Path(source).resolve()
-                except Exception:
+                except (
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                    KeyError,
+                    IndexError,
+                    OSError,
+                    ImportError,
+                    LookupError,
+                ):
                     filtered_successful.append(dep)
                     continue
 
@@ -1028,7 +1116,17 @@ class Transaction:
                         result.error,
                     )
 
-            except Exception as e:
+            except (
+                RuntimeError,
+                ValueError,
+                TypeError,
+                AttributeError,
+                KeyError,
+                IndexError,
+                OSError,
+                ImportError,
+                LookupError,
+            ) as e:
                 failed_count += 1
                 logger.error(
                     "Failed to get result for child transaction %s: %s", child_tx_id, e
@@ -1065,7 +1163,17 @@ class Transaction:
                     self.graph_id,
                     len(child_graph_ids),
                 )
-            except Exception as e:
+            except (
+                RuntimeError,
+                ValueError,
+                TypeError,
+                AttributeError,
+                KeyError,
+                IndexError,
+                OSError,
+                ImportError,
+                LookupError,
+            ) as e:
                 logger.error(
                     "Failed to update GlobalDAG dependencies for %s: %s",
                     self.graph_id,
@@ -1111,7 +1219,17 @@ class Transaction:
                 kind,
                 phase,
             )
-        except Exception:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+            IndexError,
+            OSError,
+            ImportError,
+            LookupError,
+        ):
             # Progress emission must never break transaction execution.
             logger.debug("Progress event emission failed", exc_info=True)
 
@@ -1198,7 +1316,17 @@ class Transaction:
                     with meta_path.open("r", encoding="utf-8") as f:
                         meta = json.load(f)
                     license_only = bool(meta.get("license_only"))
-            except Exception as meta_err:
+            except (
+                RuntimeError,
+                ValueError,
+                TypeError,
+                AttributeError,
+                KeyError,
+                IndexError,
+                OSError,
+                ImportError,
+                LookupError,
+            ) as meta_err:
                 logger.debug(
                     "Failed to read Hvigor dependency metadata for %s from %s: %s",
                     dep_name,
@@ -1264,7 +1392,17 @@ class Transaction:
                             proxy_id,
                         )
 
-        except Exception as e:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+            IndexError,
+            OSError,
+            ImportError,
+            LookupError,
+        ) as e:
             logger.error(
                 "Failed to link dependency graph %s: %s",
                 child_graph_id,
@@ -1306,7 +1444,17 @@ class Transaction:
                 linker_cfg = self._graph_build_config.get_linker_config(eco)
                 linker = linker_cls(self._graph_manager, config=linker_cfg)
                 linker.link()
-            except Exception as e:
+            except (
+                RuntimeError,
+                ValueError,
+                TypeError,
+                AttributeError,
+                KeyError,
+                IndexError,
+                OSError,
+                ImportError,
+                LookupError,
+            ) as e:
                 logger.error(
                     "Linker for ecosystem %s failed: %s", eco, e, exc_info=True
                 )
@@ -1317,7 +1465,17 @@ class Transaction:
             GlobalContractLinker.link(
                 self._graph_manager, config=self._graph_build_config.contract_match
             )
-        except Exception as e:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+            IndexError,
+            OSError,
+            ImportError,
+            LookupError,
+        ) as e:
             logger.error("GlobalContractLinker failed: %s", e, exc_info=True)
 
         # Run additional join strategies.
@@ -1326,7 +1484,17 @@ class Transaction:
         for strategy in self._join_strategies:
             try:
                 strategy.join(final_join_ctx)
-            except Exception:
+            except (
+                RuntimeError,
+                ValueError,
+                TypeError,
+                AttributeError,
+                KeyError,
+                IndexError,
+                OSError,
+                ImportError,
+                LookupError,
+            ):
                 logger.exception("JoinStrategy %r failed", strategy)
 
         # Hooks: after JOIN.
@@ -1376,7 +1544,17 @@ class Transaction:
                     completed=1,
                     description="Completed projection (1/3)",
                 )
-        except Exception as e:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+            IndexError,
+            OSError,
+            ImportError,
+            LookupError,
+        ) as e:
             logger.error(
                 "Failed to derive asset-artifact projection: %s", e, exc_info=True
             )
@@ -1403,7 +1581,17 @@ class Transaction:
                     completed=2,
                     description=f"Identified {len(dead_nodes)} dead nodes (2/3)",
                 )
-        except Exception as e:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+            IndexError,
+            OSError,
+            ImportError,
+            LookupError,
+        ) as e:
             logger.error("Deadcode analysis failed: %s", e, exc_info=True)
             if self._progress_manager and phase_id:
                 self._progress_manager.remove_active_task("Deadcode analysis")
@@ -1428,7 +1616,17 @@ class Transaction:
                     completed=3,
                     description=f"Analyzed {len(linkage_map)} linkage edges (3/3)",
                 )
-        except Exception as e:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+            IndexError,
+            OSError,
+            ImportError,
+            LookupError,
+        ) as e:
             logger.error("Linkage analysis failed: %s", e, exc_info=True)
             if self._progress_manager and phase_id:
                 self._progress_manager.remove_active_task("Linkage analysis")
@@ -1440,7 +1638,17 @@ class Transaction:
                 logger.info("Running uncertainty analysis")
                 analyzer = UncertaintyAnalyzer(self._graph_manager, policy)
                 analyzer.analyze()
-        except Exception as e:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+            IndexError,
+            OSError,
+            ImportError,
+            LookupError,
+        ) as e:
             logger.error("Uncertainty analysis failed: %s", e, exc_info=True)
 
         logger.info("Analysis phase completed")
@@ -1450,7 +1658,17 @@ class Transaction:
         for strategy in self._analyze_strategies:
             try:
                 strategy.analyze(analyze_ctx_after)
-            except Exception:
+            except (
+                RuntimeError,
+                ValueError,
+                TypeError,
+                AttributeError,
+                KeyError,
+                IndexError,
+                OSError,
+                ImportError,
+                LookupError,
+            ):
                 logger.exception("AnalyzeStrategy %r failed", strategy)
 
         # Complete phase
@@ -1536,7 +1754,17 @@ class Transaction:
                 if self._progress_manager and phase_id:
                     self._progress_manager.remove_active_task("Exporting graph")
 
-            except Exception as e:
+            except (
+                RuntimeError,
+                ValueError,
+                TypeError,
+                AttributeError,
+                KeyError,
+                IndexError,
+                OSError,
+                ImportError,
+                LookupError,
+            ) as e:
                 logger.error("Failed to export graph to %s: %s", output_path, e)
                 if self._progress_manager and phase_id:
                     self._progress_manager.remove_active_task("Exporting graph")
@@ -1605,7 +1833,17 @@ class Transaction:
             # Add metadata
             try:
                 revision = self.workspace.get_revision()
-            except Exception:
+            except (
+                RuntimeError,
+                ValueError,
+                TypeError,
+                AttributeError,
+                KeyError,
+                IndexError,
+                OSError,
+                ImportError,
+                LookupError,
+            ):
                 revision = None
 
             graph_metadata = {
@@ -1648,7 +1886,17 @@ class Transaction:
 
             return cache_file
 
-        except Exception as e:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+            IndexError,
+            OSError,
+            ImportError,
+            LookupError,
+        ) as e:
             logger.error("Failed to serialize graph: %s", e, exc_info=True)
             return None
 
@@ -1705,7 +1953,17 @@ class Transaction:
                     try:
                         if self.workspace.root_path:
                             path_namespace = Path(self.workspace.root_path).name
-                    except Exception:
+                    except (
+                        RuntimeError,
+                        ValueError,
+                        TypeError,
+                        AttributeError,
+                        KeyError,
+                        IndexError,
+                        OSError,
+                        ImportError,
+                        LookupError,
+                    ):
                         path_namespace = None
 
                 self._graph_manager = GraphManager(
@@ -1764,7 +2022,17 @@ class Transaction:
 
             return result
 
-        except Exception as e:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+            IndexError,
+            OSError,
+            ImportError,
+            LookupError,
+        ) as e:
             elapsed = time.time() - self._start_time
             logger.error(
                 "[PID %d] Transaction %s failed after %.2fs: %s",

@@ -72,7 +72,7 @@ class EcosystemConfigRegistry:
             return None
         try:
             return factory(data or {})
-        except Exception as exc:
+        except (TypeError, ValueError) as exc:
             logger.error(
                 "Config factory for ecosystem '%s' failed: %s",
                 ecosystem,

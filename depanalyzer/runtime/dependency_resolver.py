@@ -121,7 +121,7 @@ def resolve_dependencies(
                     }
                 )
 
-        except Exception as e:
+        except (OSError, ValueError) as e:
             logger.error(
                 "Failed to fetch dependency %s: %s",
                 spec.name,

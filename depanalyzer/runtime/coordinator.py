@@ -12,7 +12,13 @@ import multiprocessing
 import os
 import pickle
 import time
-from concurrent.futures import Future, ProcessPoolExecutor, as_completed
+from concurrent.futures import (
+    BrokenExecutor,
+    CancelledError,
+    Future,
+    ProcessPoolExecutor,
+    as_completed,
+)
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
@@ -88,7 +94,15 @@ def _run_transaction_worker(transaction_pickle_data: bytes) -> TransactionResult
 
         return result
 
-    except Exception as e:  
+    except (
+        OSError,
+        ValueError,
+        RuntimeError,
+        TypeError,
+        AttributeError,
+        ImportError,
+        KeyError,
+    ) as e:
         execution_time = time.time() - start_time
         logger.error(
             "[PID %d] Transaction %s failed after %.2fs: %s",
@@ -255,7 +269,13 @@ class TransactionCoordinator:
                             "Transaction %s failed: %s", transaction_id, result.error
                         )
 
-                except Exception as e:  
+                except (
+                    CancelledError,
+                    BrokenExecutor,
+                    pickle.PickleError,
+                    OSError,
+                    RuntimeError,
+                ) as e:
                     logger.error(
                         "Failed to get result for transaction %s: %s", transaction_id, e
                     )

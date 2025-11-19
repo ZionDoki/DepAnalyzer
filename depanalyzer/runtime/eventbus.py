@@ -131,7 +131,19 @@ class EventBus:
             for handler in handlers:
                 try:
                     handler(event)
-                except Exception as e:
+                except (
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                    KeyError,
+                    IndexError,
+                    OSError,
+                    ImportError,
+                    LookupError,
+                    ArithmeticError,
+                    MemoryError,
+                ) as e:
                     logger.error(
                         "Handler %s failed for event %s: %s",
                         handler.__name__,
