@@ -204,3 +204,42 @@ class GraphBackend:
         """Clear all nodes and edges."""
         self._graph.clear()
         logger.debug("Graph backend cleared")
+
+    def create_scc_condensation_graph(self) -> "GraphBackend":
+        """Create a condensation graph where each node is a strongly connected component.
+
+        This method does not modify the original graph. It returns a new
+        GraphBackend instance containing a DAG view of the original graph,
+        where cycles are collapsed into single nodes.
+
+        Returns:
+            GraphBackend: A new backend instance with the condensation graph.
+        """
+        sccs = list(nx.strongly_connected_components(self._graph))
+        condensation_graph = nx.MultiDiGraph()
+
+        node_to_scc_id = {}
+        for i, scc in enumerate(sccs):
+            scc_id = f"cluster:scc_{i}"
+
+            # Sort members for consistent output
+            members = sorted(list(scc))
+
+            condensation_graph.add_node(
+                scc_id,
+                type="code_scc_cluster",
+                members=members,
+            )
+            for node in scc:
+                node_to_scc_id[node] = scc_id
+
+        for u, v, k, data in self._graph.edges(data=True, keys=True):
+            scc_u = node_to_scc_id.get(u)
+            scc_v = node_to_scc_id.get(v)
+
+            if scc_u is not None and scc_v is not None and scc_u != scc_v:
+                condensation_graph.add_edge(scc_u, scc_v, key=k, **data)
+
+        new_backend = GraphBackend()
+        new_backend.set_native_graph(condensation_graph)
+        return new_backend

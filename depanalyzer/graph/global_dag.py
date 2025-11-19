@@ -602,3 +602,49 @@ class GlobalDAG:
             logger.debug("Global DAG cleared")
         except GRAPH_ERRORS as e:
             logger.error("Failed to clear GlobalDAG: %s", e)
+
+    def create_scc_condensation_graph(self) -> nx.DiGraph:
+        """Create a condensation graph view of the GlobalDAG.
+
+        Each node in the returned graph represents a strongly connected
+        component (SCC) from the original DAG. This produces a guaranteed
+        acyclic view, useful for topological sorting and high-level analysis.
+
+        The original GlobalDAG instance is not modified. All operations are
+        performed on an in-memory copy of the graph state after acquiring
+        the file lock to ensure a consistent view.
+
+        Returns:
+            nx.DiGraph: A new directed graph where each node is an SCC.
+                        Nodes have `type='scc_cluster'` and `members=[...]`
+                        attributes.
+        """
+        with self._acquire_lock():
+            self._load_unlocked()
+
+            sccs = list(nx.strongly_connected_components(self._dag))
+            condensation_graph = nx.DiGraph()
+
+            node_to_scc_id = {}
+            for i, scc in enumerate(sccs):
+                scc_id = f"cluster:scc_{i}"
+
+                members = sorted(list(scc))
+
+                condensation_graph.add_node(
+                    scc_id,
+                    type="scc_cluster",
+                    members=members,
+                )
+                for node in scc:
+                    node_to_scc_id[node] = scc_id
+
+            for u, v in self._dag.edges():
+                scc_u = node_to_scc_id.get(u)
+                scc_v = node_to_scc_id.get(v)
+
+                if scc_u is not None and scc_v is not None and scc_u != scc_v:
+                    if not condensation_graph.has_edge(scc_u, scc_v):
+                        condensation_graph.add_edge(scc_u, scc_v)
+
+            return condensation_graph
