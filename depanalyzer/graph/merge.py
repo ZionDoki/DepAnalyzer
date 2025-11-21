@@ -21,6 +21,11 @@ import networkx as nx
 from networkx.readwrite import node_link_data, node_link_graph
 
 from depanalyzer.graph.global_dag import GlobalDAG
+from depanalyzer.graph.id_utils import (
+    apply_namespace_prefix,
+    derive_dependency_namespace,
+    ensure_namespace_unique,
+)
 from depanalyzer.graph.linking import LinkClass
 from depanalyzer.graph.manager import EdgeKind
 from depanalyzer.graph.registry import GraphRegistry
@@ -56,7 +61,8 @@ def merge_graph_with_dependencies(
     The merged graph:
     - Contains all nodes/edges from the main graph (unmodified IDs).
     - Contains all nodes/edges from each dependency graph, with node IDs
-      prefixed by `dep:<graph_id>:` to avoid collisions.
+      prefixed by `dep:<namespace>:` to avoid collisions while keeping
+      identifiers human-meaningful.
     - Adds cross-graph DEPENDS_ON edges from proxy nodes in the main
       graph to all in-degree-zero nodes in the corresponding dependency
       graphs.
@@ -86,6 +92,7 @@ def merge_graph_with_dependencies(
     )
 
     main_graph, main_meta = _load_graph_from_cache(main_cache)
+    namespace_assignments: Dict[str, str] = {}
 
     # Discover all transitive dependency graph IDs
     global_dag = GlobalDAG.get_instance(cache_dir=cache_root)
@@ -107,25 +114,41 @@ def merge_graph_with_dependencies(
     def _copy_graph(
         graph: nx.MultiDiGraph,
         graph_id: str,
-        prefix: str | None,
+        namespace: str | None,
+        is_dependency: bool,
     ) -> None:
         for node_id, attrs in graph.nodes(data=True):
-            new_id = f"{prefix}{node_id}" if prefix else node_id
+            new_id = apply_namespace_prefix(str(node_id), namespace, is_dependency)
             new_attrs = dict(attrs or {})
             new_attrs.setdefault("graph_id", graph_id)
+            new_attrs.setdefault("graph_namespace", namespace)
             new_attrs.setdefault("orig_id", str(node_id))
             merged.add_node(new_id, **new_attrs)
 
         for u, v, _key, attrs in graph.edges(data=True, keys=True):
-            new_u = f"{prefix}{u}" if prefix else u
-            new_v = f"{prefix}{v}" if prefix else v
+            new_u = apply_namespace_prefix(str(u), namespace, is_dependency)
+            new_v = apply_namespace_prefix(str(v), namespace, is_dependency)
             new_attrs = dict(attrs or {})
             merged.add_edge(new_u, new_v, **new_attrs)
 
     # 1) Copy main graph as-is (no prefixing)
-    _copy_graph(main_graph, main_graph_id, prefix=None)
+    registry_entry = registry.get_entry(main_graph_id) or {}
+    main_summary = registry_entry.get("summary") or {}
+    main_namespace = ensure_namespace_unique(
+        derive_dependency_namespace(
+            main_graph_id,
+            main_meta,
+            main_summary,
+        ),
+        main_graph_id,
+        namespace_assignments,
+    )
+
+    _copy_graph(main_graph, main_graph_id, namespace=main_namespace, is_dependency=False)
 
     # 2) Copy each dependency graph with a unique prefix
+    dep_namespaces: Dict[str, str] = {}
+
     for dep_id in sorted(dep_ids):
         dep_cache = registry.get_cache_path(dep_id)
         if not dep_cache:
@@ -135,7 +158,10 @@ def merge_graph_with_dependencies(
             )
             continue
 
-        dep_graph, _ = _load_graph_from_cache(dep_cache)
+        dep_entry = registry.get_entry(dep_id) or {}
+        dep_summary = dep_entry.get("summary") or {}
+
+        dep_graph, dep_meta = _load_graph_from_cache(dep_cache)
 
         # Compute in-degree-zero nodes in the original dependency graph.
         roots: List[str] = [
@@ -143,8 +169,14 @@ def merge_graph_with_dependencies(
         ]
         child_root_nodes[dep_id] = roots
 
-        prefix = f"dep:{dep_id}:"
-        _copy_graph(dep_graph, dep_id, prefix=prefix)
+        dep_namespace = ensure_namespace_unique(
+            derive_dependency_namespace(dep_id, dep_meta, dep_summary),
+            dep_id,
+            namespace_assignments,
+        )
+        dep_namespaces[dep_id] = dep_namespace
+
+        _copy_graph(dep_graph, dep_id, namespace=dep_namespace, is_dependency=True)
 
     # 3) Add cross-graph edges from proxy nodes in the main graph to
     #    roots of the corresponding dependency graphs.
@@ -160,11 +192,13 @@ def merge_graph_with_dependencies(
         if not child_id or child_id not in child_root_nodes:
             continue
 
+        if child_id not in dep_namespaces:
+            continue
+
         roots = child_root_nodes[child_id]
-        prefix = f"dep:{child_id}:"
 
         for root in roots:
-            root_id = f"{prefix}{root}"
+            root_id = apply_namespace_prefix(str(root), dep_namespaces.get(child_id), True)
             if not merged.has_node(root_id):
                 continue
 
@@ -195,6 +229,7 @@ def merge_graph_with_dependencies(
         "node_count": merged.number_of_nodes(),
         "edge_count": merged.number_of_edges(),
         "main_metadata": main_meta,
+        "graph_namespaces": {main_graph_id: main_namespace, **dep_namespaces},
     }
 
     return {"metadata": merged_metadata, "graph": merged_graph_data}

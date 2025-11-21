@@ -148,6 +148,12 @@ def main() -> int:
             "string. When omitted, built-in defaults are used."
         ),
     )
+    scan_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=900,
+        help="Maximum seconds to wait for scan completion (default: 900).",
+    )
 
     # Export command
     export_parser = subparsers.add_parser(
@@ -194,15 +200,22 @@ def main() -> int:
         "-o",
         "--output",
         required=True,
-        help="Output JSON file containing {graph_id: {node_id: license_expression}}",
+        help="Output JSON file containing {graph_node_id: spdx_license_expression}",
     )
     scancode_parser.add_argument(
         "--cache-dir",
         help=(
-            "Cache directory where graphs were stored during scan "
-            "(expects graphs under <cache-dir>/graphs). "
-            "Typically the same <cache-dir>/<source_stem> used with the scan command. "
+            "Cache directory where graphs were stored during scan. "
+            "You can point this to the per-project cache root "
+            "(<cache-dir>/<source_stem>) or directly to its graphs/ folder. "
             "If not provided, defaults to .dep_cache."
+        ),
+    )
+    scancode_parser.add_argument(
+        "--source",
+        help=(
+            "Source path passed to the scan command. When provided, graphs are "
+            "resolved under <cache-dir>/<source_stem>/graphs (mirrors scan layout)."
         ),
     )
     scancode_parser.add_argument(

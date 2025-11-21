@@ -22,6 +22,9 @@ requests = "^2.31.0"
 json5 = "^0.12.0"
 pydantic = "^2.11.7"
 
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.0.1"
+
 [tool.poetry.scripts]
 depanalyzer = "depanalyzer.main:main"
 

@@ -131,7 +131,7 @@ class TargetCommandHandler(CommandHandler):
             return True
 
         self._create_target_node(
-            target_id, node_type, src_path, command_name, is_imported, shared_graph
+            target_id, node_type, target, src_path, command_name, is_imported, shared_graph
         )
 
         if not is_imported:
@@ -198,6 +198,7 @@ class TargetCommandHandler(CommandHandler):
         self,
         target_id: str,
         node_type: str,
+        target_name: str,
         src_path: str,
         command_name: str,
         is_imported: bool,
@@ -227,6 +228,7 @@ class TargetCommandHandler(CommandHandler):
             data={
                 "target_id": target_id,
                 "node_type": node_type,
+                "target_name": target_name,
                 "src_path": src_path,
                 "declared_via": command_name,
                 "origin": "external" if is_imported else "in_repo",

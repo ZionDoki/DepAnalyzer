@@ -131,6 +131,37 @@ class ExportPhase(BasePhase):
 
             # Add metadata (make JSON-serializable)
             metadata = self.state.graph_manager.metadata
+            # Canonicalize dead_nodes metadata with exported node IDs if present
+            if metadata and "dead_nodes" in metadata:
+                dead_nodes = metadata.get("dead_nodes") or []
+                canonical_dead: list[str] = []
+                for nid in dead_nodes:
+                    cid = node_id_map.get(str(nid))
+                    if cid:
+                        canonical_dead.append(cid)
+                        continue
+                    try:
+                        if isinstance(nid, str):
+                            if nid.startswith("//"):
+                                canonical_dead.append(canonicalize_normalized_id(nid))
+                                continue
+                            if nid.startswith(("ext_lib:", "module:")):
+                                canonical_dead.append(f"//{nid}")
+                                continue
+                    except Exception:
+                        pass
+                metadata["dead_nodes"] = sorted(set(canonical_dead))
+
+            if (
+                "root_path" not in metadata
+                and self.state.graph_manager.root_path is not None
+            ):
+                metadata["root_path"] = self.state.graph_manager.root_path
+            if (
+                "path_namespace" not in metadata
+                and self.state.graph_manager.path_namespace
+            ):
+                metadata["path_namespace"] = self.state.graph_manager.path_namespace
             serializable_metadata = _make_json_serializable(metadata)
             serializable_metadata.setdefault(
                 "node_count", export_graph.number_of_nodes()

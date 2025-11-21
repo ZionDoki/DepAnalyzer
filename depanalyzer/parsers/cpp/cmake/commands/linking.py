@@ -71,9 +71,21 @@ class LinkingCommandHandler(CommandHandler):
                 continue
             # Skip generator expressions and configuration keywords
             if tok.startswith("$<") and tok.endswith(">"):
-                i += 1
-                continue
-            if up in {"DEBUG", "OPTIMIZED", "GENERAL"}:
+                ge_body = tok[2:-1]
+                # Handle $<TARGET_PROPERTY:target,prop> and $<CONFIG:...> by best-effort passthrough
+                if ge_body.startswith("TARGET_PROPERTY:"):
+                    parts = ge_body.split(":", 1)[1].split(",", 1)
+                    if parts:
+                        tok = parts[0]
+                        up = tok.upper()
+                    else:
+                        i += 1
+                        continue
+                else:
+                    # Skip unknown generator expressions
+                    i += 1
+                    continue
+            if up in {"DEBUG", "OPTIMIZED", "GENERAL", "CHECK_BASE_ADDR", "DEFAULT"}:
                 i += 1
                 # Skip next token if it is the paired library for these keywords
                 if i < len(args):
@@ -83,7 +95,9 @@ class LinkingCommandHandler(CommandHandler):
             lib = tok
             resolved_lib = variable_resolver.resolve(lib)
 
-            if resolved_lib.startswith("//"):
+            if resolved_lib.startswith("$<") and resolved_lib.endswith(">"):
+                target_id = f"//external:{resolved_lib}"
+            elif resolved_lib.startswith("//"):
                 target_id = resolved_lib
             elif "::" in resolved_lib:
                 target_id = f"//{resolved_lib}"

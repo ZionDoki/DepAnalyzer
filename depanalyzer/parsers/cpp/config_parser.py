@@ -215,6 +215,32 @@ class CMakeParser(BaseParser):
                 cmd_name, args, file_path, shared_graph, variable_resolver
             )
 
+        # tree-sitter-cmake >=0.2 uses "normal_command" instead of command_invocation
+        # Include it to remain compatible across versions.
+        for cmd in tree.find_data("normal_command"):
+            if not cmd.children:
+                continue
+
+            ident = cmd.children[0]
+            if not isinstance(ident, ParseTokenWrapper):
+                continue
+
+            cmd_name = str(ident).lower()
+
+            cmd_text = (
+                "".join([str(c) for c in cmd.children[1:]])
+                if len(cmd.children) > 1
+                else ""
+            )
+            m = re.search(r"\((.*)\)\s*$", cmd_text, flags=re.DOTALL)
+            arg_text = m.group(1) if m else ""
+
+            args = tokens.extract_arg_tokens(arg_text)
+
+            self._handle_command(
+                cmd_name, args, file_path, shared_graph, variable_resolver
+            )
+
     def _handle_command(
         self,
         cmd_name: str,

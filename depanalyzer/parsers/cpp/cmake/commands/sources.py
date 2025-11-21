@@ -70,8 +70,6 @@ class SourcesCommandHandler(CommandHandler):
                 continue
             if tok.upper() in scope_keywords:
                 continue
-            if tok.startswith("$<") and tok.endswith(">"):
-                continue
             candidates.append(tok)
 
         cmake_dir = file_path.parent
@@ -90,6 +88,11 @@ class SourcesCommandHandler(CommandHandler):
                 items.append(token)
 
             for item in items:
+                # Accept generator expressions conservatively by stripping $<> wrappers
+                if item.startswith("$<") and item.endswith(">"):
+                    ge_body = item[2:-1]
+                    item = ge_body.split(":", 1)[-1] if ":" in ge_body else ge_body
+
                 resolved = variable_resolver.resolve(item)
                 p = Path(resolved)
                 if not p.is_absolute():

@@ -136,6 +136,13 @@ class PhaseOrchestrator:
             self.state.source,
         )
 
+        ContractRegistry.get_instance().reset()
+        logger.debug(
+            "[PID %d] Reset contract registry for transaction %s",
+            os.getpid(),
+            self.state.transaction_id,
+        )
+
         # Start progress manager
         if self.state.progress_manager:
             self.state.progress_manager.start_transaction(

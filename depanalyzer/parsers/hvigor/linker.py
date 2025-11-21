@@ -279,13 +279,24 @@ class HvigorLinker(BaseLinker):
             for target_id, src_path in candidate_targets.items():
                 try:
                     target_path = Path(src_path).resolve()
+                    target_dir = target_path.parent if target_path.is_file() else target_path
                 except OSError:
                     continue
 
                 for native_dir in native_dirs:
                     try:
-                        target_path.relative_to(native_dir)
+                        # Associate when CMake target lives within the native_dir
+                        # or when the native_dir is nested under the CMake target dir.
+                        target_dir.relative_to(native_dir)
+                        associate = True
                     except ValueError:
+                        try:
+                            native_dir.relative_to(target_dir)
+                            associate = True
+                        except ValueError:
+                            associate = False
+
+                    if not associate:
                         continue
 
                     associations.append((module_id, target_id))

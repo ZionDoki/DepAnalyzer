@@ -13,6 +13,18 @@ from typing import Any, Dict, Optional, Tuple
 from depanalyzer.utils.path_utils import normalize_node_id
 
 
+def canonicalize_normalized_id(normalized_id: str) -> str:
+    """Convert a normalized node ID into GN-style form.
+
+    Args:
+        normalized_id: Normalized node ID (//...).
+
+    Returns:
+        GN-style identifier matching export output.
+    """
+    return _gn_style_id(normalized_id)
+
+
 def _derive_normalized_path(
     raw_id: str,
     attrs: Dict[str, Any],
@@ -128,11 +140,15 @@ def canonicalize_node(
         # namespace as other node IDs, but we avoid any filesystem-based
         # normalization.
         canonical_id = f"//{raw_id}"
+    elif raw_id.startswith("module:"):
+        # Modules behave like logical identifiers; keep them in the same
+        # top-level namespace as other graph nodes.
+        canonical_id = f"//{raw_id}"
     else:
         # Default: best-effort path normalization where applicable.
         normalized = _derive_normalized_path(raw_id, new_attrs, root_path)
         if normalized:
-            canonical_id = _gn_style_id(normalized)
+            canonical_id = canonicalize_normalized_id(normalized)
         else:
             canonical_id = raw_id
 

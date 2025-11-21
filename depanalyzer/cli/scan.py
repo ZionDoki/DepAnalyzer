@@ -73,12 +73,14 @@ def _scan_command_impl(args) -> int:
     output = getattr(args, "output", None)
     cache_dir_arg = getattr(args, "cache_dir", None)
     third_party_enabled = getattr(args, "third_party", False)
+    wait_timeout = getattr(args, "timeout", 900)
     if output:
         logger.info("Output: %s", output)
     if cache_dir_arg:
         logger.info("Cache dir: %s", cache_dir_arg)
     logger.info("Workers: %d", args.workers)
     logger.info("Max depth: %d", args.max_depth)
+    logger.info("Scan timeout (s): %d", wait_timeout)
     logger.info("Third-party resolution enabled: %s", third_party_enabled)
 
     start_time = time.time()
@@ -153,10 +155,10 @@ def _scan_command_impl(args) -> int:
         # Wait for transaction to complete (with timeout)
         logger.info("Waiting for transaction to complete...")
         try:
-            result = future.result(timeout=300)  # 5 minute timeout
+            result = future.result(timeout=wait_timeout)
             logger.info("Transaction completed, processing result...")
         except TimeoutError:
-            logger.error("Transaction timed out after 300 seconds")
+            logger.error("Transaction timed out after %d seconds", wait_timeout)
             logger.error("This usually indicates the subprocess is stuck or crashed")
             logger.error("Check the logs above for any error messages")
             return 1

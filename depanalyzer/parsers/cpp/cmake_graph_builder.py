@@ -12,6 +12,7 @@ the graph builder performs graph operations.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Dict
 
 from depanalyzer.graph.contract import BuildInterfaceContract, ContractType
@@ -72,6 +73,7 @@ class CMakeGraphBuilder:
         target_id = data["target_id"]
         node_type = data["node_type"]
         confidence = data.get("confidence", 1.0)
+        target_name = data.get("target_name") or target_id.split(":")[-1]
 
         try:
             ntype = NodeType(node_type)
@@ -99,13 +101,45 @@ class CMakeGraphBuilder:
             confidence=confidence,
             attrs=attrs,
         )
-        self.graph_manager.add_node(
-            node_spec.id,
-            node_spec.type.value,
-            confidence=node_spec.confidence,
-            **node_spec.to_backend_attrs(),
-        )
+        self.graph_manager.add_node_spec(node_spec)
         log.debug("Created target node: %s (type=%s)", target_id, ntype.value)
+
+        # Create a logical artifact node produced by this target so downstream
+        # consumers (Hvigor/Hap packaging, etc.) can reference build outputs.
+        artifact_id = f"{target_id}:artifact"
+        artifact_spec = NodeSpec(
+            id=artifact_id,
+            type=NodeType.ARTIFACT,
+            label=artifact_id,
+            parser_name=event.source,
+            confidence=confidence,
+            attrs={
+                "produced_by": target_id,
+                "target_type": ntype.value,
+                "name": target_name,
+            },
+        )
+        self.graph_manager.add_node_spec(artifact_spec)
+        self.graph_manager.add_edge(
+            target_id,
+            artifact_id,
+            edge_kind=EdgeKind.PRODUCES.value,
+            parser_name=event.source,
+            confidence=confidence,
+        )
+        log.debug("Created artifact node for target %s -> %s", target_id, artifact_id)
+
+        self._register_provider_contracts(
+            target_id=target_id,
+            target_name=target_name,
+            node_type=ntype,
+            raw_node_type=data.get("node_type"),
+            src_path=data.get("src_path"),
+            provenance=data.get("provenance"),
+            declared_via=data.get("declared_via"),
+            is_imported=bool(data.get("imported")),
+            is_alias=bool(data.get("is_alias")),
+        )
 
         # Handle alias edge if present.
         if data.get("alias_edge"):
@@ -123,6 +157,93 @@ class CMakeGraphBuilder:
                 alias_edge["target"],
             )
 
+    def _register_provider_contracts(
+        self,
+        target_id: str,
+        target_name: str,
+        node_type: NodeType,
+        raw_node_type: str | None,
+        src_path: str | None,
+        provenance: str | None,
+        declared_via: str | None,
+        is_imported: bool,
+        is_alias: bool,
+    ) -> None:
+        """Register provider-side contracts for CMake targets that build libraries."""
+        if is_imported or is_alias:
+            return
+
+        is_module_library = raw_node_type == "module_library"
+        if node_type not in (NodeType.SHARED_LIBRARY,) and not is_module_library:
+            return
+
+        if not src_path:
+            log.debug("Skipping provider contract registration for %s (no src_path)", target_id)
+            return
+
+        root_path = self.graph_manager.root_path
+        if root_path is None:
+            log.debug("Skipping provider contract registration for %s (no graph root_path)", target_id)
+            return
+
+        cmake_dir = Path(src_path).resolve().parent
+        artifact_name = f"lib{target_name}.so"
+
+        candidate_dirs = [
+            cmake_dir / "build",
+            cmake_dir / "lib",
+            cmake_dir / "out",
+            cmake_dir,
+        ]
+
+        registry = ContractRegistry.get_instance()
+        provider_count = 0
+        seen_providers: set[str] = set()
+
+        for candidate_dir in candidate_dirs:
+            try:
+                provider_path = candidate_dir / artifact_name
+                normalized = self.graph_manager.normalize_path(provider_path)
+            except ValueError:
+                log.debug(
+                    "Could not normalize provider path for %s under %s", target_id, candidate_dir
+                )
+                continue
+            if normalized in seen_providers:
+                continue
+            seen_providers.add(normalized)
+
+            evidence = [
+                f"cmake_target:{target_name}",
+                f"cmake_dir:{cmake_dir}",
+            ]
+            if declared_via:
+                evidence.append(f"declared_via:{declared_via}")
+            if provenance:
+                evidence.append(f"provenance:{provenance}")
+
+            contract = BuildInterfaceContract(
+                artifact_name=artifact_name,
+                provider_artifact=normalized,
+                consumer_artifact="",
+                contract_type=ContractType.ARTIFACT_NAME,
+                confidence=0.9,
+                evidence=evidence,
+                metadata={
+                    "target_id": target_id,
+                    "native_dir": str(cmake_dir),
+                },
+            )
+            registry.register(contract)
+            provider_count += 1
+
+        if provider_count:
+            log.info(
+                "Registered %d provider contract(s) for CMake target %s",
+                provider_count,
+                target_id,
+            )
+
     def _handle_source_files_added(self, event: Event) -> None:
         """Handle CMAKE_SOURCE_FILES_ADDED by attaching sources to a target."""
         data = event.data
@@ -131,8 +252,18 @@ class CMakeGraphBuilder:
         confidence = data.get("confidence", 1.0)
 
         for source_id in source_files:
+            node_type = NodeType.CODE
+            if isinstance(source_id, dict):
+                node_type = NodeType(source_id.get("node_type", "code")) \
+                    if source_id.get("node_type") in NodeType._value2member_map_ \
+                    else NodeType.CODE
+                source_id = source_id.get("source_id")
+
+            if not isinstance(source_id, str) or not source_id:
+                continue
+
             try:
-                ntype = NodeType.CODE
+                ntype = node_type
             except ValueError:
                 ntype = NodeType.CODE
 
@@ -143,14 +274,9 @@ class CMakeGraphBuilder:
                 src_path=None,
                 parser_name=event.source,
                 confidence=confidence,
-                attrs={"id": source_id},
+                attrs={},
             )
-            self.graph_manager.add_node(
-                node_spec.id,
-                node_spec.type.value,
-                confidence=node_spec.confidence,
-                **node_spec.to_backend_attrs(),
-            )
+            self.graph_manager.add_node_spec(node_spec)
 
             self.graph_manager.add_edge(
                 target_id,
