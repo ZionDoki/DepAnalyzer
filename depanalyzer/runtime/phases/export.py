@@ -12,7 +12,12 @@ from typing import Any, Dict, Optional
 from networkx import MultiDiGraph
 from networkx.readwrite import node_link_data
 
-from depanalyzer.graph.schema_utils import canonicalize_edge, canonicalize_node
+from depanalyzer.graph.io import break_cycles
+from depanalyzer.graph.schema_utils import (
+    canonicalize_edge,
+    canonicalize_node,
+    canonicalize_normalized_id,
+)
 from depanalyzer.runtime.lifecycle import LifecyclePhase
 from depanalyzer.runtime.phases.base import BasePhase
 from depanalyzer.runtime.context import ExportContext
@@ -126,11 +131,20 @@ class ExportPhase(BasePhase):
                 canonical_attrs = canonicalize_edge(attrs or {})
                 export_graph.add_edge(source_id, target_id, **canonical_attrs)
 
-            # Serialize to node-link format with explicit edges parameter
-            data = node_link_data(export_graph, edges="links")
+            # Remove cycles to keep downstream DAG consumers fast/safe.
+            acyclic_graph, removed_edges = break_cycles(export_graph)
 
             # Add metadata (make JSON-serializable)
-            metadata = self.state.graph_manager.metadata
+            metadata = self.state.graph_manager.metadata or {}
+            if removed_edges:
+                logger.info(
+                    "Removed %d cycle edge(s) to produce DAG-safe export",
+                    removed_edges,
+                )
+                metadata = dict(metadata)
+                sanitization = dict(metadata.get("sanitization", {}))
+                sanitization["cycle_edges_removed"] = int(removed_edges)
+                metadata["sanitization"] = sanitization
             # Canonicalize dead_nodes metadata with exported node IDs if present
             if metadata and "dead_nodes" in metadata:
                 dead_nodes = metadata.get("dead_nodes") or []
@@ -164,11 +178,25 @@ class ExportPhase(BasePhase):
                 metadata["path_namespace"] = self.state.graph_manager.path_namespace
             serializable_metadata = _make_json_serializable(metadata)
             serializable_metadata.setdefault(
-                "node_count", export_graph.number_of_nodes()
+                "node_count", acyclic_graph.number_of_nodes()
             )
             serializable_metadata.setdefault(
-                "edge_count", export_graph.number_of_edges()
+                "edge_count", acyclic_graph.number_of_edges()
             )
+
+            # Attach metadata to the graph attributes so node_link_data
+            # produces a NetworkX-native structure without extra keys.
+            acyclic_graph.graph.clear()
+            acyclic_graph.graph.update(
+                {
+                    "graph_id": self.state.graph_id,
+                    "source": self.state.source,
+                    **serializable_metadata,
+                }
+            )
+
+            # Serialize to node-link format (NetworkX default uses `links` for edges)
+            data = node_link_data(acyclic_graph, edges="edges")
             data["metadata"] = serializable_metadata
             data["graph_id"] = self.state.graph_id
             data["source"] = self.state.source

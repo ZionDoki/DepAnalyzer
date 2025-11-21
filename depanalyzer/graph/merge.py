@@ -20,6 +20,7 @@ from typing import Dict, List, Set, Tuple
 import networkx as nx
 from networkx.readwrite import node_link_data, node_link_graph
 
+from depanalyzer.graph.io import break_cycles
 from depanalyzer.graph.global_dag import GlobalDAG
 from depanalyzer.graph.id_utils import (
     apply_namespace_prefix,
@@ -45,10 +46,18 @@ def _load_graph_from_cache(cache_path: Path) -> Tuple[nx.MultiDiGraph, Dict]:
     with cache_path.open("r", encoding="utf-8") as f:
         data = json.load(f)
 
-    graph_data = data.get("graph") or data
+    graph_section = data.get("graph")
+    if isinstance(graph_section, dict) and graph_section.get("nodes"):
+        graph_data = graph_section
+    else:
+        graph_data = data
+    if not isinstance(graph_data, dict):
+        raise ValueError(f"Unsupported graph format in cache: {cache_path}")
     metadata = data.get("metadata") or {}
 
-    g = node_link_graph(graph_data, edges="links")
+    edge_key = "edges" if "edges" in graph_data else "links"
+    graph_data.setdefault(edge_key, [])
+    g = node_link_graph(graph_data, edges=edge_key)
     return g, metadata
 
 
@@ -72,11 +81,9 @@ def merge_graph_with_dependencies(
         cache_root: Root directory for graph cache files.
 
     Returns:
-        Dict: JSON-serializable dict with structure:
-            {
-                "metadata": {...},
-                "graph": <node_link_data>,
-            }
+        Dict: Node-link dictionary (with both ``edges`` and ``links`` keys)
+        containing the merged graph plus top-level metadata suitable for
+        direct export.
     """
     cache_root = cache_root or (Path(".depanalyzer_cache") / "graphs")
     registry = GraphRegistry.get_instance(cache_root=cache_root)
@@ -219,17 +226,30 @@ def merge_graph_with_dependencies(
         added_cross_edges,
     )
 
-    # Serialize to node-link format
-    merged_graph_data = node_link_data(merged, edges="links")
+    # Remove cycles before exporting to keep downstream processing fast.
+    acyclic_graph, removed_edges = break_cycles(merged)
 
     merged_metadata = {
         "graph_id": main_graph_id,
         "merged": True,
         "merged_from": [main_graph_id] + sorted(dep_ids),
-        "node_count": merged.number_of_nodes(),
-        "edge_count": merged.number_of_edges(),
+        "node_count": acyclic_graph.number_of_nodes(),
+        "edge_count": acyclic_graph.number_of_edges(),
         "main_metadata": main_meta,
         "graph_namespaces": {main_graph_id: main_namespace, **dep_namespaces},
     }
+    if removed_edges:
+        merged_metadata["sanitization"] = {"cycle_edges_removed": int(removed_edges)}
 
-    return {"metadata": merged_metadata, "graph": merged_graph_data}
+    # Serialize to node-link format
+    # Carry metadata as graph attributes so node_link_data keeps them
+    acyclic_graph.graph.clear()
+    acyclic_graph.graph.update(merged_metadata)
+
+    merged_graph_data = node_link_data(acyclic_graph, edges="edges")
+
+    merged_graph_data["metadata"] = merged_metadata
+    merged_graph_data["graph_id"] = main_graph_id
+    merged_graph_data["source"] = main_meta.get("source")
+
+    return merged_graph_data

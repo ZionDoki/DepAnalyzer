@@ -1,27 +1,18 @@
 #!/usr/bin/env python3
-"""Run depanalyzer scan, ScanCode, and liscopelens compatibility analysis end-to-end."""
-
-from __future__ import annotations
+"""Run depanalyzer scan + ScanCode + liscopelens compatibility end-to-end."""
 
 import argparse
 import json
 import logging
-import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, Tuple
+from typing import Any, Dict, Iterable, Mapping, Optional, Set, Tuple, List
 
 # Ensure repository root is importable when running as a script.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-
-from depanalyzer.graph.id_utils import (
-    apply_namespace_prefix,
-    derive_dependency_namespace,
-    ensure_namespace_unique,
-)
 
 # Default locations expected in this workspace.
 DEFAULT_PROJECT = Path("/mnt/c/Workspace/dialog_hub-master")
@@ -31,15 +22,27 @@ logger = logging.getLogger("depanalyzer.scripts.license_pipeline")
 
 
 def ensure_liscopelens_importable(liscopelens_path: Path) -> None:
-    """Add liscopelens source tree to sys.path when it is not installed."""
+    """Add liscopelens source tree to sys.path when it is not installed.
+
+    Args:
+        liscopelens_path: Path to the liscopelens repository.
+    """
     resolved = liscopelens_path.expanduser().resolve()
     if str(resolved) not in sys.path:
         sys.path.insert(0, str(resolved))
         logger.info("Added liscopelens to sys.path: %s", resolved)
 
 
-def run_command(command: list[str], workdir: Path | None = None) -> None:
-    """Run a subprocess command and raise on failure."""
+def run_command(command: List[str], workdir: Optional[Path] = None) -> None:
+    """Run a subprocess command and raise on failure.
+
+    Args:
+        command: Command and arguments to execute.
+        workdir: Optional working directory for the command.
+
+    Raises:
+        RuntimeError: When the command exits with a non-zero code.
+    """
     logger.info("Running command: %s", " ".join(command))
     result = subprocess.run(
         command,
@@ -58,132 +61,49 @@ def run_command(command: list[str], workdir: Path | None = None) -> None:
         )
 
 
-def normalize_graph_dict(raw_graph: dict[str, Any]) -> dict[str, Any]:
-    """Convert depanalyzer node-link graph to liscopelens-friendly shape."""
-    graph_data = dict(raw_graph)
-    if "edges" not in graph_data and "links" in graph_data:
-        graph_data["edges"] = graph_data.pop("links")
-    return graph_data
+def load_graph(graph_path: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Load a graph export produced by depanalyzer.
 
+    Args:
+        graph_path: Path to the JSON graph file.
 
-def _to_posix_path(path_str: str) -> str:
-    """Convert Windows-style cache paths to WSL/posix style if needed."""
-    if ":" in path_str and "\\" in path_str:
-        drive, rest = path_str.split(":", 1)
-        rest = rest.lstrip("\\/").replace("\\", "/")
-        return f"/mnt/{drive.lower()}/{rest}"
-    return path_str
-
-
-def _load_registry(cache_dir: Path) -> dict[str, Any]:
-    """Load graph registry from cache dir."""
-    reg_path = cache_dir / "registry.json"
-    with reg_path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def _load_cached_graph(cache_path: Path) -> Tuple[Any, dict[str, Any]]:
-    """Load a cached graph file into a NetworkX MultiDiGraph."""
-    from networkx.readwrite import node_link_graph  # lazy import
-
-    with cache_path.open("r", encoding="utf-8") as handle:
+    Returns:
+        Tuple containing the graph dictionary and metadata.
+    """
+    with graph_path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
 
-    # Support both {directed,multigraph,nodes,links} and {"graph": {...}}
-    graph_body = None
+    graph_candidate = None
     if isinstance(data, dict):
-        if {"nodes", "links"}.issubset(data.keys()):
-            graph_body = data
-        elif isinstance(data.get("graph"), dict) and "nodes" in data["graph"]:
-            graph_body = data["graph"]
+        graph_section = data.get("graph")
+        if isinstance(graph_section, dict) and graph_section.get("nodes"):
+            graph_candidate = graph_section
+        else:
+            graph_candidate = data
 
-    if graph_body is None:
-        raise ValueError(f"Unsupported graph format in {cache_path}")
+    if not isinstance(graph_candidate, dict):
+        raise ValueError(f"Unsupported graph format in {graph_path}")
 
-    g = node_link_graph(graph_body, edges="links")
-    metadata = data.get("metadata", {})
-    return g, metadata
+    graph_dict = dict(graph_candidate)
+    metadata = data.get("metadata") or graph_dict.get("metadata") or {}
+    return graph_dict, metadata
 
 
-def _build_combined_graph(cache_dir: Path, project_path: Path, include_deps: bool = True) -> Tuple[dict[str, Any], dict[str, Any], set[str]]:
-    """Merge cached graphs into one, optionally including dependencies."""
-    from networkx import MultiDiGraph
-    from networkx.readwrite import node_link_data
-
-    registry = _load_registry(cache_dir)
-    root_path = project_path.expanduser().resolve()
-
-    def is_main(entry: dict[str, Any]) -> bool:
-        src = _to_posix_path(entry.get("summary", {}).get("source", ""))
-        try:
-            return Path(src).resolve() == root_path
-        except Exception:
-            return False
-
-    main_ids = {gid for gid, entry in registry.items() if is_main(entry)}
-    combined = MultiDiGraph()
-    merged_from: list[str] = []
-    graph_namespaces: Dict[str, str] = {}
-    namespace_assignments: Dict[str, str] = {}
-
-    for graph_id, entry in registry.items():
-        cache_path = Path(_to_posix_path(entry["cache_path"])).expanduser()
-        if not cache_path.exists():
-            alt = cache_dir / f"{graph_id}.json"
-            cache_path = alt if alt.exists() else cache_path
-        if not cache_path.exists():
-            logger.warning("Skip graph %s (cache file missing at %s)", graph_id, cache_path)
-            continue
-        summary = entry.get("summary") or {}
-        try:
-            g, meta = _load_cached_graph(cache_path)
-        except Exception as exc:
-            logger.warning("Skip graph %s (load error: %s)", graph_id, exc)
-            continue
-
-        base_namespace = derive_dependency_namespace(graph_id, meta, summary)
-        namespace = ensure_namespace_unique(
-            base_namespace, graph_id, namespace_assignments
-        )
-        graph_namespaces[graph_id] = namespace
-        is_dependency = graph_id not in main_ids
-        if not include_deps and is_dependency:
-            continue
-        for node_id, attrs in g.nodes(data=True):
-            new_id = apply_namespace_prefix(
-                str(node_id),
-                namespace,
-                is_dependency,
-            )
-            new_attrs = dict(attrs or {})
-            new_attrs.setdefault("orig_id", str(node_id))
-            new_attrs.setdefault("graph_id", graph_id)
-            new_attrs.setdefault("graph_namespace", namespace)
-            combined.add_node(new_id, **new_attrs)
-
-        for u, v, attrs in g.edges(data=True):
-            new_u = apply_namespace_prefix(str(u), namespace, is_dependency)
-            new_v = apply_namespace_prefix(str(v), namespace, is_dependency)
-            combined.add_edge(new_u, new_v, **(attrs or {}))
-
-        merged_from.append(graph_id)
-
-    graph_data = node_link_data(combined, edges="links")
-    metadata = {
-        "graph_id": next(iter(main_ids)) if main_ids else "merged_graph",
-        "merged": True,
-        "merged_from": merged_from,
-        "node_count": combined.number_of_nodes(),
-        "edge_count": combined.number_of_edges(),
-        "graph_namespaces": graph_namespaces,
-    }
-    return graph_data, metadata, main_ids
+def load_license_map(license_map_path: Path) -> Dict[str, str]:
+    """Load aggregated node->license mapping from ScanCode output."""
+    with license_map_path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, Mapping):
+        raise ValueError(f"License map is not a mapping: {license_map_path}")
+    return {str(k): str(v) for k, v in data.items()}
 
 
 def _normalize_spdx_expression(expr: str) -> str:
     """Coerce license expressions to SPDX-friendly case (best effort)."""
+    import re
+
     tokens = re.findall(r"[A-Za-z0-9.\-+]+|\(|\)|AND|OR|WITH", expr, flags=re.IGNORECASE)
-    normalized: list[str] = []
+    normalized: List[str] = []
     for tok in tokens:
         upper = tok.upper()
         if tok in ("(", ")"):
@@ -195,38 +115,7 @@ def _normalize_spdx_expression(expr: str) -> str:
     return " ".join(normalized)
 
 
-def _flatten_license_map(scancode_path: Path, main_ids: set[str]) -> dict[str, str]:
-    """Load ScanCode output into a single node->license map."""
-    with scancode_path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-
-    if isinstance(data, dict) and data and all(isinstance(v, str) for v in data.values()):
-        return {
-            str(node_id): _normalize_spdx_expression(str(expr))
-            for node_id, expr in data.items()
-        }
-
-    if isinstance(data, dict) and isinstance(data.get("node_licenses"), dict):
-        return {
-            str(node_id): _normalize_spdx_expression(str(expr))
-            for node_id, expr in data["node_licenses"].items()
-        }
-
-    flat: Dict[str, str] = {}
-    if isinstance(data, dict):
-        for graph_id, mapping in data.items():
-            if not isinstance(mapping, dict):
-                continue
-            prefix = None if graph_id in main_ids else f"dep:{graph_id}:"
-            for node_id, expr in mapping.items():
-                raw_id = str(node_id)
-                nid = raw_id if raw_id.startswith(("//", "dep:")) else f"//{raw_id.lstrip('/')}"
-                merged_id = f"{prefix}{nid}" if prefix else nid
-                flat[merged_id] = _normalize_spdx_expression(str(expr))
-    return flat
-
-
-def _build_node_set(graph_dict: dict[str, Any]) -> set[str]:
+def _build_node_set(graph_dict: Dict[str, Any]) -> Set[str]:
     """Extract node identifiers from a node-link graph dict.
 
     Args:
@@ -239,7 +128,7 @@ def _build_node_set(graph_dict: dict[str, Any]) -> set[str]:
     return {str(node.get("id")) for node in nodes if isinstance(node, dict) and node.get("id")}
 
 
-def _get_context_node_count(context: Any) -> int | None:
+def _get_context_node_count(context: Any) -> Optional[int]:
     """Best-effort extraction of node count from liscopelens GraphManager.
 
     Args:
@@ -268,11 +157,11 @@ def _get_context_node_count(context: Any) -> int | None:
 
 
 def _validate_alignment(
-    graph_dict: dict[str, Any],
-    license_map: dict[str, str],
+    graph_dict: Dict[str, Any],
+    license_map: Mapping[str, str],
     context: Any,
     logger_obj: logging.Logger,
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     """Validate ScanCode/license alignment and node counts.
 
     Args:
@@ -285,10 +174,12 @@ def _validate_alignment(
         Dict of validation metrics and counts.
     """
     node_ids = _build_node_set(graph_dict)
-    license_keys = set(license_map.keys())
+    license_keys = {str(k) for k in license_map.keys()}
     matched = len(node_ids & license_keys)
     license_coverage = matched / max(len(license_keys), 1)
+    graph_coverage = matched / max(len(node_ids), 1)
     missing_from_graph = len(license_keys) - matched
+    missing_license_nodes = len(node_ids) - matched
 
     context_nodes = _get_context_node_count(context)
     graph_node_count = len(node_ids)
@@ -299,6 +190,13 @@ def _validate_alignment(
         len(license_keys),
         license_coverage * 100.0,
         missing_from_graph,
+    )
+    logger_obj.info(
+        "Graph coverage: %d/%d (%.2f%%) graph nodes have licenses; missing %d",
+        matched,
+        graph_node_count,
+        graph_coverage * 100.0,
+        missing_license_nodes,
     )
 
     if context_nodes is not None:
@@ -319,58 +217,13 @@ def _validate_alignment(
         "license_entries": len(license_keys),
         "license_matched": matched,
         "license_coverage": license_coverage,
+        "graph_license_coverage": graph_coverage,
+        "missing_license_nodes": missing_license_nodes,
         "context_nodes": context_nodes,
         "context_matches_graph": (
             context_nodes == graph_node_count if context_nodes is not None else None
         ),
     }
-
-
-def patch_liscopelens_decycle() -> None:
-    """Monkey-patch liscopelens decycle to avoid exponential simple_cycles scans."""
-    try:
-        import networkx as nx  # type: ignore
-        from liscopelens.parser import decycle  # type: ignore
-    except Exception as exc:  # pragma: no cover - defensive import
-        logger.warning("Skipped decycle patch (import failed): %s", exc)
-        return
-
-    def fast_detect(self, graph):  # type: ignore[override]
-        # Disable condensation by reporting no cycles; keeps node counts intact.
-        return []
-
-    def allow_none(self, cycle, context):  # type: ignore[override]
-        return False
-
-    decycle.DecycleParser._detect_cycles = fast_detect  # type: ignore[attr-defined]
-    decycle.DecycleParser._is_code_cycle = allow_none  # type: ignore[attr-defined]
-    logger.info("Patched liscopelens DecycleParser to bypass cycle condensation.")
-
-
-def load_graph_for_liscopelens(graph_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Load merged graph JSON and return (graph_dict, metadata)."""
-    with graph_path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    metadata = data.get("metadata", {})
-    graph_body = data.get("graph") or data
-    graph_dict = normalize_graph_dict(graph_body)
-    return graph_dict, metadata
-
-
-def load_license_map(license_map_path: Path) -> dict[str, str]:
-    """Load aggregated node->license mapping from ScanCode output."""
-    with license_map_path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    if isinstance(data, dict) and data and all(isinstance(v, str) for v in data.values()):
-        return {
-            str(k): _normalize_spdx_expression(str(v)) for k, v in data.items()
-        }
-    node_map = data.get("node_licenses") if isinstance(data, dict) else None
-    if isinstance(node_map, dict):
-        return {
-            str(k): _normalize_spdx_expression(str(v)) for k, v in node_map.items()
-        }
-    raise ValueError(f"Unrecognized license map shape in {license_map_path}")
 
 
 def _jsonify(obj: Any) -> Any:
@@ -387,15 +240,13 @@ def _jsonify(obj: Any) -> Any:
 def run_pipeline(args: argparse.Namespace) -> None:
     """Execute scan → scancode → liscopelens compatibility pipeline."""
     ensure_liscopelens_importable(args.liscopelens_path)
-    patch_liscopelens_decycle()
     from liscopelens.api import check_compatibility  # pylint: disable=import-error
     from liscopelens.utils.graph import GraphManager  # pylint: disable=import-error
 
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    graph_output = output_dir / "merged_graph.json"
-    combined_graph_output = output_dir / "combined_graph.json"
+    graph_output = output_dir / "graph.json"
     license_output = output_dir / "license_map.json"
     compatibility_output = output_dir / "compatibility_results.json"
     compatibility_graph_output = output_dir / "compatibility_graph.json"
@@ -418,7 +269,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
     if args.timeout:
         scan_cmd.extend(["--timeout", str(args.timeout)])
     if args.third_party:
-        scan_cmd.append("--third-party")
+        scan_cmd.append("-t")
     if args.max_deps:
         scan_cmd.extend(["--max-deps", str(args.max_deps)])
 
@@ -437,41 +288,25 @@ def run_pipeline(args: argparse.Namespace) -> None:
         str(args.project_path),
     ]
     if args.third_party:
-        scancode_cmd.append("--third-party")
+        scancode_cmd.append("-t")
     if args.force_scancode:
         scancode_cmd.append("--force")
 
     run_command(scancode_cmd)
 
-    # Rebuild a combined graph and flattened license map from cache for liscopelens.
-    combined_graph_dict, combined_meta, main_ids = _build_combined_graph(
-        args.cache_dir / Path(args.project_path).name / "graphs"
-        if (args.cache_dir / Path(args.project_path).name / "graphs").exists()
-        else args.cache_dir / "graphs",
-        args.project_path,
-        include_deps=args.third_party,
-    )
-    license_map = _flatten_license_map(license_output, main_ids)
-
-    # Write combined graph for inspection.
-    with combined_graph_output.open("w", encoding="utf-8") as handle:
-        json.dump({"metadata": combined_meta, "graph": combined_graph_dict}, handle, indent=2)
+    graph_dict, metadata = load_graph(graph_output)
+    license_map = {k: _normalize_spdx_expression(v) for k, v in load_license_map(license_output).items()}
 
     context, results = check_compatibility(
         license_map,
-        normalize_graph_dict(combined_graph_dict),
-        args={"ignore_unk": True},
+        str(graph_output),
+        args={"ignore_unk": True, "merge_cycles": False},
     )
-    validation = _validate_alignment(
-        normalize_graph_dict(combined_graph_dict),
-        license_map,
-        context,
-        logger,
-    )
+    validation = _validate_alignment(graph_dict, license_map, context, logger)
 
     serialized_results = _jsonify(results)
     payload = {
-        "metadata": combined_meta,
+        "metadata": metadata,
         "results": serialized_results,
         "validation": validation,
     }
@@ -537,10 +372,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seconds to wait for scan to finish (default: %(default)s).",
     )
     parser.add_argument(
-        "--no-third-party",
-        dest="third_party",
-        action="store_false",
-        help="Disable third-party graph resolution (default: enabled).",
+        "-t",
+        "--third-party",
+        action="store_true",
+        help="Enable third-party dependency resolution and license scanning.",
     )
     parser.add_argument(
         "--force-scancode",
@@ -553,7 +388,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable debug logging.",
     )
-    parser.set_defaults(third_party=True)
     return parser
 
 

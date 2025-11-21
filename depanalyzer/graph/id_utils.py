@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 
 def _sanitize_fragment(raw: Any) -> str:
@@ -27,44 +27,89 @@ def _sanitize_fragment(raw: Any) -> str:
     return cleaned.strip("_")
 
 
+def _split_root(root_path: str | None) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Best-effort decomposition of a dependency root path.
+
+    Returns:
+        Tuple of (scope, package, version)
+    """
+    if not root_path:
+        return None, None, None
+
+    try:
+        parts = Path(root_path).parts
+    except Exception:
+        return None, None, None
+
+    scope = None
+    package = None
+    version = None
+
+    if "hvigor" in parts:
+        scope = "ohpm"
+        try:
+            hv_idx = parts.index("hvigor")
+            if hv_idx + 1 < len(parts):
+                package = parts[hv_idx + 1]
+            if hv_idx + 2 < len(parts):
+                version = parts[hv_idx + 2]
+        except ValueError:
+            pass
+
+    if scope is None:
+        scope = "workspace"
+        if parts:
+            package = parts[-1]
+
+    return scope, package, version
+
+
 def derive_dependency_namespace(
     graph_id: str, metadata: Dict[str, Any], summary: Optional[Dict[str, Any]] = None
 ) -> str:
-    """Derive a human-meaningful namespace for dependency graphs.
+    """Derive a stable namespace for dependency graphs.
 
-    Args:
-        graph_id: Registry graph identifier.
-        metadata: Graph metadata loaded from the cached graph file.
-        summary: Graph summary from the registry, if available.
+    Namespace format:
+        <scope>/<origin>
 
-    Returns:
-        Namespace string suitable for prefixing dependency node IDs. Falls back
-        to a stable hash of graph_id when no descriptive hints are present.
+    - scope: workspace / ohpm / sys / <ecosystem>
+    - origin: logical name (optionally with @version)
     """
     meta = metadata or {}
     info = summary or {}
 
     name = meta.get("name") or info.get("name")
-    version = meta.get("version") or info.get("version")
-    path_namespace = meta.get("path_namespace")
+    version = meta.get("version") or info.get("version") or meta.get("path_namespace")
+    scope, package_from_root, version_from_root = _split_root(
+        str(meta.get("root_path") or info.get("source") or "")
+    )
 
-    combined = f"{name}@{version}" if name and version else None
+    if not version and version_from_root:
+        version = version_from_root
 
-    source_hint = None
-    for raw_path in (meta.get("root_path"), meta.get("source"), info.get("source")):
-        if isinstance(raw_path, str) and raw_path:
-            source_hint = Path(raw_path).name
-            break
+    origin = name or package_from_root
+    if not origin and meta.get("path_namespace"):
+        origin = meta["path_namespace"]
 
-    candidates = [combined, path_namespace, name, version, source_hint]
+    if origin and scope == "ohpm":
+        origin = origin.replace("_", ".")
+    if origin and version:
+        origin = f"{origin}@{version}"
 
-    for candidate in candidates:
-        cleaned = _sanitize_fragment(candidate)
-        if cleaned:
-            return cleaned
+    cleaned_scope = _sanitize_fragment(scope)
+    cleaned_origin = _sanitize_fragment(origin)
+
+    if cleaned_scope and cleaned_origin:
+        return f"{cleaned_scope}/{cleaned_origin}"
+
+    if cleaned_origin:
+        return cleaned_origin
+
+    if cleaned_scope:
+        return cleaned_scope
 
     digest = hashlib.sha256(graph_id.encode("utf-8")).hexdigest()[:12]
-    return f"anon_{digest}"
+    return f"anon/{digest}"
 
 
 def ensure_namespace_unique(
@@ -113,6 +158,13 @@ def apply_namespace_prefix(
     """
     if not is_dependency or not namespace:
         return node_id
+
     canonical = node_id if str(node_id).startswith("//") else f"//{str(node_id).lstrip('/')}"
     body = canonical.lstrip("/")
-    return f"//dep:{namespace}:{body}"
+    body = body.replace(":", "/")
+
+    ns = namespace.strip("/ ")
+    if not ns:
+        ns = "dep"
+
+    return f"//dep/{ns}/{body}"

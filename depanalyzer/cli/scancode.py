@@ -27,7 +27,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 from depanalyzer.graph.id_utils import (
     apply_namespace_prefix,
@@ -40,6 +40,54 @@ from depanalyzer.graph.schema_utils import canonicalize_normalized_id
 from depanalyzer.utils.path_utils import normalize_node_id
 
 logger = logging.getLogger("depanalyzer.cli.scancode")
+
+
+def _find_scancode_executable() -> str:
+    """Locate the ScanCode CLI executable.
+
+    The search order prefers explicit environment configuration while still
+    handling common local checkouts.
+
+    Returns:
+        Absolute path to a runnable ScanCode executable.
+
+    Raises:
+        RuntimeError: When no usable executable is found.
+    """
+    candidates: list[str] = []
+    for env_var in ("SCANCODE_BIN", "SCANCODE_CLI"):
+        env_value = os.environ.get(env_var)
+        if env_value:
+            candidates.append(env_value)
+
+    detected = shutil.which("scancode")
+    if detected:
+        candidates.append(detected)
+
+    toolkit_root = os.environ.get("SCANCODE_TOOLKIT")
+    if toolkit_root:
+        candidates.append(str(Path(toolkit_root) / "scancode"))
+
+    candidates.append(str(Path.cwd() / "scancode"))
+    candidates.append(str(Path.cwd() / "scancode-toolkit" / "scancode"))
+    candidates.append("/mnt/c/Workspace/oslic/scancode-toolkit/scancode")
+
+    for candidate in candidates:
+        try:
+            resolved = Path(candidate).expanduser()
+        except (TypeError, ValueError):
+            continue
+
+        try:
+            if resolved.is_file() and os.access(resolved, os.X_OK):
+                return str(resolved)
+        except OSError:
+            continue
+
+    raise RuntimeError(
+        "scancode CLI not found. Set SCANCODE_BIN/SCANCODE_CLI to the "
+        "executable path or add it to PATH."
+    )
 
 
 def _resolve_existing_path(raw_path: str | None) -> Path | None:
@@ -162,11 +210,13 @@ def _discover_graph_sets(
 
 def _canonicalize_license_map(license_map: Dict[str, str]) -> Dict[str, str]:
     """Canonicalize node IDs to match exported graph IDs."""
-    return {
-        canonicalize_normalized_id(str(node_id)): str(expr).strip()
-        for node_id, expr in license_map.items()
-        if str(expr).strip()
-    }
+    result: Dict[str, str] = {}
+    for node_id, expr in license_map.items():
+        expr_str = _normalize_spdx_expression(expr)
+        if not expr_str:
+            continue
+        result[canonicalize_normalized_id(str(node_id))] = expr_str
+    return result
 
 
 def _apply_namespace_to_license_map(
@@ -196,6 +246,53 @@ def _apply_namespace_to_license_map(
     return result
 
 
+def _normalize_spdx_expression(expr: Any) -> str | None:
+    """Normalize a raw ScanCode expression value to a clean SPDX string.
+
+    Args:
+        expr: Raw expression value from ScanCode output.
+
+    Returns:
+        Trimmed SPDX expression or None when empty.
+    """
+    if expr is None:
+        return None
+    expr_str = str(expr).strip()
+    return expr_str or None
+
+
+def _extract_spdx_expression(fentry: Dict[str, Any]) -> str | None:
+    """Extract the best SPDX expression from a ScanCode file entry.
+
+    Args:
+        fentry: File entry dictionary from ScanCode output.
+
+    Returns:
+        SPDX expression string, or None when missing.
+    """
+    for key in (
+        "license_expression_spdx",
+        "detected_license_expression_spdx",
+        "declared_license_expression_spdx",
+    ):
+        expr = _normalize_spdx_expression(fentry.get(key))
+        if expr:
+            return expr
+
+    license_entries = fentry.get("licenses") or []
+    for lic in license_entries:
+        expr = _normalize_spdx_expression(
+            lic.get("spdx_license_key")
+            or lic.get("license_expression_spdx")
+            or lic.get("license_expression")
+            or lic.get("key")
+        )
+        if expr:
+            return expr
+
+    return None
+
+
 def _run_scancode(
     root_path: Path,
     namespace: str | None,
@@ -210,11 +307,7 @@ def _run_scancode(
     Returns:
         Dict[str, str]: Mapping from normalized node ID to license expression.
     """
-    if shutil.which("scancode") is None:
-        raise RuntimeError(
-            "scancode CLI not found on PATH. Please install ScanCode Toolkit "
-            "and ensure the `scancode` command is available."
-        )
+    scancode_bin = _find_scancode_executable()
 
     if not root_path.is_dir():
         raise RuntimeError(f"ScanCode root path is not a directory: {root_path}")
@@ -226,7 +319,7 @@ def _run_scancode(
 
     try:
         cmd = [
-            "scancode",
+            scancode_bin,
             "--license",
             "--strip-root",
             "--json-pp",
@@ -267,26 +360,10 @@ def _run_scancode(
                 continue
 
             # Derive license expression for this file.
-            expr = (
-                fentry.get("license_expression_spdx")
-                or fentry.get("detected_license_expression_spdx")
-                or fentry.get("license_expression")
-                or fentry.get("detected_license_expression")
-            )
-            if not expr:
-                # Try legacy format: licenses list with per-match expressions
-                licenses = fentry.get("licenses") or []
-                for lic in licenses:
-                    expr = (
-                        lic.get("spdx_license_key")
-                        or lic.get("license_expression_spdx")
-                        or lic.get("license_expression")
-                        or lic.get("expression")
-                    )
-                    if expr:
-                        break
-
-            expr_str = str(expr).strip() if expr else "NOASSERTION"
+            expr_str = _extract_spdx_expression(fentry)
+            if not expr_str:
+                # Skip files without a detected license instead of writing NOASSERTION.
+                continue
 
             abs_path = (root_path / rel_path).resolve()
             node_id = normalize_node_id(abs_path, root_path, namespace=namespace)
@@ -370,7 +447,11 @@ def scancode_command(args) -> int:
             with cache_path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
             metadata = data.get("metadata", {}) or {}
-            graph_body = data.get("graph") or data
+            graph_section = data.get("graph")
+            if isinstance(graph_section, dict) and graph_section.get("nodes"):
+                graph_body = graph_section
+            else:
+                graph_body = data
             graph_nodes = graph_body.get("nodes") if isinstance(graph_body, dict) else None
             graph_node_ids = {
                 n.get("id") for n in (graph_nodes or []) if isinstance(n, dict) and n.get("id")

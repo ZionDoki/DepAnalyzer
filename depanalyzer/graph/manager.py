@@ -653,8 +653,9 @@ class GraphManager:
         if file_format == "json":
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            edge_key = "edges" if isinstance(data, dict) and "edges" in data else "links"
             manager._backend.set_native_graph(
-                nx.readwrite.json_graph.node_link_graph(data, edges="edges")
+                nx.readwrite.json_graph.node_link_graph(data, edges=edge_key)
             )
             logger.info("Graph loaded from: %s", file_path)
         elif file_format == "gml":

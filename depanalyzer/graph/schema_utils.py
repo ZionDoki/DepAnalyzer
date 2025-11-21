@@ -135,15 +135,15 @@ def canonicalize_node(
     #    identifiers (ext_lib:pkg@version). These must NOT be treated as paths
     #    or they will accidentally pick up process working directories.
     if raw_id.startswith("ext_lib:"):
-        # External library nodes are modeled as logical identifiers. For export
-        # purposes we wrap them in a //-style prefix so they live in the same
-        # namespace as other node IDs, but we avoid any filesystem-based
-        # normalization.
-        canonical_id = f"//{raw_id}"
+        # External library nodes are logical identifiers; normalize separators
+        # so they are stable across platforms and readable.
+        lib_body = raw_id.split("ext_lib:", 1)[1]
+        lib_body = lib_body.replace("/", ".")
+        canonical_id = f"//ext_lib/{lib_body}"
     elif raw_id.startswith("module:"):
-        # Modules behave like logical identifiers; keep them in the same
-        # top-level namespace as other graph nodes.
-        canonical_id = f"//{raw_id}"
+        # Modules behave like logical identifiers; normalize to a path-like form.
+        mod_body = raw_id.split("module:", 1)[1].replace(":", "/")
+        canonical_id = f"//module/{mod_body}"
     else:
         # Default: best-effort path normalization where applicable.
         normalized = _derive_normalized_path(raw_id, new_attrs, root_path)

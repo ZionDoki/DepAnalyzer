@@ -19,11 +19,12 @@ import os
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Tuple
 
 import networkx as nx
 from networkx.exception import NetworkXError
 
+from depanalyzer.graph.io import break_cycles
 from depanalyzer.graph.condensation import CondensationResult, build_condensation_dag
 from depanalyzer.graph.schema import NodeType
 
@@ -494,6 +495,28 @@ class GlobalDAG:
                 "Failed to compute transitive dependencies for %s: %s", graph_id, e
             )
             return set()
+
+    def get_acyclic_view(self) -> Tuple[nx.MultiDiGraph, int]:
+        """Return a virtualized, acyclic view of the global DAG.
+
+        Cycles are collapsed into SCC cluster nodes so downstream
+        consumers can operate on a DAG without losing membership
+        information. The original DAG remains unchanged on disk.
+
+        Returns:
+            Tuple of (acyclic MultiDiGraph, removed_edge_count).
+        """
+        try:
+            with self._acquire_lock():
+                self._load_unlocked()
+                as_multi = nx.MultiDiGraph()
+                as_multi.add_nodes_from(self._dag.nodes(data=True))
+                for u, v, data in self._dag.edges(data=True):
+                    as_multi.add_edge(u, v, **(data or {}))
+            return break_cycles(as_multi)
+        except GRAPH_ERRORS as e:
+            logger.warning("Failed to build acyclic GlobalDAG view: %s", e)
+            return nx.MultiDiGraph(), 0
 
     def get_dependents(self, graph_id: str) -> Set[str]:
         """Get direct dependents of a transaction.
