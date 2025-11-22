@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "depanalyzer"
-version = "0.1.0"
+version = "0.1.1"
 description = "Dependency analyzer tool"
 authors = ["Zihao <zhangzihao2025@lzu.edu.cn> Shufei <2337739735@qq.com>"]
 readme = "README.md"
@@ -21,7 +21,7 @@ textual = "^3.0.1"
 platformdirs = "^4.0.0"
 requests = "^2.31.0"
 json5 = "^0.12.0"
-pydantic = "^2.11.7"
+pydantic = "^2.11.7"dep
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.1"

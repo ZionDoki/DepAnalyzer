@@ -21,6 +21,7 @@ from depanalyzer.cli.scan import scan_command
 from depanalyzer.cli.export import export_command
 from depanalyzer.cli.scancode import scancode_command
 from depanalyzer.cli.dag import dag_command
+from depanalyzer.utils.scancode_installer import install_scancode
 
 
 def setup_logging(verbose: bool = False, console: Optional[Console] = None) -> None:
@@ -82,6 +83,17 @@ def main() -> int:
         "--verbose",
         action="store_true",
         help="Enable verbose logging",
+    )
+    parser.add_argument(
+        "--install",
+        nargs="?",
+        const="",
+        default=False,
+        help=(
+            "Download and install ScanCode Toolkit to a local fixed path "
+            "(~/.depanalyzer/scancode-toolkit). Optional version override, e.g. "
+            "--install 32.4.1 (defaults to 32.4.1)."
+        ),
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -202,13 +214,20 @@ def main() -> int:
     # ScanCode license command
     scancode_parser = subparsers.add_parser(
         "scancode",
-        help="Run ScanCode on cached graphs and build license expression map",
+        help="Run ScanCode to build license expression map (direct path or cached graphs)",
     )
     scancode_parser.add_argument(
         "-o",
         "--output",
         required=True,
         help="Output JSON file containing {graph_node_id: spdx_license_expression}",
+    )
+    scancode_parser.add_argument(
+        "--path",
+        help=(
+            "Scan this directory directly with ScanCode (no dependency on prior "
+            "scan caches). Output format matches the graph-based mode."
+        ),
     )
     scancode_parser.add_argument(
         "--cache-dir",
@@ -294,6 +313,17 @@ def main() -> int:
 
     # Setup logging
     setup_logging(args.verbose)
+
+    if getattr(args, "install", False) is not False:
+        install_version = None if args.install == "" else str(args.install)
+        try:
+            path = install_scancode(version=install_version)
+            logger.info("ScanCode installed at %s", path)
+        except RuntimeError as exc:
+            logger.error(str(exc))
+            return 1
+        if not args.command:
+            return 0
 
     # Dispatch to subcommand
     if args.command == "scan":

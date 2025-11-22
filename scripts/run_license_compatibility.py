@@ -240,8 +240,15 @@ def _jsonify(obj: Any) -> Any:
 def run_pipeline(args: argparse.Namespace) -> None:
     """Execute scan → scancode → liscopelens compatibility pipeline."""
     ensure_liscopelens_importable(args.liscopelens_path)
-    from liscopelens.api import check_compatibility  # pylint: disable=import-error
-    from liscopelens.utils.graph import GraphManager  # pylint: disable=import-error
+    try:
+        from liscopelens.api import check_compatibility  # pylint: disable=import-error
+        from liscopelens.utils.graph import GraphManager  # pylint: disable=import-error
+    except ImportError as exc:
+        logger.error(
+            "liscopelens is not installed. Install with `pip install liscopelens` "
+            "or provide --liscopelens-path pointing to the source checkout."
+        )
+        raise RuntimeError("liscopelens is required for the license pipeline") from exc
 
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)

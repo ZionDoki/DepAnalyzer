@@ -202,3 +202,26 @@ graph.save("output.json", save_format="json")
 ### 3) 常见问题
 - 若 `depanalyzer` 命令不可用，请确认安装过程无报错，并确保 Python 的脚本目录在 `PATH` 中
 - 许可证相关命令需要外部工具 `scancode` 可用
+- 可通过 `depanalyzer --install` 下载并解压官方 `scancode-toolkit` 到固定路径（`~/.depanalyzer/scancode-toolkit/scancode`，Windows 下为 `scancode.bat`），无需写入系统 PATH；默认版本为 32.4.1，若需自定义版本可使用 `depanalyzer --install 32.4.1`
+- 若需自定义下载链接（例如不同平台或版本），可设置环境变量 `SCANCODE_DOWNLOAD_URL`
+- 安装脚本会自动匹配本机 Python 版本（支持 3.9/3.10/3.11/3.12/3.13，无法识别时默认下载 3.9 包）
+
+### ScanCode 子命令用法
+
+直接扫描目录（无需依赖 `scan` 输出，格式与原有模式一致）：
+
+```bash
+depanalyzer scancode --path /path/to/repo -o license_map.json
+```
+
+- 只需提供待检测目录，输出仍为 `{graph_node_id: spdx_license_expression}` 的 JSON 映射
+
+复用 `scan` 产出的图缓存并保持命名空间对齐：
+
+```bash
+depanalyzer scancode --cache-dir .dep_cache --source /path/to/repo --third-party -o license_map.json
+```
+
+- `--cache-dir` 指向 `scan` 时使用的缓存目录（可直接给到其中的 `graphs/`），`--source` 用于解析 `<cache-dir>/<source_stem>/graphs`
+- `--third-party` 会扫描缓存的三方依赖，`--force` 可强制重新调用 ScanCode 覆盖已存在的 `<graph_id>.licenses.json`
+- 当使用 `--path` 直扫目录时，`--third-party` 参数会被忽略（因为没有依赖图可用）

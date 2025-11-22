@@ -1,18 +1,17 @@
 """CLI command to run ScanCode and build a flat node->license map.
 
-This command scans the source root of each graph (and optionally its
-third-party dependency graphs) using the external `scancode` CLI and
-produces a JSON mapping:
+This command can scan a user-provided directory directly, or reuse cached
+graphs from `depanalyzer scan` (and optionally their third-party dependency
+graphs) using the external `scancode` CLI. The output is a JSON mapping:
 
     {
         "<graph-node-id>": "<SPDX license expression>"
     }
 
-Node identifiers align with the merged graph produced by
-`depanalyzer scan -t -o`, using human-meaningful namespaces instead of
-raw graph IDs for dependency graphs. Per-graph license maps are cached
-under the graphs directory as `<graph_id>.licenses.json` for
-incremental reuse.
+When graph metadata is available, node identifiers align with the merged graph
+produced by `depanalyzer scan -t -o`, using human-meaningful namespaces instead
+of raw graph IDs for dependency graphs. Per-graph license maps are cached under
+the graphs directory as `<graph_id>.licenses.json` for incremental reuse.
 """
 
 # CLI intentionally shields unexpected ScanCode failures to keep process exit codes consistent.
@@ -36,6 +35,11 @@ from depanalyzer.graph.id_utils import (
     ensure_namespace_unique,
 )
 from depanalyzer.utils.path_utils import normalize_node_id
+from depanalyzer.utils.scancode_installer import (
+    DEFAULT_INSTALL_ROOT,
+    get_installed_scancode_path,
+    is_scancode_executable,
+)
 
 logger = logging.getLogger("depanalyzer.cli.scancode")
 
@@ -66,7 +70,12 @@ def _find_scancode_executable() -> str:
     if toolkit_root:
         candidates.append(str(Path(toolkit_root) / "scancode"))
 
+    installed = get_installed_scancode_path(DEFAULT_INSTALL_ROOT)
+    if is_scancode_executable(installed):
+        candidates.append(str(installed))
+
     candidates.append(str(Path.cwd() / "scancode"))
+    candidates.append(str(Path.cwd() / "scancode.bat"))
     candidates.append(str(Path.cwd() / "scancode-toolkit" / "scancode"))
     candidates.append("/mnt/c/Workspace/oslic/scancode-toolkit/scancode")
 
@@ -83,9 +92,45 @@ def _find_scancode_executable() -> str:
             continue
 
     raise RuntimeError(
-        "scancode CLI not found. Set SCANCODE_BIN/SCANCODE_CLI to the "
-        "executable path or add it to PATH."
+        "ScanCode CLI not found. Set SCANCODE_BIN/SCANCODE_CLI to the executable "
+        'path, install it in PATH, or run "depanalyzer --install" to download a '
+        f"local copy under {DEFAULT_INSTALL_ROOT}."
     )
+
+
+def _prepare_scancode_runtime(scancode_bin: str) -> None:
+    """Ensure ScanCode runtime is ready before invocation.
+
+    On Windows, ScanCode relies on a virtualenv created by configure.bat; if a
+    prior attempt failed before installing the wheel, scancode.bat would skip
+    reconfiguration. To recover, drop the virtualenv when the scancode script is
+    missing so the next call reconfigures cleanly.
+    """
+    try:
+        bin_path = Path(scancode_bin)
+    except Exception:
+        return
+
+    if bin_path.suffix.lower() != ".bat":
+        return
+
+    root_dir = bin_path.parent
+    venv_dir = root_dir / "venv"
+    scancode_candidates = [
+        venv_dir / "Scripts" / "scancode",
+        venv_dir / "Scripts" / "scancode.exe",
+    ]
+    if any(c.exists() for c in scancode_candidates):
+        return
+
+    logger.info(
+        "Resetting ScanCode virtualenv at %s to repair incomplete installation",
+        venv_dir,
+    )
+    try:
+        shutil.rmtree(venv_dir)
+    except OSError:
+        logger.debug("Failed to remove %s during repair", venv_dir)
 
 
 def _resolve_existing_path(raw_path: str | None) -> Path | None:
@@ -306,6 +351,7 @@ def _run_scancode(
         Dict[str, str]: Mapping from normalized node ID to license expression.
     """
     scancode_bin = _find_scancode_executable()
+    _prepare_scancode_runtime(scancode_bin)
 
     if not root_path.is_dir():
         raise RuntimeError(f"ScanCode root path is not a directory: {root_path}")
@@ -326,12 +372,15 @@ def _run_scancode(
         ]
         logger.info("Running ScanCode: %s", " ".join(cmd))
 
+        work_dir = Path(scancode_bin).resolve().parent
+
         proc = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             check=False,
+            cwd=work_dir,
         )
 
         if proc.returncode != 0:
@@ -378,6 +427,21 @@ def _run_scancode(
             pass
 
 
+def _write_license_map(output_path: Path, license_map: Dict[str, str]) -> None:
+    """Persist license map to disk in JSON format.
+
+    Args:
+        output_path: Destination path for the JSON file.
+        license_map: Mapping from node ID to SPDX license expression.
+
+    Returns:
+        None
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as f:
+        json.dump(license_map, f, indent=2)
+
+
 def scancode_command(args) -> int:
     """Execute scancode command.
 
@@ -390,9 +454,50 @@ def scancode_command(args) -> int:
     try:
         cache_dir_arg = getattr(args, "cache_dir", None)
         source_arg = getattr(args, "source", None)
+        direct_path_arg = getattr(args, "path", None)
         output = Path(args.output)
         include_deps = getattr(args, "third_party", False)
         force = getattr(args, "force", False)
+
+        if direct_path_arg:
+            direct_root = _resolve_existing_path(direct_path_arg)
+            if direct_root is None or not direct_root.is_dir():
+                logger.error(
+                    "Direct ScanCode path is not a directory or cannot be resolved: %s",
+                    direct_path_arg,
+                )
+                return 1
+
+            if include_deps:
+                logger.info(
+                    "--third-party ignored for direct ScanCode path; dependency graphs require cached scan results."
+                )
+            if cache_dir_arg or source_arg:
+                logger.info(
+                    "Using direct path mode; cache-dir and source arguments are ignored."
+                )
+
+            try:
+                license_map = _run_scancode(direct_root, None)
+            except (
+                RuntimeError,
+                OSError,
+                json.JSONDecodeError,
+                ValueError,
+            ) as e:
+                logger.error("ScanCode failed for path %s: %s", direct_root, e)
+                return 1
+
+            canonical_map = _canonicalize_license_map(license_map)
+            _write_license_map(output, canonical_map)
+            logger.info(
+                "License map exported to %s for %s (%d node entries)",
+                output,
+                direct_root,
+                len(canonical_map),
+            )
+            return 0
+
         source_root = _resolve_existing_path(source_arg)
 
         graphs_root = _resolve_graphs_root(cache_dir_arg, source_arg)
@@ -596,9 +701,7 @@ def scancode_command(args) -> int:
             )
 
         # Write combined result
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with output.open("w", encoding="utf-8") as f:
-            json.dump(node_license_map, f, indent=2)
+        _write_license_map(output, node_license_map)
 
         logger.info(
             "License map exported to %s for %d graph(s) (%d node entries)",
