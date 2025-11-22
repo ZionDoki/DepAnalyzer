@@ -219,6 +219,25 @@ class UncertaintyPolicyConfig:
 
 
 # ---------------------------------------------------------------------------
+# Fallback configuration
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FallbackConfig:
+    """Configuration for fallback graph construction.
+
+    When enabled, a flat tree is added that connects all files (and
+    isolated nodes) to a single synthetic node so downstream license
+    comparison or analysis can still operate when parsing is incomplete.
+    """
+
+    enabled: bool = False
+    root_id: str = "fallback:license_scan"
+    include_isolated_nodes: bool = True
+
+
+# ---------------------------------------------------------------------------
 # Aggregate graph build configuration
 # ---------------------------------------------------------------------------
 
@@ -245,6 +264,7 @@ class GraphBuildConfig:
     projection: ProjectionConfig = field(default_factory=ProjectionConfig)
     contract_match: ContractMatchConfig = field(default_factory=ContractMatchConfig)
     uncertainty: UncertaintyPolicyConfig = field(default_factory=UncertaintyPolicyConfig)
+    fallback: FallbackConfig = field(default_factory=FallbackConfig)
 
     # Optional per-ecosystem configuration objects provided by parser
     # packages via EcosystemConfigRegistry. When present, they take
@@ -414,6 +434,19 @@ class GraphBuildConfig:
                 if eco_cfg is not None:
                     cfg.ecosystem_configs[eco] = eco_cfg
 
+        # Fallback configuration
+        fallback_data = data.get("fallback", {}) or {}
+        if isinstance(fallback_data, dict):
+            cfg.fallback = FallbackConfig(
+                enabled=bool(fallback_data.get("enabled", cfg.fallback.enabled)),
+                root_id=str(fallback_data.get("root_id", cfg.fallback.root_id)),
+                include_isolated_nodes=bool(
+                    fallback_data.get(
+                        "include_isolated_nodes", cfg.fallback.include_isolated_nodes
+                    )
+                ),
+            )
+
         return cfg
 
 
@@ -425,6 +458,7 @@ __all__ = [
     "LinkerConfig",
     "ContractMatchConfig",
     "UncertaintyPolicyConfig",
+    "FallbackConfig",
     "HvigorDetectConfig",
     "CMakeDetectConfig",
     "HvigorParserConfig",

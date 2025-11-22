@@ -10,8 +10,8 @@ from typing import Any, Dict
 import json5
 
 from depanalyzer.parsers.base import BaseParser, DependencySpec
-from depanalyzer.graph.manager import GraphManager, NodeType, EdgeKind
-from depanalyzer.graph.schema import NodeSpec, EdgeSpec
+from depanalyzer.graph import GraphManager, NodeType, EdgeKind
+from depanalyzer.graph import NodeSpec, EdgeSpec
 from depanalyzer.runtime.eventbus import Event, EventType
 from depanalyzer.graph.contract import BuildInterfaceContract, ContractType
 from depanalyzer.graph.contract_registry import ContractRegistry

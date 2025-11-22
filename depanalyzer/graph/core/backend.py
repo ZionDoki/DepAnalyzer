@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterable, Optional
 
 import networkx as nx
 
-logger = logging.getLogger("depanalyzer.graph.backend")
+logger = logging.getLogger("depanalyzer.graph.core.backend")
 
 
 class GraphBackend:

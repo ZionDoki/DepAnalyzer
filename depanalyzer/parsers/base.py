@@ -19,13 +19,10 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from depanalyzer.graph.manager import GraphManager
+from depanalyzer.graph import GraphManager
 from depanalyzer.runtime.context import TransactionContext
 from depanalyzer.runtime.eventbus import Event, EventBus
-from depanalyzer.runtime.strategies import (
-    CodeDependencyContext,
-    CodeDependencyMapper,
-)
+from depanalyzer.runtime.policies import CodeDependencyContext, CodeDependencyMapper
 
 logger = logging.getLogger("depanalyzer.parsers.base")
 

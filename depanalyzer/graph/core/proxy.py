@@ -9,7 +9,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-logger = logging.getLogger("depanalyzer.graph.proxy")
+logger = logging.getLogger("depanalyzer.graph.core.proxy")
 
 
 @dataclass

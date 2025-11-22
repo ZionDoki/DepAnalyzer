@@ -11,8 +11,7 @@ from typing import List
 from networkx.exception import NetworkXError
 from networkx.readwrite import node_link_graph
 
-from depanalyzer.graph.global_dag import GlobalDAG
-from depanalyzer.graph.registry import GraphRegistry
+from depanalyzer.graph import GlobalDAG, GraphRegistry
 
 logger = logging.getLogger("depanalyzer.cli.export")
 

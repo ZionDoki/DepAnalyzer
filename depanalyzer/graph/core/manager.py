@@ -11,17 +11,10 @@ from typing import Any, Dict, List, Optional, Set, Union
 
 import networkx as nx
 
-from depanalyzer.graph.backend import GraphBackend
-from depanalyzer.graph.condensation import (
-    CondensationResult,
-    build_condensation_dag,
-)
-from depanalyzer.graph.projection import (
-    derive_asset_artifact_projection as _derive_projection,
-    fuse_projection_evidence as _fuse_projection,
-)
-from depanalyzer.graph.projection_config import ProjectionConfig
-from depanalyzer.graph.schema import (
+from depanalyzer.utils.path_utils import normalize_node_id
+
+from .backend import GraphBackend
+from ..models.schema import (
     EdgeKind,
     EdgeSpec,
     NodeSpec,
@@ -29,9 +22,14 @@ from depanalyzer.graph.schema import (
     validate_edge,
     validate_node,
 )
-from depanalyzer.utils.path_utils import normalize_node_id
+from ..ops.condensation import CondensationResult, build_condensation_dag
+from ..ops.projection import (
+    derive_asset_artifact_projection as _derive_projection,
+    fuse_projection_evidence as _fuse_projection,
+)
+from ..projection_config import ProjectionConfig
 
-logger = logging.getLogger("depanalyzer.graph.manager")
+logger = logging.getLogger("depanalyzer.graph.core.manager")
 
 
 class GraphManager:

@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Sequence, Tuple, Union
 
 import networkx as nx
 
-logger = logging.getLogger("depanalyzer.graph.condensation")
+logger = logging.getLogger("depanalyzer.graph.ops.condensation")
 
 # NetworkX uses MultiDiGraph for transaction graphs and DiGraph for the global
 # package view. Both are supported by the condensation pipeline.

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import networkx as nx
 
-from depanalyzer.graph.global_dag import GlobalDAG
+from depanalyzer.graph import GlobalDAG
 
 
 def _fresh_global_dag(tmp_path: Path) -> GlobalDAG:

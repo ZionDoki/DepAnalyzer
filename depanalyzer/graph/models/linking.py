@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from enum import Enum
 
-logger = logging.getLogger("depanalyzer.graph.linking")
+logger = logging.getLogger("depanalyzer.graph.models.linking")
 
 
 class LinkClass(str, Enum):

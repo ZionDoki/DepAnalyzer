@@ -14,11 +14,11 @@ import logging
 from pathlib import Path
 from typing import List
 
-from depanalyzer.graph.identifiers import normalize_node_id
+from depanalyzer.graph import normalize_node_id
 from depanalyzer.parsers.cpp.cmake.commands.base import CommandHandler
 from depanalyzer.parsers.cpp.cmake.tokens import clean_token, CMAKE_VAR_PATTERN
 from depanalyzer.parsers.cpp.cmake.variables import CMakeVariableResolver
-from depanalyzer.graph.manager import GraphManager
+from depanalyzer.graph import GraphManager
 from depanalyzer.runtime.eventbus import Event, EventType
 
 log = logging.getLogger("depanalyzer.parsers.cpp.cmake.commands.sources")

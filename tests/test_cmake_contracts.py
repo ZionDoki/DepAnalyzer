@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from depanalyzer.graph import GraphManager
 from depanalyzer.graph.contract import BuildInterfaceContract, ContractType
 from depanalyzer.graph.contract_registry import ContractRegistry
-from depanalyzer.graph.manager import GraphManager
 from depanalyzer.parsers.cpp.cmake_graph_builder import CMakeGraphBuilder
 from depanalyzer.runtime.eventbus import Event, EventBus, EventType
 from depanalyzer.runtime.transaction import Transaction

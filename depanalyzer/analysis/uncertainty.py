@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from depanalyzer.graph.manager import GraphManager
+from depanalyzer.graph import GraphManager
 from depanalyzer.runtime.graph_config import UncertaintyPolicyConfig
 
 logger = logging.getLogger("depanalyzer.analysis.uncertainty")

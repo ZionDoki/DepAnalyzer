@@ -12,18 +12,18 @@ from typing import TYPE_CHECKING, Dict, Mapping, Optional, Sequence
 
 from depanalyzer.parsers.cpp.code_dependency_mapper import CppCodeDependencyMapper
 from depanalyzer.parsers.hvigor.code_dependency_mapper import HvigorCodeDependencyMapper
+from depanalyzer.parsers.maven.code_dependency_mapper import MavenCodeDependencyMapper
 from depanalyzer.runtime.coordinator import TransactionResult
-from depanalyzer.runtime.default_strategies import (
-    DefaultAssetProjectionStrategy,
-    DefaultCodeDependencyMapper,
-)
 from depanalyzer.runtime.graph_config import GraphBuildConfig
 from depanalyzer.runtime.orchestrator import PhaseOrchestrator
-from depanalyzer.runtime.strategies import (
-    AnalyzeStrategy,
-    AssetProjectionStrategy,
+from depanalyzer.runtime.policies import (
+    AnalyzePolicy,
+    AssetProjectionPolicy,
     CodeDependencyMapper,
-    JoinStrategy,
+    DefaultAssetProjectionPolicy,
+    DefaultCodeDependencyMapper,
+    FileCompletenessJoinPolicy,
+    JoinPolicy,
     LifecycleHook,
 )
 from depanalyzer.runtime.transaction_state import TransactionState
@@ -71,9 +71,12 @@ class Transaction:
         graph_build_config: Optional[GraphBuildConfig] = None,
         lifecycle_hooks: Optional[Sequence[LifecycleHook]] = None,
         code_dependency_mappers: Optional[Mapping[str, CodeDependencyMapper]] = None,
-        asset_projection_strategy: Optional[AssetProjectionStrategy] = None,
-        join_strategies: Optional[Sequence[JoinStrategy]] = None,
-        analyze_strategies: Optional[Sequence[AnalyzeStrategy]] = None,
+        asset_projection_strategy: Optional[AssetProjectionPolicy] = None,
+        join_strategies: Optional[Sequence[JoinPolicy]] = None,
+        analyze_strategies: Optional[Sequence[AnalyzePolicy]] = None,
+        asset_projection_policy: Optional[AssetProjectionPolicy] = None,
+        join_policies: Optional[Sequence[JoinPolicy]] = None,
+        analyze_policies: Optional[Sequence[AnalyzePolicy]] = None,
     ) -> None:
         """
         Initialize transaction (maintains backward-compatible API).
@@ -94,17 +97,35 @@ class Transaction:
             graph_build_config: Configuration for graph building
             lifecycle_hooks: Lifecycle hooks for before/after phase callbacks
             code_dependency_mappers: Ecosystem-specific code dependency mappers
-            asset_projection_strategy: Strategy for asset projection
-            join_strategies: Strategies for JOIN phase
-            analyze_strategies: Strategies for ANALYZE phase
+            asset_projection_strategy: Strategy for asset projection (deprecated alias)
+            join_strategies: Strategies for JOIN phase (deprecated alias)
+            analyze_strategies: Strategies for ANALYZE phase (deprecated alias)
+            asset_projection_policy: Policy for asset projection
+            join_policies: Policies for JOIN phase
+            analyze_policies: Policies for ANALYZE phase
         """
-        # Prepare code dependency mappers
+        # Prepare graph build config and code dependency mappers
+        _graph_build_config = graph_build_config or GraphBuildConfig.default()
+
         _code_dependency_mappers: Dict[str, CodeDependencyMapper] = {}
         if code_dependency_mappers is not None:
             _code_dependency_mappers.update(code_dependency_mappers)
         else:
             _code_dependency_mappers.setdefault("cpp", CppCodeDependencyMapper())
             _code_dependency_mappers.setdefault("hvigor", HvigorCodeDependencyMapper())
+            _code_dependency_mappers.setdefault("maven", MavenCodeDependencyMapper())
+
+        # Join policies (append fallback when enabled)
+        _join_policies = list(join_policies or join_strategies or [])
+        try:
+            if _graph_build_config.fallback.enabled:
+                _join_policies.append(FileCompletenessJoinPolicy(_graph_build_config.fallback))
+        except AttributeError:
+            pass
+
+        asset_policy = asset_projection_policy or asset_projection_strategy
+        if asset_policy is None:
+            asset_policy = DefaultAssetProjectionPolicy()
 
         # Create TransactionState
         self._state = TransactionState(
@@ -121,15 +142,13 @@ class Transaction:
             workspace_cache_root=(
                 Path(workspace_cache_root) if workspace_cache_root else None
             ),
-            graph_build_config=graph_build_config or GraphBuildConfig.default(),
+            graph_build_config=_graph_build_config,
             lifecycle_hooks=list(lifecycle_hooks or []),
             code_dependency_mappers=_code_dependency_mappers,
             default_code_dependency_mapper=DefaultCodeDependencyMapper(),
-            asset_projection_strategy=(
-                asset_projection_strategy or DefaultAssetProjectionStrategy()
-            ),
-            join_strategies=list(join_strategies or []),
-            analyze_strategies=list(analyze_strategies or []),
+            asset_projection_policy=asset_policy,
+            join_policies=_join_policies,
+            analyze_policies=list(analyze_policies or analyze_strategies or []),
             # Initialize workspace
             workspace=Workspace(source, cache_root=workspace_cache_root),
             # Progress manager

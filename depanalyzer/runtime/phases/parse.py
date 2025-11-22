@@ -10,15 +10,15 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List
 
+from depanalyzer.graph import GraphManager
 from depanalyzer.graph.contract_registry import ContractRegistry
-from depanalyzer.graph.manager import GraphManager
 from depanalyzer.parsers.registry import EcosystemRegistry
 from depanalyzer.runtime.code_parser_pool import CodeParserPool
 from depanalyzer.runtime.dependency_collector import DependencyCollector
 from depanalyzer.runtime.lifecycle import LifecyclePhase
 from depanalyzer.runtime.phases.base import BasePhase
 from depanalyzer.runtime.context import TransactionContext
-from depanalyzer.runtime.strategies import CodeDependencyContext, CodeDependencyMapper
+from depanalyzer.runtime.policies import CodeDependencyContext, CodeDependencyMapper
 from depanalyzer.runtime.worker import Task, TaskPriority
 
 logger = logging.getLogger("depanalyzer.transaction.phase.parse")

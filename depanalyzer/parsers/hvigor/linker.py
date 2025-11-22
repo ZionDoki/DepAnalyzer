@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
 
 from depanalyzer.graph.contract_registry import ContractRegistry
-from depanalyzer.graph.linking import LinkClass
-from depanalyzer.graph.manager import EdgeKind, GraphManager, NodeType
+from depanalyzer.graph import LinkClass
+from depanalyzer.graph import EdgeKind, GraphManager, NodeType
 from depanalyzer.parsers.base import BaseLinker
 
 logger = logging.getLogger("depanalyzer.parsers.hvigor.linker")

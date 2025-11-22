@@ -13,6 +13,7 @@ tree-sitter-typescript = "*"
 tree-sitter-c = "*"
 tree-sitter-cpp = "^0.23.4"
 tree-sitter-cmake = {git = "https://github.com/uyha/tree-sitter-cmake.git"}
+tree-sitter-java = "*"
 networkx = "^3.2.1"
 toml = "^0.10.2"
 rich = "^14.0.0"

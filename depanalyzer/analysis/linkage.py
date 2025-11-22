@@ -3,7 +3,7 @@
 import logging
 from typing import Dict
 
-from depanalyzer.graph.manager import EdgeKind, GraphManager
+from depanalyzer.graph import EdgeKind, GraphManager
 
 logger = logging.getLogger("depanalyzer.analysis.linkage")
 

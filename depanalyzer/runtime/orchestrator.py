@@ -13,9 +13,8 @@ import time
 from pathlib import Path
 from typing import Dict, Optional
 
+from depanalyzer.graph import GraphManager, GraphRegistry
 from depanalyzer.graph.contract_registry import ContractRegistry
-from depanalyzer.graph.manager import GraphManager
-from depanalyzer.graph.registry import GraphRegistry
 from depanalyzer.parsers.registry import EcosystemRegistry
 from depanalyzer.runtime.context import ExportContext, TransactionContext
 from depanalyzer.runtime.coordinator import TransactionResult

@@ -11,13 +11,13 @@ from __future__ import annotations
 import logging
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional, Annotated
+from typing import Annotated, Any, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from depanalyzer.utils.path_utils import normalize_node_id as _normalize_path_id
 
-logger = logging.getLogger("depanalyzer.graph.schema")
+logger = logging.getLogger("depanalyzer.graph.models.schema")
 
 
 class NodeType(str, Enum):

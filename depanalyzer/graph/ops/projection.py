@@ -1,4 +1,4 @@
-"""Projection helpers used by :class:`depanalyzer.graph.manager.GraphManager`."""
+"""Projection helpers used by :class:`depanalyzer.graph.core.manager.GraphManager`."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 
 import networkx as nx
 
-from depanalyzer.graph.projection_config import ProjectionConfig
+from ..projection_config import ProjectionConfig
 
 if TYPE_CHECKING:
-    from depanalyzer.graph.manager import GraphManager
+    from ..core.manager import GraphManager
 
 
 def _edge_kind(data: Dict[str, Any]) -> Optional[str]:

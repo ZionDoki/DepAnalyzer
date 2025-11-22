@@ -14,13 +14,10 @@ from pathlib import Path
 from pickle import PickleError
 from typing import Optional
 
-from depanalyzer.graph.global_dag import GlobalDAG
-from depanalyzer.graph.merge import merge_graph_with_dependencies
-from depanalyzer.graph.registry import GraphRegistry
-
+from depanalyzer.graph import GlobalDAG, GraphRegistry, merge_graph_with_dependencies
+from depanalyzer.runtime.config_loader import load_graph_build_config
 from depanalyzer.runtime.coordinator import TransactionCoordinator
 from depanalyzer.runtime.transaction import Transaction
-from depanalyzer.runtime.config_loader import load_graph_build_config
 
 logger = logging.getLogger("depanalyzer.cli.scan")
 
@@ -121,6 +118,8 @@ def _scan_command_impl(args) -> int:
         # Load graph-build configuration (TOML/JSON or inline string) if provided
         config_arg = getattr(args, "config", None)
         graph_build_config = load_graph_build_config(config_arg)
+        if getattr(args, "fallback_tree", False):
+            graph_build_config.fallback.enabled = True
 
         # Create coordinator with process pool
         logger.info("Creating TransactionCoordinator...")

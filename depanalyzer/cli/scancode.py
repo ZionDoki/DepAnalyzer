@@ -29,14 +29,12 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
+from depanalyzer.graph import GlobalDAG, GraphRegistry, canonicalize_normalized_id
 from depanalyzer.graph.id_utils import (
     apply_namespace_prefix,
     derive_dependency_namespace,
     ensure_namespace_unique,
 )
-from depanalyzer.graph.global_dag import GlobalDAG
-from depanalyzer.graph.registry import GraphRegistry
-from depanalyzer.graph.schema_utils import canonicalize_normalized_id
 from depanalyzer.utils.path_utils import normalize_node_id
 
 logger = logging.getLogger("depanalyzer.cli.scancode")

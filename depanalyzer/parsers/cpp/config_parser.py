@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, List
 
 from depanalyzer.parsers.base import BaseParser
-from depanalyzer.graph.manager import GraphManager
+from depanalyzer.graph import GraphManager
 from depanalyzer.runtime.eventbus import Event, EventType
 
 from depanalyzer.parsers.cpp.cmake.grammar import CMAKE_PARSER, ParseTokenWrapper

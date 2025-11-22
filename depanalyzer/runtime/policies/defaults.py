@@ -1,30 +1,28 @@
-"""Default strategy implementations for runtime extension points.
+"""Default policy implementations for runtime extension points.
 
 This module adapts existing Transaction and GraphManager behavior to
-the public strategy interfaces so that callers can override them
+the public policy interfaces so that callers can override them
 without changing CLI semantics.
 """
 
-# Default strategies keep running even when hooks raise unexpected exceptions.
+# Default policies keep running even when hooks raise unexpected exceptions.
 
 
 from __future__ import annotations
 
 from typing import Any, Dict
 
-from depanalyzer.graph.linking import LinkClass
-from depanalyzer.graph.manager import EdgeKind, NodeType
-from depanalyzer.graph.schema import EdgeSpec, NodeSpec
-from depanalyzer.runtime.strategies import (
-    AssetProjectionStrategy,
+from depanalyzer.graph import EdgeKind, EdgeSpec, LinkClass, NodeSpec, NodeType
+from depanalyzer.runtime.policies.protocols import (
+    AssetProjectionPolicy,
     CodeDependencyContext,
     CodeDependencyMapper,
     ProjectionContext,
 )
 
 
-class DefaultAssetProjectionStrategy(AssetProjectionStrategy):
-    """Default asset→artifact projection strategy.
+class DefaultAssetProjectionPolicy(AssetProjectionPolicy):
+    """Default asset→artifact projection policy.
 
     This implementation simply forwards to the existing
     ``GraphManager.derive_asset_artifact_projection`` method using the
@@ -105,7 +103,10 @@ class DefaultCodeDependencyMapper(CodeDependencyMapper):
             graph.add_edge_spec(edge_spec)
 
 
+DefaultAssetProjectionStrategy = DefaultAssetProjectionPolicy
+
 __all__ = [
+    "DefaultAssetProjectionPolicy",
     "DefaultAssetProjectionStrategy",
     "DefaultCodeDependencyMapper",
 ]

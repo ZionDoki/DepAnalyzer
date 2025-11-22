@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from depanalyzer.graph import GraphManager
 from depanalyzer.graph.contract_registry import ContractRegistry
-from depanalyzer.graph.manager import GraphManager
 from depanalyzer.runtime.eventbus import EventBus
 from depanalyzer.runtime.graph_config import GraphBuildConfig
 from depanalyzer.runtime.lifecycle import LifecyclePhase

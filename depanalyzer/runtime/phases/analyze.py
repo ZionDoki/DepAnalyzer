@@ -1,7 +1,7 @@
 """
 ANALYZE phase implementation.
 
-This phase runs analysis strategies on the completed graph,
+This phase runs analysis policies on the completed graph,
 including asset projection, deadcode detection, and linkage analysis.
 """
 
@@ -14,7 +14,7 @@ from depanalyzer.graph.contract_registry import ContractRegistry
 from depanalyzer.runtime.lifecycle import LifecyclePhase
 from depanalyzer.runtime.phases.base import BasePhase
 from depanalyzer.runtime.context import AnalyzeContext, TransactionContext
-from depanalyzer.runtime.strategies import ProjectionContext
+from depanalyzer.runtime.policies import ProjectionContext
 
 logger = logging.getLogger("depanalyzer.transaction.phase.analyze")
 
@@ -24,14 +24,14 @@ _SAFE_EXCEPTIONS = (RuntimeError, ValueError, TypeError, AttributeError, KeyErro
 
 class AnalyzePhase(BasePhase):
     """
-    ANALYZE phase: Run analysis strategies on the graph.
+    ANALYZE phase: Run analysis policies on the graph.
 
     This phase:
     1. Derives asset-to-artifact projection
     2. Runs deadcode analysis
     3. Runs linkage type analysis
     4. Runs uncertainty analysis
-    5. Executes additional analyze strategies
+    5. Executes additional analyze policies
 
     Critical: True - Analysis is a core part of the transaction.
     """
@@ -56,8 +56,8 @@ class AnalyzePhase(BasePhase):
         # 4. Uncertainty analysis
         self._run_uncertainty_analysis()
 
-        # 5. Additional analyze strategies
-        self._run_analyze_strategies()
+        # 5. Additional analyze policies
+        self._run_analyze_policies()
 
     def _run_asset_projection(self) -> None:
         """Derive asset-to-artifact projection."""
@@ -68,7 +68,8 @@ class AnalyzePhase(BasePhase):
                 graph=self.state.graph_manager,
                 projection_config=self.state.graph_build_config.projection,
             )
-            self.state.asset_projection_strategy.project(projection_ctx)
+            if self.state.asset_projection_policy:
+                self.state.asset_projection_policy.project(projection_ctx)
             logger.info("Asset-to-artifact projection completed")
         except _SAFE_EXCEPTIONS as e:
             logger.error("Failed to derive projection: %s", e, exc_info=True)
@@ -119,9 +120,9 @@ class AnalyzePhase(BasePhase):
         except _SAFE_EXCEPTIONS as e:
             logger.error("Uncertainty analysis failed: %s", e, exc_info=True)
 
-    def _run_analyze_strategies(self) -> None:
-        """Run additional analyze strategies."""
-        if not self.state.analyze_strategies:
+    def _run_analyze_policies(self) -> None:
+        """Run additional analyze policies."""
+        if not self.state.analyze_policies:
             return
 
         analyze_ctx = AnalyzeContext(
@@ -140,11 +141,11 @@ class AnalyzePhase(BasePhase):
             current_phase=LifecyclePhase.ANALYZE,
         )
 
-        for strategy in self.state.analyze_strategies:
+        for strategy in self.state.analyze_policies:
             try:
                 strategy.analyze(analyze_ctx)
             except _SAFE_EXCEPTIONS:
-                logger.exception("AnalyzeStrategy %r failed", strategy)
+                logger.exception("AnalyzePolicy %r failed", strategy)
 
     def _create_transaction_context(self) -> TransactionContext:
         """Create TransactionContext for projection."""

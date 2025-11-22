@@ -140,6 +140,14 @@ def main() -> int:
         help="Skip analysis phase",
     )
     scan_parser.add_argument(
+        "--fallback-tree",
+        action="store_true",
+        help=(
+            "Enable fallback license tree: connect all unparsed files and isolated nodes "
+            "to a synthetic root so license comparison can still proceed"
+        ),
+    )
+    scan_parser.add_argument(
         "-c",
         "--config",
         help=(

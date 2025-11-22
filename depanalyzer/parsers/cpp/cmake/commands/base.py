@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import List
 
-from depanalyzer.graph.manager import GraphManager
+from depanalyzer.graph import GraphManager
 from depanalyzer.parsers.cpp.cmake.variables import CMakeVariableResolver
 from depanalyzer.runtime.eventbus import EventBus
 

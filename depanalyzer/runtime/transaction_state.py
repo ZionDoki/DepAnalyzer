@@ -14,13 +14,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from depanalyzer.runtime.lifecycle import LifecyclePhase
 from depanalyzer.runtime.graph_config import GraphBuildConfig
-from depanalyzer.runtime.strategies import (
-    AnalyzeStrategy,
-    AssetProjectionStrategy,
+from depanalyzer.runtime.lifecycle import LifecyclePhase
+from depanalyzer.runtime.policies import (
+    AnalyzePolicy,
+    AssetProjectionPolicy,
     CodeDependencyMapper,
-    JoinStrategy,
+    JoinPolicy,
     LifecycleHook,
 )
 
@@ -31,7 +31,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from depanalyzer.runtime.protocols import TransactionFactory
     from depanalyzer.runtime.worker import Worker
     from depanalyzer.runtime.workspace import Workspace
-    from depanalyzer.graph.manager import GraphManager
+    from depanalyzer.graph import GraphManager
 
 logger = logging.getLogger("depanalyzer.transaction.state")
 
@@ -69,13 +69,13 @@ class TransactionState:
         # Configuration Objects
         graph_build_config: Configuration for graph building
 
-        # Strategies and Hooks
+        # Policies and Hooks
         lifecycle_hooks: Lifecycle hooks for before/after phase callbacks
         code_dependency_mappers: Ecosystem-specific code dependency mappers
         default_code_dependency_mapper: Default fallback mapper
-        asset_projection_strategy: Strategy for asset projection
-        join_strategies: Strategies for JOIN phase
-        analyze_strategies: Strategies for ANALYZE phase
+        asset_projection_policy: Policy for asset projection
+        join_policies: Policies for JOIN phase
+        analyze_policies: Policies for ANALYZE phase
 
         # Factory Injection (for child transactions)
         child_transaction_factory: Factory for creating child transactions
@@ -115,13 +115,13 @@ class TransactionState:
         default_factory=GraphBuildConfig.default
     )
 
-    # ===== Strategies and Hooks =====
+    # ===== Policies and Hooks =====
     lifecycle_hooks: List[LifecycleHook] = field(default_factory=list)
     code_dependency_mappers: Dict[str, CodeDependencyMapper] = field(default_factory=dict)
     default_code_dependency_mapper: Optional[CodeDependencyMapper] = None
-    asset_projection_strategy: Optional[AssetProjectionStrategy] = None
-    join_strategies: List[JoinStrategy] = field(default_factory=list)
-    analyze_strategies: List[AnalyzeStrategy] = field(default_factory=list)
+    asset_projection_policy: Optional[AssetProjectionPolicy] = None
+    join_policies: List[JoinPolicy] = field(default_factory=list)
+    analyze_policies: List[AnalyzePolicy] = field(default_factory=list)
 
     # ===== Factory Injection =====
     child_transaction_factory: Optional["TransactionFactory"] = None
@@ -139,6 +139,33 @@ class TransactionState:
     current_phase: Optional[LifecyclePhase] = None
     start_time: float = 0.0
     graph_cache_path: Optional[Path] = None  # Set by ExportPhase
+
+    @property
+    def asset_projection_strategy(self) -> Optional[AssetProjectionPolicy]:
+        """Compatibility alias for the configured asset projection policy."""
+        return self.asset_projection_policy
+
+    @asset_projection_strategy.setter
+    def asset_projection_strategy(self, policy: Optional[AssetProjectionPolicy]) -> None:
+        self.asset_projection_policy = policy
+
+    @property
+    def join_strategies(self) -> List[JoinPolicy]:
+        """Compatibility alias for configured join policies."""
+        return self.join_policies
+
+    @join_strategies.setter
+    def join_strategies(self, policies: List[JoinPolicy]) -> None:
+        self.join_policies = policies
+
+    @property
+    def analyze_strategies(self) -> List[AnalyzePolicy]:
+        """Compatibility alias for configured analyze policies."""
+        return self.analyze_policies
+
+    @analyze_strategies.setter
+    def analyze_strategies(self, policies: List[AnalyzePolicy]) -> None:
+        self.analyze_policies = policies
 
     def update_phase_result(
         self,

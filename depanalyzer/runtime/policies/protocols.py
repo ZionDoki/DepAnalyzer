@@ -1,4 +1,4 @@
-"""Public strategy and hook interfaces for runtime lifecycle customization.
+"""Public policy and hook interfaces for runtime lifecycle customization.
 
 This module defines protocol-based extension points that allow library
 consumers to customize how a transaction behaves at key lifecycle
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Protocol, runtime_checkable
 
-from depanalyzer.graph.manager import GraphManager
+from depanalyzer.graph import GraphManager
 from depanalyzer.graph.projection_config import ProjectionConfig
 from depanalyzer.runtime.context import (
     AnalyzeContext,
@@ -88,7 +88,7 @@ class CodeDependencyMapper(Protocol):
 
 @dataclass
 class ProjectionContext:
-    """Context for asset→artifact projection strategies.
+    """Context for asset→artifact projection policies.
 
     Args:
         transaction_ctx: Transaction-scoped context.
@@ -102,8 +102,8 @@ class ProjectionContext:
 
 
 @runtime_checkable
-class AssetProjectionStrategy(Protocol):
-    """Strategy for deriving asset→artifact projection edges."""
+class AssetProjectionPolicy(Protocol):
+    """Policy for deriving asset→artifact projection edges."""
 
     def project(self, ctx: ProjectionContext) -> None:
         """Execute projection on the given graph.
@@ -114,8 +114,8 @@ class AssetProjectionStrategy(Protocol):
 
 
 @runtime_checkable
-class JoinStrategy(Protocol):
-    """Strategy executed during the JOIN phase."""
+class JoinPolicy(Protocol):
+    """Policy executed during the JOIN phase."""
 
     def join(self, ctx: JoinContext) -> None:
         """Execute cross-ecosystem and cross-language joining.
@@ -126,8 +126,8 @@ class JoinStrategy(Protocol):
 
 
 @runtime_checkable
-class AnalyzeStrategy(Protocol):
-    """Strategy executed during the ANALYZE phase."""
+class AnalyzePolicy(Protocol):
+    """Policy executed during the ANALYZE phase."""
 
     def analyze(self, ctx: AnalyzeContext) -> None:
         """Run additional analysis passes on the transaction graph.
@@ -138,8 +138,8 @@ class AnalyzeStrategy(Protocol):
 
 
 @runtime_checkable
-class ExportStrategy(Protocol):
-    """Optional strategy executed during the EXPORT phase.
+class ExportPolicy(Protocol):
+    """Optional policy executed during the EXPORT phase.
 
     This is defined for future extension and is not currently wired
     into the Transaction lifecycle.
@@ -153,11 +153,20 @@ class ExportStrategy(Protocol):
         """
 
 
+AssetProjectionStrategy = AssetProjectionPolicy
+JoinStrategy = JoinPolicy
+AnalyzeStrategy = AnalyzePolicy
+ExportStrategy = ExportPolicy
+
 __all__ = [
     "LifecycleHook",
     "CodeDependencyContext",
     "CodeDependencyMapper",
     "ProjectionContext",
+    "AssetProjectionPolicy",
+    "JoinPolicy",
+    "AnalyzePolicy",
+    "ExportPolicy",
     "AssetProjectionStrategy",
     "JoinStrategy",
     "AnalyzeStrategy",

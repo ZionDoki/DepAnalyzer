@@ -13,9 +13,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict
 
-from depanalyzer.graph.linking import LinkClass
-from depanalyzer.graph.manager import EdgeKind, GraphManager, NodeType
-from depanalyzer.graph.schema import EdgeSpec, NodeSpec
+from depanalyzer.graph import LinkClass
+from depanalyzer.graph import EdgeKind, GraphManager, NodeType
+from depanalyzer.graph import EdgeSpec, NodeSpec
 from depanalyzer.parsers.base import BaseCodeDependencyMapper
 from depanalyzer.runtime.context import TransactionContext
 

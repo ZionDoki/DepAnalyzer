@@ -11,8 +11,7 @@ from typing import Any, Dict, List
 
 from networkx.exception import NetworkXNoCycle
 
-from depanalyzer.graph.global_dag import GlobalDAG
-from depanalyzer.graph.schema import NodeType
+from depanalyzer.graph import GlobalDAG, NodeType
 from depanalyzer.parsers.base import DependencySpec
 from depanalyzer.runtime.coordinator import TransactionCoordinator
 from depanalyzer.runtime.dependency_resolver import resolve_dependencies

@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import logging
 
-from depanalyzer.graph.contract import BuildInterfaceContract
-from depanalyzer.graph.contract_registry import ContractRegistry
-from depanalyzer.graph.linking import LinkClass
-from depanalyzer.graph.manager import EdgeKind, GraphManager, NodeType
 from depanalyzer.runtime.graph_config import ContractMatchConfig
+
+from .contract import BuildInterfaceContract
+from .contract_registry import ContractRegistry
+from .core.manager import EdgeKind, GraphManager, NodeType
+from .models.linking import LinkClass
 
 logger = logging.getLogger("depanalyzer.graph.linker_contract")
 

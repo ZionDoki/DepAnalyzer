@@ -3,7 +3,7 @@
 import logging
 from typing import List, Set
 
-from depanalyzer.graph.manager import GraphManager
+from depanalyzer.graph import GraphManager
 
 logger = logging.getLogger("depanalyzer.analysis.deadcode")
 

@@ -13,7 +13,7 @@ from networkx import MultiDiGraph
 from networkx.readwrite import node_link_data
 
 from depanalyzer.graph.io import break_cycles
-from depanalyzer.graph.schema_utils import (
+from depanalyzer.graph import (
     canonicalize_edge,
     canonicalize_node,
     canonicalize_normalized_id,
@@ -131,11 +131,19 @@ class ExportPhase(BasePhase):
                 canonical_attrs = canonicalize_edge(attrs or {})
                 export_graph.add_edge(source_id, target_id, **canonical_attrs)
 
-            # Remove cycles to keep downstream DAG consumers fast/safe.
-            acyclic_graph, removed_edges = break_cycles(export_graph)
+            # Graph metadata may influence export behavior (e.g., skip cycle condensation).
+            metadata = self.state.graph_manager.metadata or {}
+
+            # Remove cycles to keep downstream DAG consumers fast/safe unless
+            # explicitly disabled (e.g., fallback flat tree).
+            skip_cycles = metadata.get("skip_cycle_condensation", False)
+            if skip_cycles:
+                acyclic_graph = export_graph
+                removed_edges = 0
+            else:
+                acyclic_graph, removed_edges = break_cycles(export_graph)
 
             # Add metadata (make JSON-serializable)
-            metadata = self.state.graph_manager.metadata or {}
             if removed_edges:
                 logger.info(
                     "Removed %d cycle edge(s) to produce DAG-safe export",

@@ -8,7 +8,7 @@ from typing import Dict, Iterable, List, Set, Tuple
 
 import networkx as nx
 
-from depanalyzer.graph.schema import EdgeKind, NodeType
+from .models.schema import EdgeKind, NodeType
 
 logger = logging.getLogger("depanalyzer.graph.io")
 

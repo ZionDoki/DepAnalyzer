@@ -1,7 +1,7 @@
 """
 JOIN phase implementation.
 
-This phase runs ecosystem-specific linkers and join strategies
+This phase runs ecosystem-specific linkers and join policies
 to create cross-file and cross-module edges in the graph.
 """
 
@@ -27,7 +27,7 @@ class JoinPhase(BasePhase):
     This phase:
     1. Runs per-ecosystem linkers to create intra-ecosystem edges
     2. Runs GlobalContractLinker for contract-based linking
-    3. Executes additional join strategies
+    3. Executes additional join policies
 
     Critical: True - Graph linking is important for complete analysis.
     """
@@ -46,8 +46,8 @@ class JoinPhase(BasePhase):
         # Run global contract linker
         self._run_contract_linker()
 
-        # Run additional join strategies
-        self._run_join_strategies()
+        # Run additional join policies
+        self._run_join_policies()
 
     def _run_ecosystem_linkers(self) -> None:
         """Run ecosystem-specific linkers."""
@@ -80,9 +80,9 @@ class JoinPhase(BasePhase):
         except _SAFE_EXCEPTIONS as e:
             logger.error("GlobalContractLinker failed: %s", e, exc_info=True)
 
-    def _run_join_strategies(self) -> None:
-        """Run additional join strategies."""
-        if not self.state.join_strategies:
+    def _run_join_policies(self) -> None:
+        """Run additional join policies."""
+        if not self.state.join_policies:
             return
 
         # Create JoinContext
@@ -102,8 +102,8 @@ class JoinPhase(BasePhase):
             current_phase=LifecyclePhase.JOIN,
         )
 
-        for strategy in self.state.join_strategies:
+        for strategy in self.state.join_policies:
             try:
                 strategy.join(join_ctx)
             except _SAFE_EXCEPTIONS:
-                logger.exception("JoinStrategy %r failed", strategy)
+                logger.exception("JoinPolicy %r failed", strategy)

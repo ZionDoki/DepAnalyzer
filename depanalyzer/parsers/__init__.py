@@ -17,6 +17,21 @@ logger = logging.getLogger("depanalyzer.parsers")
 _registered_ecosystems = []
 _failed_ecosystems = []
 
+# Import Maven ecosystem components
+try:
+    from depanalyzer.parsers.maven.detector import MavenDetector
+    from depanalyzer.parsers.maven.config_parser import MavenParser
+    from depanalyzer.parsers.maven.dep_fetcher import MavenDepFetcher
+    from depanalyzer.parsers.maven.code_parser import MavenCodeParser
+    from depanalyzer.parsers.maven.linker import MavenLinker
+
+    _MAVEN_AVAILABLE = True
+    logger.debug("✓ Maven ecosystem components imported successfully")
+except ImportError as e:
+    logger.error("❌ Maven ecosystem imports failed: %s", e, exc_info=True)
+    _MAVEN_AVAILABLE = False
+    _failed_ecosystems.append(("maven", str(e)))
+
 # Import CPP ecosystem components
 try:
     from depanalyzer.parsers.cpp.cmake.detector import CMakeDetector
@@ -103,6 +118,28 @@ if _HVIGOR_AVAILABLE:
         logger.error("Failed to register Hvigor ecosystem: %s", e, exc_info=True)
         _failed_ecosystems.append(("hvigor", f"Registration failed: {e}"))
 
+# Register Maven ecosystem
+if _MAVEN_AVAILABLE:
+    try:
+        from depanalyzer.parsers.maven.config_model import MavenEcosystemConfig
+
+        register_ecosystem(
+            ecosystem="maven",
+            detector_class=MavenDetector,
+            parser_class=MavenParser,
+            fetcher_class=MavenDepFetcher,
+            code_parser_class=MavenCodeParser,
+            linker_class=MavenLinker,
+        )
+        EcosystemConfigRegistry.register_config_factory(
+            "maven", MavenEcosystemConfig.from_dict
+        )
+        logger.info("✓ Successfully registered Maven ecosystem")
+        _registered_ecosystems.append("maven")
+    except Exception as e:
+        logger.error("Failed to register Maven ecosystem: %s", e, exc_info=True)
+        _failed_ecosystems.append(("maven", f"Registration failed: {e}"))
+
 # Summary logging
 if _registered_ecosystems:
     logger.info(
@@ -166,5 +203,16 @@ if _HVIGOR_AVAILABLE:
             "HvigorDepFetcher",
             "HvigorCodeParser",
             "HvigorLinker",
+        ]
+    )
+
+if _MAVEN_AVAILABLE:
+    __all__.extend(
+        [
+            "MavenDetector",
+            "MavenParser",
+            "MavenDepFetcher",
+            "MavenCodeParser",
+            "MavenLinker",
         ]
     )

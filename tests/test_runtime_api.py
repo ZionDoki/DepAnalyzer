@@ -28,22 +28,22 @@ class DummyMapper:
         return None
 
 
-class DummyProjection:
-    """Stub asset projection strategy."""
+class DummyProjectionPolicy:
+    """Stub asset projection policy."""
 
     def project(self, ctx) -> None:  # noqa: D401 - test stub
         return None
 
 
-class DummyJoinStrategy:
-    """Stub join strategy."""
+class DummyJoinPolicy:
+    """Stub join policy."""
 
     def join(self, ctx) -> None:  # noqa: D401 - test stub
         return None
 
 
-class DummyAnalyzeStrategy:
-    """Stub analyze strategy."""
+class DummyAnalyzePolicy:
+    """Stub analyze policy."""
 
     def analyze(self, ctx) -> None:  # noqa: D401 - test stub
         return None
@@ -74,18 +74,18 @@ def test_create_transaction_accepts_custom_components(tmp_path: Path) -> None:
     custom_config = GraphBuildConfig.default()
     hook = DummyHook()
     mapper = DummyMapper()
-    projection = DummyProjection()
-    join_strategy = DummyJoinStrategy()
-    analyze_strategy = DummyAnalyzeStrategy()
+    projection = DummyProjectionPolicy()
+    join_policy = DummyJoinPolicy()
+    analyze_policy = DummyAnalyzePolicy()
 
     tx = create_transaction(
         str(src_dir),
         graph_build_config=custom_config,
         lifecycle_hooks=[hook],
         code_dependency_mappers={"custom": mapper},
-        asset_projection_strategy=projection,
-        join_strategies=[join_strategy],
-        analyze_strategies=[analyze_strategy],
+        asset_projection_policy=projection,
+        join_policies=[join_policy],
+        analyze_policies=[analyze_policy],
         graph_id="graph-x",
         max_workers=2,
     )
@@ -94,8 +94,11 @@ def test_create_transaction_accepts_custom_components(tmp_path: Path) -> None:
     assert state.graph_build_config is custom_config
     assert state.lifecycle_hooks == [hook]
     assert state.code_dependency_mappers["custom"] is mapper
+    assert state.asset_projection_policy is projection
     assert state.asset_projection_strategy is projection
-    assert state.join_strategies == [join_strategy]
-    assert state.analyze_strategies == [analyze_strategy]
+    assert state.join_policies == [join_policy]
+    assert state.join_strategies == [join_policy]
+    assert state.analyze_policies == [analyze_policy]
+    assert state.analyze_strategies == [analyze_policy]
     assert state.max_workers == 2
     assert tx.graph_id == "graph-x"

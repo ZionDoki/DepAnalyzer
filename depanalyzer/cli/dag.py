@@ -11,8 +11,7 @@ import logging
 from pathlib import Path
 from typing import List
 
-from depanalyzer.graph.global_dag import GlobalDAG
-from depanalyzer.graph.registry import GraphRegistry
+from depanalyzer.graph import GlobalDAG, GraphRegistry
 
 logger = logging.getLogger("depanalyzer.cli.dag")
 

@@ -8,8 +8,9 @@ from typing import Dict, List, Optional
 from collections import defaultdict
 import threading
 
-from depanalyzer.graph.contract import BuildInterfaceContract, ContractType
 from depanalyzer.runtime.graph_config import ContractMatchConfig
+
+from .contract import BuildInterfaceContract, ContractType
 
 
 class ContractRegistry:

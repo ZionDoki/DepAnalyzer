@@ -24,11 +24,11 @@ from typing import List, Optional, Set, Tuple
 import networkx as nx
 from networkx.exception import NetworkXError
 
-from depanalyzer.graph.io import break_cycles
-from depanalyzer.graph.condensation import CondensationResult, build_condensation_dag
-from depanalyzer.graph.schema import NodeType
+from ..io import break_cycles
+from ..models.schema import NodeType
+from .condensation import CondensationResult, build_condensation_dag
 
-logger = logging.getLogger("depanalyzer.graph.global_dag")
+logger = logging.getLogger("depanalyzer.graph.ops.global_dag")
 
 IO_ERRORS = (OSError, TimeoutError)
 STATE_ERRORS = IO_ERRORS + (json.JSONDecodeError, ValueError)

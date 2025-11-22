@@ -17,8 +17,8 @@ from typing import Any, Dict
 
 from depanalyzer.graph.contract import BuildInterfaceContract, ContractType
 from depanalyzer.graph.contract_registry import ContractRegistry
-from depanalyzer.graph.manager import EdgeKind, GraphManager, NodeType
-from depanalyzer.graph.schema import EdgeSpec, NodeSpec
+from depanalyzer.graph import EdgeKind, GraphManager, NodeType
+from depanalyzer.graph import EdgeSpec, NodeSpec
 from depanalyzer.runtime.eventbus import Event, EventBus, EventType
 
 log = logging.getLogger("depanalyzer.parsers.cpp.cmake_graph_builder")

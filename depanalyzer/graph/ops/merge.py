@@ -20,18 +20,18 @@ from typing import Dict, List, Set, Tuple
 import networkx as nx
 from networkx.readwrite import node_link_data, node_link_graph
 
-from depanalyzer.graph.io import break_cycles
-from depanalyzer.graph.global_dag import GlobalDAG
-from depanalyzer.graph.id_utils import (
+from ..id_utils import (
     apply_namespace_prefix,
     derive_dependency_namespace,
     ensure_namespace_unique,
 )
-from depanalyzer.graph.linking import LinkClass
-from depanalyzer.graph.manager import EdgeKind
-from depanalyzer.graph.registry import GraphRegistry
+from ..io import break_cycles
+from ..models.linking import LinkClass
+from ..models.schema import EdgeKind
+from ..registry import GraphRegistry
+from .global_dag import GlobalDAG
 
-logger = logging.getLogger("depanalyzer.graph.merge")
+logger = logging.getLogger("depanalyzer.graph.ops.merge")
 
 
 def _load_graph_from_cache(cache_path: Path) -> Tuple[nx.MultiDiGraph, Dict]:
