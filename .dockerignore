@@ -1,0 +1,86 @@
+# Python 虚拟环境
+.venv
+.venv-*
+venv
+env
+ENV
+
+# Python 缓存
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 测试和覆盖率
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Depanalyzer 缓存和输出
+.dep_cache/
+license_pipeline_output/
+output/
+*.json
+!pyproject.toml
+!package.json
+!package-lock.json
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 日志
+*.log
+logs/
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# 文档和说明（可选，如果不需要在镜像中）
+# README.md
+# docs/
+
+# 临时文件
+*.tmp
+*.bak
+*.orig
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Poetry lock (已在 COPY 中单独处理)
+# poetry.lock 保留，因为 Dockerfile 中需要

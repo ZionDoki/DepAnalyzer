@@ -1,207 +1,177 @@
-# Depanalyzer - 依赖关系分析工具
+# Depanalyzer
 
-## ⚡ 快速开始
+Depanalyzer is a powerful dependency analysis tool designed to parse, link, and visualize dependencies across multiple languages and build systems. It supports static analysis of mixed-language projects, third-party dependency resolution, and automated license compliance checking.
 
-### 安装依赖
+## 🚀 Features
 
-项目支持两种方式安装/运行：
+*   **Multi-Language Support:** C/C++ (CMake), TypeScript/JavaScript (Hvigor), Java (Maven).
+*   **Deep Dependency Resolution:** Recursively fetches and analyzes third-party dependencies.
+*   **Graph-Based Architecture:** Represents projects as a directed acyclic graph (DAG) of file nodes and edge relationships.
+*   **License Compliance:** Integrated support for [ScanCode Toolkit](https://github.com/aboutcode-org/scancode-toolkit) and **Liscopelens** to detect licenses and verify compatibility.
+*   **High Performance:** Multiprocess architecture for parallel parsing and analysis.
+*   **Automated Pipeline:** One-click script to run scanning, license detection, and compatibility checks.
 
-1) 使用 Poetry（推荐）
-```bash
-curl -sSL https://install.python-poetry.org | python3 -  # 若尚未安装
-poetry install
-poetry run depanalyzer scan /path/to/project -o output.json
-```
+## 📦 Installation
 
-2) 使用已有虚拟环境 / 全局 Python（需提前安装依赖）
-```bash
-pip install .
-# 或 pip install -e .
-depanalyzer scan /path/to/project -o output.json
-```
+### Prerequisites
+*   Python 3.12+
+*   Git (for fetching dependencies)
 
-**许可证检测额外依赖**：如需启用 `--enable-license-check`，请确保系统已安装 `scancode` 可执行文件。
-
-**版本要求**：Python >=3.12, <=3.14
-
-### 基本用法
-
-```bash
-# 扫描项目并生成依赖图
-poetry run depanalyzer scan /path/to/project -o graph.json
-
-# 启用详细日志
-poetry run depanalyzer -v scan /path/to/project -o graph.json
-
-# 查看帮助
-poetry run depanalyzer --help
-
-# 仅生成回退扁平树（用于未知生态/许可证对比）
-poetry run depanalyzer scan /path/to/project \
-  --fallback-tree --no-analyze -o graph.json
-```
-
-## 📁 项目架构
-
-项目采用模块化分层架构，按功能组织代码：
-
-```
-depanalyzer/
-├── main.py                 # 主入口点
-├── cli/                    # 命令行接口
-│   └── scan.py            # 扫描命令实现
-├── runtime/                # 运行时核心
-│   ├── orchestrator.py    # 生命周期编排器
-│   ├── phases/            # 生命周期阶段实现 (Acquire, Detect, Parse, etc.)
-│   ├── dependency_resolver.py # 依赖解析
-│   └── worker.py          # 并行工作进程管理
-├── graph/                  # 图数据核心
-│   ├── core/              # 图管理器与后端封装
-│   └── models/            # 节点与边的数据模型 (NodeSpec, EdgeSpec)
-├── parsers/                # 多语言解析器与依赖获取
-│   ├── base.py            # 解析器与 Fetcher 基类
-│   └── registry.py        # 插件注册表
-├── analysis/               # 静态分析算法
-│   └── deadcode.py        # 死代码检测等
-└── utils/                  # 通用工具
-```
-
-## 🏗️ 架构层次说明
-
-### 1. **命令行接口** (`cli/`)
-- **职责**: 处理用户输入，解析参数，分发命令到对应的处理逻辑。
-- **主要组件**: `scan.py` (扫描), `export.py` (导出), `dag.py` (DAG工具)。
-
-### 2. **运行时核心** (`runtime/`)
-- **职责**: 管理分析生命周期，协调各个阶段（Phase）的执行，管理并发任务和依赖解析。
-- **主要组件**:
-    - `orchestrator.py`: 驱动整个分析流程（Acquire -> Export）。
-    - `phases/`: 各个生命周期阶段的具体实现。
-    - `dependency_resolver.py`: 第三方依赖的下载与缓存管理。
-
-### 3. **图数据核心** (`graph/`)
-- **职责**: 提供统一的图数据结构，管理节点和边的增删查改，处理图的持久化和投影。
-- **主要组件**:
-    - `core/manager.py`: 单次事务的图管理器。
-    - `models/schema.py`: 统一的节点（NodeSpec）和边（EdgeSpec）定义。
-    - `ops/`: 图操作算法（如合并、投影、SCC压缩）。
-
-### 4. **解析器层** (`parsers/`)
-- **职责**: 实现特定生态（如 C/C++, Hvigor, Maven）的检测、解析和依赖获取逻辑。
-- **主要组件**:
-    - `registry.py`: 解析器与 Fetcher 的自动发现与注册。
-    - `base.py`: 定义 Detector, Parser, DepFetcher 等标准接口。
-
-### 5. **分析层** (`analysis/`)
-- **职责**: 基于构建好的依赖图进行高级分析。
-- **主要组件**: `deadcode.py` (死代码检测), `uncertainty.py` (不确定性分析)。
-
-## 🚀 使用方法
-
-```bash
-# 运行依赖分析
-python main.py --repo /path/to/repo --out output.json --workers 8 --max-depth 3 --max-deps 200
-```
-
-### 参数说明:
-- `--repo`: 要分析的仓库根目录
-- `--out`: 输出图文件(.json 或 .gml格式)
-- `--workers`: 最大并行工作线程数(默认:8)
-- `--max-depth`: 第三方依赖递归深度(默认:3)
-- `--max-deps`: 全局最大第三方依赖数量上限（可选）
-
-## 📊 核心特性
-
-- **多语言支持**: 插件式解析器架构，易于扩展新语言
-- **并发处理**: 多线程任务调度，充分利用系统资源
-- **依赖管理**: 完整的第三方依赖解析链，支持缓存和递归
-- **图形化输出**: 统一的图数据格式，支持JSON和GML导出
-- **错误处理**: 全面的异常处理和降级策略
-
-## 🔧 扩展新语言解析器
-
-1. 在 `parsers/` 下创建新的语言文件夹
-2. 实现 `code_parser.py` (必需) 和 `config_parser.py` (可选)
-3. 继承 `BaseCodeParser` 和 `BaseConfigParser` 类
-4. 重写解析方法，解析器会被自动发现和注册
-
-## 📈 架构优势
-
-- **清晰的职责分离**: 每个层次都有明确的职责边界
-- **高度模块化**: 组件间耦合度低，易于维护和扩展
-- **可扩展性**: 插件式架构支持快速添加新功能
-- **并发安全**: 线程安全的设计支持高效并行处理
-
-
-
-
-
-
-## 📦 安装与运行
-
-### 1) 使用 pip 本地安装
+### 1. Using Pip (Recommended)
 
 ```bash
 pip install .
-# 或开发模式安装
-pip install -e .
 ```
 
-安装完成后将自动生成 CLI：
+### 2. Setting up License Checks (Optional but Recommended)
+
+To use the license scanning and compatibility features, you need two additional components:
+
+1.  **ScanCode Toolkit:**
+    You can install it system-wide, or let Depanalyzer manage a local copy for you:
+    ```bash
+    # Download and configure a local copy of ScanCode (recommended)
+    depanalyzer --install
+    ```
+
+2.  **Liscopelens (for Compatibility Checks):**
+    Required if you want to run the full compliance pipeline.
+    ```bash
+    pip install liscopelens
+    ```
+
+### 3. Using Docker (All-in-One)
+
+The Docker image comes pre-configured with Depanalyzer, ScanCode, and Liscopelens. This is the easiest way to run the full compliance pipeline.
 
 ```bash
-# 依赖关系分析（基础）
-depanalyzer --repo /path/to/repo --out output.json --workers 8 --max-depth 3 --max-deps 200
-
-# 启用许可证检测与兼容性检查
-depanalyzer \
-  --repo /path/to/repo \
-  --out output.json \
-  --enable-license-check \
-  --scancode-cmd scancode \
-  --license-map-out license_map.json \
-  --license-out compatible.json
+# Build the image
+docker build -t depanalyzer .
 ```
 
-环境与依赖说明：
-- 需要 Python >=3.12, <=3.14
-- 若启用 `--enable-license-check`，需系统可执行 `scancode`（建议安装 ScanCode 工具），并且会使用内置的 `liscopelens` 模块进行兼容性分析；此逻辑也会在第三方仓获取后对其源码进行扫描，并将结果缓存于对应缓存目录中。
+## 🛠️ Usage
 
-### 2) 作为模块调用
+### 1. Automated License Compliance Pipeline
 
-```python
-from depanalyzer.runtime.api import create_transaction
+The project includes a robust script (`scripts/run_license_compatibility.py`) that automates the entire workflow: **Scan -> Detect Licenses -> Check Compatibility**.
 
-tx = create_transaction(source="/path/to/repo", max_workers=8, max_dependency_depth=3)
-result = tx.execute()
-if result.success:
-    # Graph is managed internally, check TransactionResult for details
-    print(f"Analysis completed: {result.node_count} nodes")
-```
+**Running via Docker (Recommended):**
 
-### 3) 常见问题
-- 若 `depanalyzer` 命令不可用，请确认安装过程无报错，并确保 Python 的脚本目录在 `PATH` 中
-- 许可证相关命令需要外部工具 `scancode` 可用
-- 可通过 `depanalyzer --install` 下载并解压官方 `scancode-toolkit` 到固定路径（`~/.depanalyzer/scancode-toolkit/scancode`，Windows 下为 `scancode.bat`），无需写入系统 PATH；默认版本为 32.4.1，若需自定义版本可使用 `depanalyzer --install 32.4.1`
-- 若需自定义下载链接（例如不同平台或版本），可设置环境变量 `SCANCODE_DOWNLOAD_URL`
-- 安装脚本会自动匹配本机 Python 版本（支持 3.9/3.10/3.11/3.12/3.13，无法识别时默认下载 3.9 包）
-
-### ScanCode 子命令用法
-
-直接扫描目录（无需依赖 `scan` 输出，格式与原有模式一致）：
+The Docker image defaults to running this pipeline.
 
 ```bash
+# Analyze a single project
+docker run --rm \
+  -v /path/to/local/repo:/workspace/project \
+  -v $(pwd)/output:/workspace/output \
+  depanalyzer --project-path /workspace/project
+
+# Analyze with third-party dependencies (recursive)
+docker run --rm \
+  -v /path/to/local/repo:/workspace/project \
+  -v $(pwd)/output:/workspace/output \
+  depanalyzer --project-path /workspace/project --third-party
+```
+
+**Running Locally:**
+
+Ensure you have `liscopelens` installed and `scancode` available (or installed via `depanalyzer --install`).
+
+```bash
+# Run the pipeline script
+python scripts/run_license_compatibility.py \
+  --project-path /path/to/repo \
+  --output-dir ./results \
+  --third-party
+```
+
+**Batch Processing:**
+
+You can analyze multiple projects in one go. This is supported in both Docker and local modes.
+
+```bash
+# Create a list of projects
+echo "/workspace/project1" > projects_list.txt
+echo "/workspace/project2" >> projects_list.txt
+
+# Run batch analysis in Docker
+docker run --rm \
+  -v /path/to/p1:/workspace/project1 \
+  -v /path/to/p2:/workspace/project2 \
+  -v $(pwd)/projects_list.txt:/workspace/projects.txt \
+  -v $(pwd)/output:/workspace/output \
+  depanalyzer --projects-file /workspace/projects.txt
+```
+
+### 2. Manual Dependency Scanning (`scan`)
+
+If you only need the dependency graph without license checks:
+
+```bash
+# Basic scan
+depanalyzer scan /path/to/repo -o graph.json
+
+# Scan with third-party dependency resolution (depth 3)
+depanalyzer scan /path/to/repo -o graph.json --third-party --max-depth 3
+```
+
+### 3. Manual License Scanning (`scancode`)
+
+Generate a license map (`{node_id: license_expression}`) manually. This requires `scancode` to be installed.
+
+```bash
+# 1. Scan directory directly (fastest, no dependency graph needed)
 depanalyzer scancode --path /path/to/repo -o license_map.json
+
+# 2. Scan using a cached graph (enables analysis of third-party dependencies)
+# First, run a scan:
+depanalyzer scan /path/to/repo -o graph.json --third-party
+# Then, run scancode using the generated cache:
+depanalyzer scancode --source /path/to/repo --third-party -o license_map.json
 ```
 
-- 只需提供待检测目录，输出仍为 `{graph_node_id: spdx_license_expression}` 的 JSON 映射
+### 4. Other Commands
 
-复用 `scan` 产出的图缓存并保持命名空间对齐：
+*   **Export:** Convert graphs to other formats (GML, DOT).
+    ```bash
+    depanalyzer export <graph_id> -o graph.gml --format gml
+    ```
+*   **DAG Validation:** Check for circular dependencies in the global package graph.
+    ```bash
+    depanalyzer dag --fail-on-cycle
+    ```
+
+## 📁 Output Structure
+
+### Pipeline Output
+When running the pipeline (Docker or script), the output directory will contain:
+
+```text
+output/
+├── 01_project_name/
+│   ├── graph.json                  # Dependency graph
+│   ├── license_map.json            # Raw license findings
+│   ├── compatibility_results.json  # Compliance check results
+│   └── compatibility_graph.json    # Visualizable compliance graph
+├── batch_summary.json              # Summary of all processed projects
+```
+
+### Graph JSON Format
+The `graph.json` contains:
+*   **Nodes**: Files, packages, or targets with `id`, `type`, and `data`.
+*   **Edges**: Relationships like `import`, `link`, `includes`.
+*   **Metadata**: Scan configuration and source details.
+
+## 🔧 Configuration
+
+You can provide a custom configuration file for the scan process using the `--config` flag.
 
 ```bash
-depanalyzer scancode --cache-dir .dep_cache --source /path/to/repo --third-party -o license_map.json
+depanalyzer scan . -o graph.json --config config.toml
 ```
 
-- `--cache-dir` 指向 `scan` 时使用的缓存目录（可直接给到其中的 `graphs/`），`--source` 用于解析 `<cache-dir>/<source_stem>/graphs`
-- `--third-party` 会扫描缓存的三方依赖，`--force` 可强制重新调用 ScanCode 覆盖已存在的 `<graph_id>.licenses.json`
-- 当使用 `--path` 直扫目录时，`--third-party` 参数会被忽略（因为没有依赖图可用）
+Example `config.toml`:
+```toml
+[fallback]
+enabled = true  # Connect isolated nodes to a root for license coverage
+```
