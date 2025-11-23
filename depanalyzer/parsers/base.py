@@ -359,6 +359,19 @@ class DependencySpec:
             f"version={self.version}, ecosystem={self.ecosystem})"
         )
 
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, DependencySpec):
+            return NotImplemented
+        return (
+            self.name == other.name
+            and self.version == other.version
+            and self.ecosystem == other.ecosystem
+            and self.source_url == other.source_url
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.name, self.version, self.ecosystem, self.source_url))
+
 
 class BaseDepFetcher(ABC):
     """Base class for dependency fetchers.

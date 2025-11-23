@@ -49,6 +49,11 @@ class ResolveDepsPhase(BasePhase):
 
     IS_CRITICAL = False  # Non-critical: partial dependency resolution is acceptable
 
+    def __init__(self, state: "TransactionState") -> None:
+        super().__init__(state)
+        # Mapping from DependencySpec to list of originating graph node IDs
+        self._dependency_node_map: Dict[DependencySpec, List[str]] = {}
+
     def execute(self, context: TransactionContext) -> None:
         """Execute dependency resolution logic."""
         # Check if dependency resolution is enabled
@@ -107,17 +112,21 @@ class ResolveDepsPhase(BasePhase):
 
     def _discover_dependencies(self) -> List[DependencySpec]:
         """Discover dependencies from DependencyCollector and graph."""
-        dep_specs: List[DependencySpec] = []
+        # Use a dict keyed by spec to handle deduplication while aggregating nodes
+        specs_map: Dict[DependencySpec, List[str]] = {}
 
         # Method 1: Get from DependencyCollector (event-driven)
         if self.state.dependency_collector:
             discovered = self.state.dependency_collector.get_discovered_dependencies()
-            dep_specs.extend(discovered)
+            for spec in discovered:
+                # Specs from collector might not have associated graph nodes
+                if spec not in specs_map:
+                    specs_map[spec] = []
             logger.debug("Discovered %d dependencies from collector", len(discovered))
 
         # Method 2: Scan GraphManager for external dependency nodes
         if self.state.graph_manager:
-            for _node_id, node_attrs in self.state.graph_manager.nodes():
+            for node_id, node_attrs in self.state.graph_manager.nodes():
                 raw_type = node_attrs.get("type") or node_attrs.get("node_type")
                 if isinstance(raw_type, NodeType):
                     normalized_type = raw_type.value
@@ -137,10 +146,14 @@ class ResolveDepsPhase(BasePhase):
                             name=name,
                             version=version or "*",
                         )
-                        if spec not in dep_specs:
-                            dep_specs.append(spec)
+                        # Initialize list if new spec, then append node_id
+                        if spec not in specs_map:
+                            specs_map[spec] = []
+                        specs_map[spec].append(node_id)
 
-        return dep_specs
+        # Store the mapping for later linking
+        self._dependency_node_map = specs_map
+        return list(specs_map.keys())
 
     def _filter_successful_deps(
         self, resolved_deps: List[Dict[str, Any]]
@@ -251,15 +264,38 @@ class ResolveDepsPhase(BasePhase):
         if not self.state.graph_manager or not dep_graph_id:
             return
 
-        # This is a simplified version - the full implementation would create
-        # proxy nodes and edges to represent the dependency relationship
-        logger.debug("Linking dependency graph %s into parent", dep_graph_id)
+        spec = dep_info.get("spec")
+        if not spec:
+            logger.warning("No dependency spec found for %s", dep_graph_id)
+            return
 
-        # FUTURE ENHANCEMENT: Implement full graph linking logic
-        # For now, just log the relationship
+        node_ids = self._dependency_node_map.get(spec, [])
+        if not node_ids:
+            logger.debug("No originating nodes found for dependency %s", spec)
+            return
+
         logger.info(
-            "Linked dependency: %s (graph_id=%s)", dep_info.get("name"), dep_graph_id
+            "Linking dependency graph %s to %d parent nodes",
+            dep_graph_id,
+            len(node_ids),
         )
+
+        for node_id in node_ids:
+            try:
+                # Update node to point to the resolved dependency graph
+                self.state.graph_manager.update_node_attribute(
+                    node_id, "child_graph_id", dep_graph_id
+                )
+                self.state.graph_manager.update_node_attribute(
+                    node_id, "type", NodeType.PROXY.value
+                )
+                # Ensure it's marked as proxy
+                self.state.graph_manager.update_node_attribute(
+                    node_id, "proxy_target", dep_info.get("source")
+                )
+                logger.debug("Updated node %s -> child graph %s", node_id, dep_graph_id)
+            except ValueError:
+                logger.warning("Node %s no longer exists, skipping update", node_id)
 
     def _clear_global_dag_dependencies(self) -> None:
         """Clear GlobalDAG dependencies when no deps found."""
