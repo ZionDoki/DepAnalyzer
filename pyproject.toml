@@ -12,7 +12,7 @@ tree-sitter = "*"
 tree-sitter-typescript = "*"
 tree-sitter-c = "*"
 tree-sitter-cpp = "^0.23.4"
-tree-sitter-cmake = {git = "https://gitcode.com/ZionQAQ/tree-sitter-cmake.git"}
+
 tree-sitter-java = "*"
 networkx = "^3.2.1"
 toml = "^0.10.2"
@@ -22,6 +22,7 @@ platformdirs = "^4.0.0"
 requests = "^2.31.0"
 json5 = "^0.12.0"
 pydantic = "^2.11.7"
+tree-sitter-cmake = "^0.7.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.1"
