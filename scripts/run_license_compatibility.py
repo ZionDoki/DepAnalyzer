@@ -6,6 +6,7 @@ import json
 import logging
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Set, Tuple, List
 
@@ -92,6 +93,33 @@ def _update_task_phase(
     if advance:
         progress.advance(task_id)
     progress.update(task_id, phase=phase)
+
+
+@contextmanager
+def _suspend_progress(progress: Optional[Progress]) -> None:
+    """Temporarily stop Rich progress to allow nested live displays to run.
+
+    Args:
+        progress: Progress instance to suspend.
+
+    Returns:
+        None.
+
+    Yields:
+        None: Execution continues after progress is suspended.
+    """
+    if progress is None:
+        yield
+        return
+
+    was_started = getattr(getattr(progress, "live", None), "is_started", False)
+    try:
+        if was_started:
+            progress.stop()
+        yield
+    finally:
+        if was_started:
+            progress.start()
 
 
 def load_graph(graph_path: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -428,11 +456,12 @@ def _run_single_project(
     graph_dict, metadata = load_graph(graph_output)
     license_map = {k: _normalize_spdx_expression(v) for k, v in load_license_map(license_output).items()}
 
-    context, results = compatibility_runner(
-        license_map,
-        str(graph_output),
-        args={"ignore_unk": True, "merge_cycles": False},
-    )
+    with _suspend_progress(progress):
+        context, results = compatibility_runner(
+            license_map,
+            str(graph_output),
+            args={"ignore_unk": True, "merge_cycles": False},
+        )
     validation = _validate_alignment(graph_dict, license_map, context, logger)
 
     serialized_results = _jsonify(results)
