@@ -2,7 +2,11 @@
 name = "depanalyzer"
 version = "0.1.1"
 description = "Dependency analyzer tool"
-authors = ["Zihao <zhangzihao2025@lzu.edu.cn> Shufei <2337739735@qq.com>"]
+authors = [
+    "Zihao <zhangzihao2025@lzu.edu.cn>",
+    "Shufei <2337739735@qq.com>",
+    "Zion <liu602495126@gmail.com>"
+]
 readme = "README.md"
 license = "MIT"
 
