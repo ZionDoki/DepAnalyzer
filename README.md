@@ -89,6 +89,7 @@ python scripts/run_license_compatibility.py \
 
 You can analyze multiple projects in one go. This is supported in both Docker and local modes.
 
+*Docker mode:*
 ```bash
 # Create a list of projects
 echo "/workspace/project1" > projects_list.txt
@@ -102,6 +103,31 @@ docker run --rm \
   -v $(pwd)/output:/workspace/output \
   depanalyzer --projects-file /workspace/projects.txt
 ```
+
+*Local mode:*
+```bash
+# Option 1: Using a projects file (recommended for many projects)
+cat > projects_list.txt << EOF
+/path/to/project1
+/path/to/project2
+/path/to/project3
+EOF
+
+python scripts/run_license_compatibility.py \
+  --projects-file projects_list.txt \
+  --output-dir ./results \
+  --third-party
+
+# Option 2: Using multiple --project-path flags
+python scripts/run_license_compatibility.py \
+  --project-path /path/to/project1 \
+  --project-path /path/to/project2 \
+  --project-path /path/to/project3 \
+  --output-dir ./results \
+  --third-party
+```
+
+When running in batch mode, each project gets its own subdirectory (e.g., `01_project1/`, `02_project2/`), and a `batch_summary.json` file is generated at the root of the output directory with results for all projects.
 
 ### 2. Manual Dependency Scanning (`scan`)
 
@@ -146,14 +172,29 @@ depanalyzer scancode --source /path/to/repo --third-party -o license_map.json
 ### Pipeline Output
 When running the pipeline (Docker or script), the output directory will contain:
 
+*Single project:*
 ```text
 output/
-├── 01_project_name/
+├── graph.json                  # Dependency graph
+├── license_map.json            # Raw license findings
+├── compatibility_results.json  # Compliance check results
+└── compatibility_graph.json    # Visualizable compliance graph
+```
+
+*Batch mode (multiple projects):*
+```text
+output/
+├── 01_project_name1/
 │   ├── graph.json                  # Dependency graph
 │   ├── license_map.json            # Raw license findings
 │   ├── compatibility_results.json  # Compliance check results
 │   └── compatibility_graph.json    # Visualizable compliance graph
-├── batch_summary.json              # Summary of all processed projects
+├── 02_project_name2/
+│   ├── graph.json
+│   ├── license_map.json
+│   ├── compatibility_results.json
+│   └── compatibility_graph.json
+└── batch_summary.json              # Summary of all processed projects
 ```
 
 ### Graph JSON Format
@@ -170,8 +211,38 @@ You can provide a custom configuration file for the scan process using the `--co
 depanalyzer scan . -o graph.json --config config.toml
 ```
 
-Example `config.toml`:
+### Fallback Policy
+
+The fallback policy creates a synthetic tree that connects unparsed files and isolated nodes to a root node. This ensures license scanning can achieve full coverage even when some files couldn't be parsed.
+
+**Enable via CLI flag:**
+```bash
+depanalyzer scan /path/to/repo -o graph.json --fallback-tree
+```
+
+**Enable via configuration file:**
+
+`config.toml`:
 ```toml
 [fallback]
-enabled = true  # Connect isolated nodes to a root for license coverage
+enabled = true                           # Enable fallback tree (default: false)
+root_id = "fallback:license_scan"       # Root node ID (default: "fallback:license_scan")
+include_isolated_nodes = true            # Connect isolated nodes to root (default: true)
 ```
+
+`config.json`:
+```json
+{
+  "fallback": {
+    "enabled": true,
+    "root_id": "fallback:license_scan",
+    "include_isolated_nodes": true
+  }
+}
+```
+
+**When to use:** Enable this when running license compliance checks on projects with incomplete parsing or mixed-language codebases to ensure all files are included in the analysis.
+
+### Other Configuration Options
+
+For advanced configuration options (projection, contract matching, per-ecosystem settings), see `docs/dependency_graph_lifecycle_and_config.md`
