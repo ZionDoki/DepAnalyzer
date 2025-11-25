@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run depanalyzer scan + ScanCode + liscopelens compatibility end-to-end."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -8,10 +10,10 @@ import subprocess
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Set, Tuple, List
+from typing import Any, Dict, Mapping, Optional, Set, Tuple, List, TYPE_CHECKING
 
-from rich.logging import RichHandler
-from rich.progress import Progress, SpinnerColumn, TaskID, TextColumn, TimeElapsedColumn
+if TYPE_CHECKING:
+    from rich.progress import Progress, TaskID
 
 # Ensure repository root is importable when running as a script.
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +25,53 @@ DEFAULT_PROJECT = Path("/mnt/c/Workspace/dialog_hub-master")
 DEFAULT_LISCOPLENS_PATH = Path("/mnt/c/Workspace/liscopelens")
 
 logger = logging.getLogger("depanalyzer.scripts.license_pipeline")
+
+
+def _configure_logging(verbose: bool) -> None:
+    """Configure logging, falling back gracefully when Rich is unavailable.
+
+    Args:
+        verbose: Whether to enable debug logging.
+
+    Returns:
+        None.
+    """
+    level = logging.DEBUG if verbose else logging.INFO
+    try:
+        from rich.logging import RichHandler
+    except ImportError:
+        logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
+        logger.warning("rich is not installed; using basic logging.")
+        return
+
+    logging.basicConfig(
+        level=level,
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[RichHandler(rich_tracebacks=True, markup=True)],
+    )
+
+
+def _create_progress() -> Optional["Progress"]:
+    """Create a Rich progress instance when the dependency is available.
+
+    Returns:
+        Configured Rich progress object, or None if Rich is not installed.
+    """
+    try:
+        from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+    except ImportError:
+        logger.warning("rich is not installed; progress display disabled.")
+        return None
+
+    progress_columns = [
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.fields[project]}"),
+        TextColumn("{task.fields[phase]}"),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+    ]
+    return Progress(*progress_columns, transient=False)
 
 
 def ensure_liscopelens_importable(liscopelens_path: Path) -> None:
@@ -429,6 +478,8 @@ def _run_single_project(
         scan_cmd.append("-t")
     if args.max_deps:
         scan_cmd.extend(["--max-deps", str(args.max_deps)])
+    if not args.disable_fallback_tree:
+        scan_cmd.append("--fallback-tree")
 
     run_command(scan_cmd)
 
@@ -460,7 +511,7 @@ def _run_single_project(
         context, results = compatibility_runner(
             license_map,
             str(graph_output),
-            args={"ignore_unk": True, "merge_cycles": False},
+            args={"ignore_unk": True, "merge_cycles": True},
         )
     validation = _validate_alignment(graph_dict, license_map, context, logger)
 
@@ -516,23 +567,11 @@ def run_pipeline(args: argparse.Namespace) -> None:
     summaries: List[Dict[str, Any]] = []
     failures: List[str] = []
 
-    progress_columns = [
-        SpinnerColumn(),
-        TextColumn("[bold blue]{task.fields[project]}"),
-        TextColumn("{task.fields[phase]}"),
-        TextColumn("{task.completed}/{task.total}"),
-        TimeElapsedColumn(),
-    ]
+    progress = _create_progress()
 
-    with Progress(*progress_columns, transient=False) as progress:
+    if progress is None:
         for index, project_path in enumerate(project_paths, start=1):
             project_output_dir = _derive_project_output_dir(output_base, project_path, index, len(project_paths))
-            task_id = progress.add_task(
-                description=project_output_dir.name,
-                total=3,
-                project=str(project_path),
-                phase="queued",
-            )
             try:
                 summary = _run_single_project(
                     project_path,
@@ -540,12 +579,11 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     check_compatibility,
                     GraphManager,
                     project_output_dir,
-                    progress,
-                    task_id,
+                    None,
+                    None,
                 )
                 summaries.append({**summary, "status": "ok"})
             except Exception as exc:  # pylint: disable=broad-except
-                _update_task_phase(progress, task_id, "failed")
                 logger.error("Project %s failed: %s", project_path, exc)
                 summaries.append(
                     {
@@ -556,6 +594,39 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     }
                 )
                 failures.append(str(project_path))
+    else:
+        with progress:
+            for index, project_path in enumerate(project_paths, start=1):
+                project_output_dir = _derive_project_output_dir(output_base, project_path, index, len(project_paths))
+                task_id = progress.add_task(
+                    description=project_output_dir.name,
+                    total=3,
+                    project=str(project_path),
+                    phase="queued",
+                )
+                try:
+                    summary = _run_single_project(
+                        project_path,
+                        args,
+                        check_compatibility,
+                        GraphManager,
+                        project_output_dir,
+                        progress,
+                        task_id,
+                    )
+                    summaries.append({**summary, "status": "ok"})
+                except Exception as exc:  # pylint: disable=broad-except
+                    _update_task_phase(progress, task_id, "failed")
+                    logger.error("Project %s failed: %s", project_path, exc)
+                    summaries.append(
+                        {
+                            "project": str(project_path),
+                            "output_dir": str(project_output_dir),
+                            "status": "failed",
+                            "error": str(exc),
+                        }
+                    )
+                    failures.append(str(project_path))
 
     if len(summaries) > 1:
         summary_path = output_base / "batch_summary.json"
@@ -637,6 +708,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable third-party dependency resolution and license scanning.",
     )
     parser.add_argument(
+        "--disable-fallback-tree",
+        action="store_true",
+        help="Disable fallback license tree wiring (enabled by default in this pipeline).",
+    )
+    parser.add_argument(
         "--force-scancode",
         action="store_true",
         help="Force re-run ScanCode even if cached license maps exist.",
@@ -659,12 +735,7 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(message)s",
-        datefmt="[%X]",
-        handlers=[RichHandler(rich_tracebacks=True, markup=True)],
-    )
+    _configure_logging(args.verbose)
 
     try:
         run_pipeline(args)

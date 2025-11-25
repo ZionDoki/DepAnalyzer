@@ -341,7 +341,7 @@ def _scan_command_impl(args) -> int:
         except (OSError, RuntimeError):
             pass
 
-        # Ensure cleanup of GraphRegistry manager
+        # Ensure cleanup of GraphRegistry singleton state
         try:
             GraphRegistry.shutdown()
         except (OSError, RuntimeError):

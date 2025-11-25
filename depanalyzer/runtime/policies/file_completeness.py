@@ -87,11 +87,9 @@ class FileCompletenessJoinPolicy(JoinPolicy):
             len(new_files),
         )
 
-        # Hint export phase to preserve the flat tree shape.
-        try:
-            graph.set_metadata("skip_cycle_condensation", True)
-        except Exception:  # pragma: no cover - defensive
-            pass
+        # Note: We no longer skip cycle condensation for fallback trees.
+        # The flat tree itself won't have cycles, but the original graph
+        # may contain cycles that need to be broken for DAG consumers.
 
 
 def _collect_known_paths(graph: GraphManager) -> Set[Path]:
