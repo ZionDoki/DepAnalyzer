@@ -541,6 +541,9 @@ class HvigorParser(BaseParser):
                         emit_event = False
 
                 if emit_event:
+                    # Provide rich metadata so the dep fetcher can handle
+                    # monorepo/local scenarios without unnecessary cloning.
+                    path_hint = dep_name.split("/")[-1] if dep_name else None
                     spec = DependencySpec(
                         name=dep_name,
                         version=str(dep_version) if dep_version else "",
@@ -548,6 +551,11 @@ class HvigorParser(BaseParser):
                         metadata={
                             "parser_name": self.NAME,
                             "depth": 0,
+                            "workspace_root": str(self.workspace_root),
+                            "owner_module": owning_module_id,
+                            "declared_via": "oh-package.json5",
+                            "registry_type": "ohpm",
+                            "path_hint": path_hint,
                         },
                     )
                     event = Event(
@@ -774,6 +782,7 @@ class HvigorParser(BaseParser):
                 )
 
             # Publish dependency event
+            path_hint = lib_name.split("/")[-1] if lib_name else None
             spec = DependencySpec(
                 name=lib_name,
                 version=str(lib_version) if lib_version else "",
@@ -782,6 +791,10 @@ class HvigorParser(BaseParser):
                     "parser_name": self.NAME,
                     "depth": 0,
                     "registry_type": registry_type,
+                    "workspace_root": str(self.workspace_root),
+                    "owner_module": owning_module_id,
+                    "declared_via": "oh-package-lock.json5",
+                    "path_hint": path_hint,
                 },
             )
             event = Event(

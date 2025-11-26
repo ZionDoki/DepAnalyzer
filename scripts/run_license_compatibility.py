@@ -396,6 +396,28 @@ def _derive_project_output_dir(
     return resolved_base / slug
 
 
+def _collect_projects_from_directory(projects_dir: Path) -> List[Path]:
+    """Return immediate subdirectories under a batch directory.
+
+    Args:
+        projects_dir: Root directory containing multiple project folders.
+
+    Returns:
+        Sorted list of direct child directories.
+
+    Raises:
+        ValueError: If the provided path is not a directory.
+    """
+    resolved_dir = projects_dir.expanduser().resolve()
+    if not resolved_dir.is_dir():
+        raise ValueError(f"Projects directory is not a directory: {resolved_dir}")
+
+    children = sorted(child for child in resolved_dir.iterdir() if child.is_dir())
+    if not children:
+        logger.warning("No subdirectories found under %s", resolved_dir)
+    return children
+
+
 def _load_project_paths(args: argparse.Namespace) -> List[Path]:
     """Load and resolve project paths from CLI arguments.
 
@@ -408,6 +430,10 @@ def _load_project_paths(args: argparse.Namespace) -> List[Path]:
     raw_paths: List[Path] = []
     if args.project_paths:
         raw_paths.extend(args.project_paths)
+
+    if getattr(args, "projects_dirs", None):
+        for projects_dir in args.projects_dirs:
+            raw_paths.extend(_collect_projects_from_directory(projects_dir))
 
     if getattr(args, "projects_file", None):
         with args.projects_file.expanduser().open("r", encoding="utf-8") as handle:
@@ -663,6 +689,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--projects-file",
         type=Path,
         help="File containing newline-separated project paths for batch scans.",
+    )
+    parser.add_argument(
+        "--projects-dir",
+        dest="projects_dirs",
+        action="append",
+        type=Path,
+        default=[],
+        help="Directory containing multiple projects; each immediate subdirectory is scanned (can be provided multiple times).",
     )
     parser.add_argument(
         "--cache-dir",

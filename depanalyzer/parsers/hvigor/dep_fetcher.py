@@ -16,9 +16,11 @@ Special features:
 import json
 import logging
 import subprocess
+import tarfile
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 logger = logging.getLogger("depanalyzer.parsers.hvigor.dep_fetcher")
@@ -60,6 +62,8 @@ class HvigorDepFetcher(BaseDepFetcher):
     NAME = "hvigor_dep_fetcher"
     ECOSYSTEM = "hvigor"
     REGISTRY_BASE = "https://ohpm.openharmony.cn/ohpm"
+    # Negative cache to avoid repeated registry/clone attempts for failures
+    _failure_cache: Dict[Tuple[str, str, str], str] = {}
 
     def can_handle(self, dep_spec: DependencySpec) -> bool:
         """Check if this fetcher can handle the dependency.
@@ -83,35 +87,61 @@ class HvigorDepFetcher(BaseDepFetcher):
         """
         logger.info("Fetching Hvigor dependency: %s", dep_spec.name)
 
-        # Determine fetch method based on metadata
-        dep_type = dep_spec.metadata.get("type", "ohpm")
+        metadata = dep_spec.metadata or {}
+        registry_type = self._get_registry_type(dep_spec)
+        path_hint = self._get_path_hint(dep_spec, metadata)
+        workspace_root = self._get_workspace_root(metadata)
+        fail_key = (dep_spec.name, dep_spec.version or "", registry_type)
 
-        # Local dependencies are always resolved via explicit paths and do not
-        # participate in versioned caching.
-        if dep_type == "local":
-            return self._handle_local_dependency(dep_spec)
+        if fail_key in self._failure_cache:
+            logger.warning(
+                "Skipping %s@%s (%s) due to previous failure: %s",
+                dep_spec.name,
+                dep_spec.version or "latest",
+                registry_type,
+                self._failure_cache[fail_key],
+            )
+            return None
+
+        # Local/self dependencies should never trigger network fetches
+        local_path = self._resolve_local_dependency(
+            dep_spec, workspace_root=workspace_root, path_hint=path_hint
+        )
+        if local_path is not None:
+            return local_path
 
         # Git-based dependencies use the generic cache-dir layout which
         # includes the requested version string. This is safe because Git
         # repositories already encode their own versioning scheme (tags/refs).
-        if dep_type == "git" or (dep_spec.source_url and ".git" in dep_spec.source_url):
+        dep_type = metadata.get("type", registry_type)
+        if dep_type == "git" or registry_type == "git" or (
+            dep_spec.source_url and ".git" in dep_spec.source_url
+        ):
             cache_dir = self.get_cache_dir(dep_spec)
 
             if cache_dir.exists() and self._is_valid_cache(cache_dir):
                 logger.info("Using cached Git dependency: %s", cache_dir)
                 return cache_dir
 
-            return self._fetch_from_git(dep_spec, cache_dir)
+            try:
+                return self._fetch_from_git(
+                    dep_spec, cache_dir, sparse_paths=[path_hint] if path_hint else None
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._failure_cache[fail_key] = str(exc)
+                logger.error("Failed to fetch Git dependency %s: %s", dep_spec.name, exc)
+                return None
 
         # OHPM registry dependencies are resolved to an exact version first
         # and then cached under hvigor/<safe_name>/<resolved_version> so that
         # different semver ranges which resolve to the same concrete version
         # reuse the same on-disk checkout.
-        if dep_type == "ohpm":
-            return self._fetch_from_ohpm(dep_spec)
-
-        logger.warning("Unknown Hvigor dependency type: %s", dep_type)
-        return None
+        try:
+            return self._fetch_from_ohpm(dep_spec, path_hint=path_hint)
+        except Exception as exc:  # noqa: BLE001
+            self._failure_cache[fail_key] = str(exc)
+            logger.error("Failed to fetch Hvigor dependency %s: %s", dep_spec.name, exc)
+            return None
 
     def _is_valid_cache(self, cache_dir: Path) -> bool:
         """Check if cached directory is valid.
@@ -127,8 +157,86 @@ class HvigorDepFetcher(BaseDepFetcher):
             cache_dir / ".git"
         ).exists()
 
+    def _get_registry_type(self, dep_spec: DependencySpec) -> str:
+        """Return registry type hint from metadata."""
+        metadata = dep_spec.metadata or {}
+        return (
+            metadata.get("registry_type")
+            or metadata.get("type")
+            or dep_spec.ecosystem
+            or "ohpm"
+        )
+
+    def _get_path_hint(self, dep_spec: DependencySpec, metadata: Dict[str, Any]) -> Optional[str]:
+        """Return best-effort path hint for mono-repo sparse checkout."""
+        hint = metadata.get("path_hint")
+        if hint:
+            return hint
+        name = dep_spec.name or ""
+        return name.split("/")[-1] if "/" in name else name
+
+    def _get_workspace_root(self, metadata: Dict[str, Any]) -> Optional[Path]:
+        """Extract workspace root from dependency metadata."""
+        root = metadata.get("workspace_root")
+        if not root:
+            return None
+        try:
+            return Path(root).resolve()
+        except OSError:
+            return None
+
+    def _resolve_local_dependency(
+        self,
+        dep_spec: DependencySpec,
+        workspace_root: Optional[Path],
+        path_hint: Optional[str],
+    ) -> Optional[Path]:
+        """Resolve local/self dependency without network access."""
+        metadata = dep_spec.metadata or {}
+        registry_type = self._get_registry_type(dep_spec)
+        version = dep_spec.version or ""
+
+        is_local = (
+            registry_type == "local"
+            or metadata.get("type") == "local"
+            or version.startswith("file:")
+        )
+        if not is_local:
+            return None
+
+        candidates: List[str] = []
+        if metadata.get("local_path"):
+            candidates.append(str(metadata["local_path"]))
+        if version.startswith("file:"):
+            candidates.append(version.replace("file:", "", 1))
+        if path_hint:
+            candidates.append(path_hint)
+
+        for cand in candidates:
+            if not cand:
+                continue
+            path = Path(cand)
+            if not path.is_absolute() and workspace_root:
+                path = workspace_root / cand
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
+            if resolved.exists():
+                logger.info(
+                    "Using local Hvigor dependency %s at %s", dep_spec.name, resolved
+                )
+                return resolved
+
+        logger.warning(
+            "Local dependency %s declared but no valid path found (candidates=%s)",
+            dep_spec.name,
+            candidates,
+        )
+        return None
+
     def _fetch_from_git(
-        self, dep_spec: DependencySpec, cache_dir: Path
+        self, dep_spec: DependencySpec, cache_dir: Path, sparse_paths: Optional[List[str]] = None
     ) -> Optional[Path]:
         """Fetch dependency from Git repository.
 
@@ -161,17 +269,28 @@ class HvigorDepFetcher(BaseDepFetcher):
         )
 
         if success:
+            try:
+                self._configure_sparse_checkout(cache_dir, sparse_paths)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "Sparse checkout setup failed for %s (continuing): %s",
+                    cache_dir,
+                    exc,
+                )
             logger.info("Successfully fetched %s to %s", dep_spec.name, cache_dir)
             return cache_dir
-        else:
-            logger.error("Failed to fetch %s from %s", dep_spec.name, url)
-            return None
 
-    def _fetch_from_ohpm(self, dep_spec: DependencySpec) -> Optional[Path]:
+        logger.error("Failed to fetch %s from %s", dep_spec.name, url)
+        return None
+
+    def _fetch_from_ohpm(
+        self, dep_spec: DependencySpec, path_hint: Optional[str] = None
+    ) -> Optional[Path]:
         """Fetch dependency from OHPM registry.
 
         Args:
             dep_spec: Dependency specification.
+            path_hint: Optional sub-path hint for sparse checkout.
 
         Returns:
             Optional[Path]: Local path if successful, None otherwise.
@@ -185,20 +304,12 @@ class HvigorDepFetcher(BaseDepFetcher):
         )
 
         # Fetch metadata from registry
-        try:
-            meta = self._fetch_ohpm_metadata(dep_spec.name)
-        except Exception as e:
-            logger.error("Failed to fetch OHPM metadata for %s: %s", dep_spec.name, e)
-            return None
+        meta = self._fetch_ohpm_metadata(dep_spec.name)
 
         # Resolve version (may be a semver range or tag). The resolved version
         # is used as the canonical cache key so that multiple range expressions
         # resolving to the same concrete version share a single checkout.
-        try:
-            resolved_version = self._resolve_version(meta, dep_spec.version)
-        except ValueError as e:
-            logger.error("Failed to resolve version for %s: %s", dep_spec.name, e)
-            return None
+        resolved_version = self._resolve_version(meta, dep_spec.version)
 
         logger.info("Resolved version: %s -> %s", dep_spec.version, resolved_version)
 
@@ -217,9 +328,36 @@ class HvigorDepFetcher(BaseDepFetcher):
             return cache_dir
 
         # Get version info
-        vinfo = meta.get("versions", {}).get(resolved_version, {})
+        vinfo = meta.get("versions", {}).get(resolved_version, {}) or {}
         license_str = vinfo.get("license") or meta.get("license")
         repo_url = vinfo.get("repository") or meta.get("repository")
+        dist_info = vinfo.get("dist") or {}
+        tarball_url = dist_info.get("tarball")
+
+        # Prefer registry tarball when available to avoid cloning monorepos
+        if tarball_url:
+            extracted = self._download_and_extract_tarball(tarball_url, cache_dir)
+            if extracted:
+                meta_out = {
+                    "name": dep_spec.name,
+                    "resolved_version": resolved_version,
+                    "license": license_str,
+                    "repository": repo_url,
+                    "release_time": meta.get("time", {}).get(resolved_version),
+                    "license_only": False,
+                    "fetched_via": "tarball",
+                    "tarball": tarball_url,
+                    "package_root": str(extracted),
+                }
+                self._write_metadata(cache_dir, meta_out)
+                logger.info(
+                    "Successfully fetched %s@%s via tarball to %s",
+                    dep_spec.name,
+                    resolved_version,
+                    cache_dir,
+                )
+                return cache_dir
+            logger.debug("Tarball fetch failed for %s, falling back to git", dep_spec.name)
 
         # No repository: create license-only metadata
         if not repo_url:
@@ -235,6 +373,7 @@ class HvigorDepFetcher(BaseDepFetcher):
                 "license": license_str,
                 "repository": None,
                 "license_only": True,
+                "fetched_via": "metadata_only",
             }
             self._write_metadata(cache_dir, meta_out)
             return cache_dir
@@ -242,11 +381,9 @@ class HvigorDepFetcher(BaseDepFetcher):
         # Repository available: clone and checkout nearest to release time
         release_time_iso = meta.get("time", {}).get(resolved_version)
 
-        try:
-            self._clone_and_checkout_by_time(repo_url, cache_dir, release_time_iso)
-        except Exception as e:
-            logger.error("Failed to clone repository for %s: %s", dep_spec.name, e)
-            return None
+        self._clone_and_checkout_by_time(
+            repo_url, cache_dir, release_time_iso, sparse_paths=[path_hint] if path_hint else None
+        )
 
         # Write metadata
         meta_out = {
@@ -256,7 +393,10 @@ class HvigorDepFetcher(BaseDepFetcher):
             "repository": repo_url,
             "release_time": release_time_iso,
             "license_only": False,
+            "fetched_via": "git",
         }
+        if path_hint:
+            meta_out["package_root"] = str(cache_dir / path_hint)
         self._write_metadata(cache_dir, meta_out)
 
         logger.info(
@@ -295,6 +435,52 @@ class HvigorDepFetcher(BaseDepFetcher):
         response.raise_for_status()
 
         return response.json()
+
+    def _download_and_extract_tarball(
+        self, tarball_url: str, target_dir: Path
+    ) -> Optional[Path]:
+        """Download and extract package tarball to cache directory."""
+        if not HAS_REQUESTS:
+            return None
+
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_tar = Path(tmpdir) / "package.tgz"
+            try:
+                with requests.get(tarball_url, stream=True, timeout=60) as resp:
+                    resp.raise_for_status()
+                    with tmp_tar.open("wb") as handle:
+                        for chunk in resp.iter_content(chunk_size=8192):
+                            if chunk:
+                                handle.write(chunk)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Downloading tarball %s failed: %s", tarball_url, exc)
+                return None
+
+            try:
+                with tarfile.open(tmp_tar, "r:*") as tf:
+                    members = tf.getmembers()
+                    for member in members:
+                        member_path = Path(member.name)
+                        if ".." in member_path.parts:
+                            logger.warning(
+                                "Skipping unsafe tarball member %s from %s",
+                                member.name,
+                                tarball_url,
+                            )
+                            return None
+                    tf.extractall(target_dir)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Extracting tarball %s failed: %s", tarball_url, exc)
+                return None
+
+        # Best-effort guess of package root (first directory, else target_dir)
+        try:
+            dirs = [p for p in target_dir.iterdir() if p.is_dir()]
+            return dirs[0] if dirs else target_dir
+        except OSError:
+            return target_dir
 
     def _resolve_version(self, meta: Dict[str, Any], requested: Optional[str]) -> str:
         """Resolve version string to exact version.
@@ -346,7 +532,11 @@ class HvigorDepFetcher(BaseDepFetcher):
         return versions[-1]
 
     def _clone_and_checkout_by_time(
-        self, repo_url: str, target_dir: Path, release_time_iso: Optional[str]
+        self,
+        repo_url: str,
+        target_dir: Path,
+        release_time_iso: Optional[str],
+        sparse_paths: Optional[List[str]] = None,
     ) -> None:
         """Clone repository and checkout commit closest to release time.
 
@@ -370,7 +560,7 @@ class HvigorDepFetcher(BaseDepFetcher):
         target_dir.parent.mkdir(parents=True, exist_ok=True)
 
         # Clone full repository (not shallow) for accurate time-based checkout
-        cmd = ["git", "clone", repo_url, str(target_dir)]
+        cmd = ["git", "clone", "--filter=blob:none", repo_url, str(target_dir)]
         logger.info(
             "Cloning repository (full clone for time-based checkout): %s", repo_url
         )
@@ -409,6 +599,15 @@ class HvigorDepFetcher(BaseDepFetcher):
                 )
 
             raise RuntimeError(f"git clone failed: {stderr}")
+
+        try:
+            self._configure_sparse_checkout(target_dir, sparse_paths)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "Sparse checkout setup failed for %s (continuing): %s",
+                target_dir,
+                exc,
+            )
 
         if not release_time_iso:
             logger.debug("No release time provided, keeping HEAD")
@@ -492,7 +691,9 @@ class HvigorDepFetcher(BaseDepFetcher):
         Returns:
             Optional[Path]: Local path if valid, None otherwise.
         """
-        local_path = dep_spec.metadata.get("local_path")
+        metadata = dep_spec.metadata or {}
+        workspace_root = self._get_workspace_root(metadata)
+        local_path = metadata.get("local_path")
         if not local_path:
             logger.error(
                 "No local_path provided for local dependency: %s", dep_spec.name
@@ -500,6 +701,8 @@ class HvigorDepFetcher(BaseDepFetcher):
             return None
 
         path = Path(local_path)
+        if not path.is_absolute() and workspace_root:
+            path = workspace_root / local_path
         if not path.exists():
             logger.error("Local dependency path does not exist: %s", path)
             return None
@@ -541,3 +744,28 @@ class HvigorDepFetcher(BaseDepFetcher):
         """
         safe_name = pkg_name.replace("@", "").replace("/", "_")
         return self.cache_root / self.ECOSYSTEM / safe_name / resolved_version
+
+    def _configure_sparse_checkout(
+        self, repo_dir: Path, sparse_paths: Optional[List[str]]
+    ) -> None:
+        """Enable sparse checkout for the requested sub-paths."""
+        if not sparse_paths:
+            return
+
+        try:
+            repo_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return
+
+        cmd_init = [
+            "git",
+            "-C",
+            str(repo_dir),
+            "sparse-checkout",
+            "init",
+            "--no-cone",
+        ]
+        subprocess.run(cmd_init, capture_output=True, text=True, check=False)
+
+        cmd_set = ["git", "-C", str(repo_dir), "sparse-checkout", "set", *sparse_paths]
+        subprocess.run(cmd_set, capture_output=True, text=True, check=False)

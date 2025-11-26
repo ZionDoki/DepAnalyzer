@@ -9,3 +9,4 @@ AGENTS.md
 *.json
 *.pyc
 *cache
+out/

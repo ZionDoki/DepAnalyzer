@@ -157,6 +157,12 @@ python scripts/run_license_compatibility.py \
   --project-path /path/to/project3 \
   --output-dir ./results \
   --third-party
+
+# Option 3: Point at a folder containing multiple projects (each direct subfolder is scanned)
+python scripts/run_license_compatibility.py \
+  --projects-dir /path/to/projects_root \
+  --output-dir ./results \
+  --third-party
 ```
 
 When running in batch mode, each project gets its own subdirectory (e.g., `01_project1/`, `02_project2/`), and a `batch_summary.json` file is generated at the root of the output directory with results for all projects.

@@ -169,6 +169,7 @@ class ResolveDepsPhase(BasePhase):
             return successful
 
         filtered = []
+        seen_paths = set()
         for dep in successful:
             source = dep.get("source")
             if not source:
@@ -180,6 +181,13 @@ class ResolveDepsPhase(BasePhase):
                 if dep_root == workspace_root:
                     logger.info("Skipping self-dependency %s", dep.get("name"))
                     continue
+                if dep_root in seen_paths:
+                    logger.info(
+                        "Skipping duplicate dependency path already resolved: %s",
+                        dep_root,
+                    )
+                    continue
+                seen_paths.add(dep_root)
             except _SAFE_EXCEPTIONS:
                 pass
 

@@ -140,10 +140,10 @@ def resolve_dependencies(
                 }
             )
 
-    # Deduplicate successful resolutions by (ecosystem, name, source path) so
-    # that multiple DependencySpec instances which resolve to the same local
-    # checkout (for example different semver ranges of the same Hvigor/OHPM
-    # package) do not spawn duplicate child transactions.
+    # Deduplicate successful resolutions by real path so that multiple
+    # DependencySpec instances which resolve to the same local checkout
+    # (for example different semver ranges of the same Hvigor/OHPM package)
+    # do not spawn duplicate child transactions.
     unique_success: Dict[tuple, Dict[str, Any]] = {}
     deduped: List[Dict[str, Any]] = []
 
@@ -153,24 +153,26 @@ def resolve_dependencies(
             continue
 
         source = entry.get("source")
-        ecosystem = entry.get("ecosystem", "unknown")
-        name = entry.get("name", "unknown")
-
         # If there is no concrete source path, keep the entry as-is.
         if not source:
             deduped.append(entry)
             continue
 
-        key = (ecosystem, name, source)
+        try:
+            real_source = str(Path(source).resolve())
+        except OSError:
+            real_source = source
+
+        key = (real_source,)
         if key in unique_success:
             prev_spec = unique_success[key].get("spec")
             curr_spec = entry.get("spec")
             logger.info(
                 "Skipping duplicate resolved dependency %s/%s at %s "
                 "(requested versions: %s, %s)",
-                ecosystem,
-                name,
-                source,
+                entry.get("ecosystem", "unknown"),
+                entry.get("name", "unknown"),
+                real_source,
                 getattr(prev_spec, "version", None),
                 getattr(curr_spec, "version", None),
             )
