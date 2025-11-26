@@ -6,6 +6,7 @@ transactions in parallel to analyze third-party dependencies.
 """
 
 import logging
+import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -190,10 +191,15 @@ class ResolveDepsPhase(BasePhase):
         self, successful_deps: List[Dict[str, Any]]
     ) -> List[str]:
         """Create child transactions and collect their graph IDs."""
-        # Get coordinator and factory
-        coordinator = TransactionCoordinator.get_instance(
-            max_processes=self.state.max_workers
-        )
+        # Use nested process pools only on Python >= 3.13 to avoid 3.12
+        # shutdown hangs when a worker process creates another pool.
+        use_process_pool = sys.version_info >= (3, 13)
+
+        coordinator = None
+        if use_process_pool:
+            coordinator = TransactionCoordinator.get_instance(
+                max_processes=self.state.max_workers
+            )
         factory = self.state.child_transaction_factory
 
         if not factory:
@@ -204,6 +210,8 @@ class ResolveDepsPhase(BasePhase):
 
         # Submit child transactions
         futures = []
+        child_graph_ids: List[str] = []
+        completed, failed = 0, 0
         for dep in successful_deps:
             logger.info("Creating child transaction for: %s", dep["name"])
 
@@ -222,13 +230,50 @@ class ResolveDepsPhase(BasePhase):
                 graph_build_config=self.state.graph_build_config,
             )
 
-            future = coordinator.submit(child_tx)
-            futures.append((dep, future, child_tx.transaction_id))
+            if use_process_pool and coordinator is not None:
+                future = coordinator.submit(child_tx)
+                futures.append((dep, future, child_tx.transaction_id))
+            else:
+                # Inline execution fallback for Python 3.12
+                try:
+                    result = child_tx.run()
+                    if result.success:
+                        completed += 1
+                        logger.info(
+                            "Child %s completed inline: %s (%d nodes, %d edges)",
+                            child_tx.transaction_id,
+                            dep["name"],
+                            result.node_count,
+                            result.edge_count,
+                        )
+                        self._link_dependency_graph(result.graph_id, dep)
+                        if result.graph_id:
+                            child_graph_ids.append(result.graph_id)
+                    else:
+                        failed += 1
+                        logger.error(
+                            "Child %s failed inline: %s",
+                            child_tx.transaction_id,
+                            result.error,
+                        )
+                except Exception as exc:  # pragma: no cover - defensive
+                    failed += 1
+                    logger.error(
+                        "Inline child %s failed with exception: %s",
+                        child_tx.transaction_id,
+                        exc,
+                    )
 
         # Wait for completion
+        if not use_process_pool:
+            logger.info(
+                "Resolution completed inline: %d succeeded, %d failed",
+                completed,
+                failed,
+            )
+            return child_graph_ids
+
         logger.info("Waiting for %d child transactions", len(futures))
-        child_graph_ids = []
-        completed, failed = 0, 0
 
         try:
             for dep, future, child_tx_id in futures:
