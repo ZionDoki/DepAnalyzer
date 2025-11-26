@@ -188,7 +188,25 @@ class CodeParserPool:
         """
         if cls._instance is None:
             cls._instance = cls(max_workers)
-        return cls._instance
+            return cls._instance
+
+        instance: "CodeParserPool" = cls._instance
+        if max_workers is not None:
+            requested = max_workers or os.cpu_count() or 4
+            if instance._executor is None and requested != instance.max_workers:
+                instance.max_workers = requested
+                logger.info(
+                    "Reconfigured CodeParserPool max_workers to %d",
+                    instance.max_workers,
+                )
+            elif instance._executor is not None and requested != instance.max_workers:
+                logger.debug(
+                    "CodeParserPool already started with %d workers, ignoring new value %d",
+                    instance.max_workers,
+                    requested,
+                )
+
+        return instance
 
     @classmethod
     def reset_instance(cls) -> None:

@@ -180,7 +180,32 @@ class TransactionCoordinator:
         """
         if cls._instance is None:
             cls._instance = cls(max_processes)
-        return cls._instance
+            return cls._instance
+
+        instance: "TransactionCoordinator" = cls._instance
+
+        if (
+            max_processes is not None
+            and instance._executor is None
+            and max_processes != instance.max_processes
+        ):
+            instance.max_processes = max_processes
+            logger.info(
+                "Reconfigured TransactionCoordinator max_processes to %d",
+                instance.max_processes,
+            )
+        elif (
+            max_processes is not None
+            and instance._executor is not None
+            and max_processes != instance.max_processes
+        ):
+            logger.debug(
+                "TransactionCoordinator already started with %d workers, ignoring new value %d",
+                instance.max_processes,
+                max_processes,
+            )
+
+        return instance
 
     @classmethod
     def reset_instance(cls) -> None:

@@ -160,7 +160,7 @@ class ParsePhase(BasePhase):
 
     def _parse_code_files(self, code_files_to_parse: Dict[str, List[Path]]) -> None:
         """Stage 2: Parse code files via CodeParserPool."""
-        code_pool = CodeParserPool.get_instance()
+        code_pool = CodeParserPool.get_instance(self.state.max_workers)
         futures_list = []
 
         try:

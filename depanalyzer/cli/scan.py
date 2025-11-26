@@ -123,7 +123,9 @@ def _scan_command_impl(args) -> int:
 
         # Create coordinator with process pool
         logger.info("Creating TransactionCoordinator...")
-        coordinator = TransactionCoordinator.get_instance()
+        coordinator = TransactionCoordinator.get_instance(
+            max_processes=args.workers
+        )
         logger.info("TransactionCoordinator created successfully")
 
         # Create and submit transaction to process pool

@@ -191,7 +191,9 @@ class ResolveDepsPhase(BasePhase):
     ) -> List[str]:
         """Create child transactions and collect their graph IDs."""
         # Get coordinator and factory
-        coordinator = TransactionCoordinator.get_instance()
+        coordinator = TransactionCoordinator.get_instance(
+            max_processes=self.state.max_workers
+        )
         factory = self.state.child_transaction_factory
 
         if not factory:
