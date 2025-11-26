@@ -110,6 +110,15 @@ class HvigorDepFetcher(BaseDepFetcher):
         if local_path is not None:
             return local_path
 
+        # If explicit local dependency failed to resolve, abort to prevent fallback
+        if dep_spec.version and dep_spec.version.startswith("file:"):
+            logger.error(
+                "Explicit local dependency %s (%s) not found in workspace. Aborting fetch.",
+                dep_spec.name,
+                dep_spec.version,
+            )
+            return None
+
         # Git-based dependencies use the generic cache-dir layout which
         # includes the requested version string. This is safe because Git
         # repositories already encode their own versioning scheme (tags/refs).
@@ -117,6 +126,17 @@ class HvigorDepFetcher(BaseDepFetcher):
         if dep_type == "git" or registry_type == "git" or (
             dep_spec.source_url and ".git" in dep_spec.source_url
         ):
+            # Check if this is a self-reference to the workspace repo
+            if workspace_root:
+                repo_url = dep_spec.source_url
+                if self._is_same_repo(workspace_root, repo_url):
+                    logger.info(
+                        "Git dependency %s points to current workspace (%s). returning workspace root.",
+                        dep_spec.name,
+                        repo_url,
+                    )
+                    return workspace_root
+
             cache_dir = self.get_cache_dir(dep_spec)
 
             if cache_dir.exists() and self._is_valid_cache(cache_dir):
@@ -769,3 +789,38 @@ class HvigorDepFetcher(BaseDepFetcher):
 
         cmd_set = ["git", "-C", str(repo_dir), "sparse-checkout", "set", *sparse_paths]
         subprocess.run(cmd_set, capture_output=True, text=True, check=False)
+
+    def _is_same_repo(self, workspace_root: Path, target_url: str) -> bool:
+        """Check if target_url points to the workspace's git repository."""
+        if not target_url:
+            return False
+
+        try:
+            # Get workspace remote URL
+            cmd = ["git", "-C", str(workspace_root), "remote", "get-url", "origin"]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False
+
+            origin_url = result.stdout.strip()
+            if not origin_url:
+                return False
+
+            # Simple normalization for comparison
+            def normalize(u):
+                u = u.strip()
+                if u.endswith(".git"):
+                    u = u[:-4]
+                # Handle common git protocols
+                if u.startswith("git@"):
+                    u = u.replace(":", "/")
+                if u.startswith("https://"):
+                    u = u.replace("https://", "")
+                if u.startswith("http://"):
+                    u = u.replace("http://", "")
+                return u
+
+            return normalize(origin_url) == normalize(target_url)
+
+        except Exception:
+            return False

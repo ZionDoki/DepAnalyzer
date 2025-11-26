@@ -361,11 +361,56 @@ class HvigorParser(BaseParser):
         )
         self.publish_parse_event(event)
 
+    def _get_workspace_modules(self) -> Dict[str, str]:
+        """Get mapping of package names to module names for workspace modules."""
+        if hasattr(self, "_cached_workspace_map"):
+            return self._cached_workspace_map
+
+        self._cached_workspace_map = {}
+        build_profile = self.workspace_root / "build-profile.json5"
+        if not build_profile.exists():
+            return self._cached_workspace_map
+
+        try:
+            with open(build_profile, "r", encoding="utf-8") as f:
+                data = json5.load(f)
+
+            for mod in data.get("modules", []):
+                mod_name = mod.get("name") if isinstance(mod, dict) else mod
+                if not mod_name or not isinstance(mod_name, str):
+                    continue
+
+                # mod_name is usually the directory name relative to root
+                # Add the directory name itself as a known local name
+                self._cached_workspace_map[mod_name] = mod_name
+
+                # Check for package name alias in oh-package.json5
+                mod_path = self.workspace_root / mod_name
+                pkg_file = mod_path / "oh-package.json5"
+
+                if pkg_file.exists():
+                    try:
+                        with open(pkg_file, "r", encoding="utf-8") as pf:
+                            pkg_data = json5.load(pf)
+                            pkg_name = pkg_data.get("name")
+                            if pkg_name:
+                                self._cached_workspace_map[pkg_name] = mod_name
+                    except Exception:
+                        pass
+
+        except Exception as e:
+            logger.warning(
+                "Failed to scan workspace modules: %s", e
+            )
+
+        return self._cached_workspace_map
+
     def _process_package_dependencies(
         self, result: Dict[str, Any], config_file_id: str
     ):
         """Process oh-package.json5 dependencies."""
         config_file = result.get("file")
+        workspace_map = self._get_workspace_modules()
 
         # Determine owning module from config file path
         # oh-package.json5 files can be at:
@@ -437,15 +482,22 @@ class HvigorParser(BaseParser):
             if not dep_name:
                 continue
 
-            # Check if this is a local (file:) dependency
-            is_local = isinstance(dep_version, str) and dep_version.startswith("file:")
+            # Check if this is a local (file:) dependency or internal module
+            is_explicit_local = isinstance(dep_version, str) and dep_version.startswith(
+                "file:"
+            )
+            local_module_name = workspace_map.get(dep_name)
 
-            if is_local:
+            if is_explicit_local or local_module_name:
                 # Local dependency - reference to another module or local package
-                # Extract the target module name from the dependency name (e.g., @sj/ffmpeg -> ffmpeg)
-                target_module_name = (
-                    dep_name.split("/")[-1] if "/" in dep_name else dep_name
-                )
+                if local_module_name:
+                    target_module_name = local_module_name
+                else:
+                    # Fallback for explicit file: deps not in map
+                    target_module_name = (
+                        dep_name.split("/")[-1] if "/" in dep_name else dep_name
+                    )
+
                 target_module_id = f"module:{target_module_name}"
 
                 # Ensure target module node exists so it does not stay as type=unknown
