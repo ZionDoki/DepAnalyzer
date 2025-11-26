@@ -33,6 +33,38 @@ To use the license scanning and compatibility features, you need two additional 
     # Download and configure a local copy of ScanCode (recommended)
     depanalyzer --install
     ```
+    **Manual ScanCode installation**
+
+    Depanalyzer only needs access to the `scancode` executable. You can either place it on your `PATH` (system command mode) or keep it in a project-specific directory and point Depanalyzer at it (non-system command mode).
+
+    **System command mode (global `scancode`):**
+
+    1. Download the latest release archive from the [ScanCode Toolkit releases page](https://github.com/aboutcode-org/scancode-toolkit/releases).
+    2. Extract it somewhere such as `/opt/scancode-toolkit` (Linux/macOS) or `C:\tools\scancode-toolkit` (Windows) and run the bundled configure script once:
+        ```bash
+        cd /opt/scancode-toolkit-<version>
+        ./scancode --help   # on Windows use .\scancode.bat --help
+        ```
+    3. Add the directory that contains the `scancode` (or `scancode.bat`) executable to your shell path:
+        ```bash
+        # Linux/macOS
+        export PATH="/opt/scancode-toolkit-<version>:$PATH"
+
+        # PowerShell profile (Windows)
+        $env:Path = "C:\\tools\\scancode-toolkit-<version>;" + $env:Path
+        ```
+    4. Verify the installation with `scancode --version`. Depanalyzer will automatically discover it via `PATH`.
+
+    **Non-system command mode (local copy):**
+
+    1. Download and extract the toolkit under your workspace, for example `tools/scancode-toolkit`.
+    2. Run the configure script once (`./scancode --help`) so the bundled virtual environment is prepared.
+    3. Point Depanalyzer at the executable by setting `SCANCODE_BIN` (or `SCANCODE_CLI`) to the full path of the `scancode` script before invoking the CLI or scripts:
+        ```bash
+        export SCANCODE_BIN="$PWD/tools/scancode-toolkit/scancode"        # Linux/macOS
+        setx SCANCODE_BIN "C:\Workspace\project\tools\scancode-toolkit\scancode.bat"  # Windows
+        ```
+        `SCANCODE_BIN`/`SCANCODE_CLI` must reference the executable itself, while `SCANCODE_TOOLKIT` can point to the toolkit directory (matching the layout produced by `depanalyzer --install`, which defaults to `~/.depanalyzer/scancode-toolkit`). Depanalyzer checks these variables before falling back to `PATH`, so the command does not need to be globally installed. This mode does **not** expose `scancode` as a shell command; Depanalyzer calls it via the environment variable, and you can still run it manually by invoking the absolute path stored in `SCANCODE_BIN`.
 
 2.  **Liscopelens (for Compatibility Checks):**
     Required if you want to run the full compliance pipeline.

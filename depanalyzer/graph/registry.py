@@ -7,6 +7,7 @@ Uses file-based locking for cross-process synchronization instead of
 multiprocessing.Manager to avoid orphaned server processes during shutdown.
 """
 
+import ctypes
 import json
 import logging
 import os
@@ -23,6 +24,14 @@ except ImportError:
     fcntl = None
     _HAS_FCNTL = False
 
+try:
+    import msvcrt
+
+    _HAS_MSVCRT = True
+except ImportError:
+    msvcrt = None
+    _HAS_MSVCRT = False
+
 logger = logging.getLogger("depanalyzer.graph.registry")
 
 
@@ -37,6 +46,7 @@ class GraphRegistry:
 
     _instance: Optional["GraphRegistry"] = None
     _initialized: bool = False
+    _FALLBACK_STALE_GRACE_SECONDS = 300.0
 
     def __new__(cls, cache_root: Optional[Path] = None) -> "GraphRegistry":
         """Singleton pattern for global registry.
@@ -114,8 +124,9 @@ class GraphRegistry:
         """Acquire an exclusive file lock for registry operations.
 
         On POSIX platforms this uses fcntl.flock for robustness. On
-        platforms without fcntl (e.g. Windows), it falls back to a
-        best-effort lock file based on O_CREAT | O_EXCL.
+        platforms without fcntl (e.g. Windows), it uses msvcrt locking
+        when available, and otherwise falls back to a best-effort lock
+        file based on O_CREAT | O_EXCL with stale lock recovery.
 
         Args:
             timeout: Maximum time in seconds to wait for the lock when
@@ -138,7 +149,47 @@ class GraphRegistry:
                     fcntl.flock(fd, fcntl.LOCK_UN)
                 finally:
                     os.close(fd)
-        else:  # Fallback for non-posix platforms (Windows)
+        elif _HAS_MSVCRT:  # Windows-native locking
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
+            start = time.time()
+            locked = False
+            try:
+                end_offset = os.lseek(fd, 0, os.SEEK_END)
+                if end_offset == 0:
+                    os.write(fd, b"\0")
+                os.lseek(fd, 0, os.SEEK_SET)
+                while True:
+                    try:
+                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                        locked = True
+                        break
+                    except OSError as lock_err:
+                        if time.time() - start > timeout:
+                            logger.error(
+                                "Timeout acquiring registry lock via msvcrt: %s",
+                                lock_path,
+                            )
+                            raise TimeoutError(
+                                f"Timeout acquiring registry lock: {lock_path}"
+                            ) from lock_err
+                        time.sleep(poll_interval)
+                try:
+                    yield
+                finally:
+                    if locked:
+                        try:
+                            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                        except OSError as unlock_err:
+                            logger.debug(
+                                "Failed to unlock registry via msvcrt: %s",
+                                unlock_err,
+                            )
+            finally:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        else:  # Fallback when neither fcntl nor msvcrt is available
             start = time.time()
             fd: Optional[int] = None
             while True:
@@ -147,8 +198,11 @@ class GraphRegistry:
                         str(lock_path),
                         os.O_CREAT | os.O_EXCL | os.O_RDWR,
                     )
+                    self._write_fallback_lock_metadata(fd)
                     break
                 except FileExistsError as lock_err:
+                    if self._try_cleanup_stale_lock(lock_path):
+                        continue
                     if time.time() - start > timeout:
                         logger.error("Timeout acquiring registry lock: %s", lock_path)
                         raise TimeoutError(
@@ -174,6 +228,112 @@ class GraphRegistry:
                         lock_path,
                         e,
                     )
+
+    def _write_fallback_lock_metadata(self, fd: int) -> None:
+        """Write PID and timestamp metadata to the fallback lock file."""
+        metadata = {"pid": os.getpid(), "timestamp": time.time()}
+        serialized = json.dumps(metadata, separators=(",", ":")).encode("utf-8")
+        try:
+            os.ftruncate(fd, 0)
+        except OSError:
+            pass
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            os.write(fd, serialized)
+        except OSError as write_error:
+            logger.debug("Failed to write registry lock metadata: %s", write_error)
+            return
+        try:
+            os.fsync(fd)
+        except (AttributeError, OSError):
+            # Some platforms may not expose fsync; best effort only.
+            pass
+
+    def _try_cleanup_stale_lock(self, lock_path: Path) -> bool:
+        """Attempt to delete a stale fallback lock file.
+
+        Returns:
+            bool: True if the caller should retry lock acquisition immediately.
+        """
+        owner_pid: Optional[int] = None
+        timestamp = 0.0
+        try:
+            with open(lock_path, "r", encoding="utf-8") as lock_file:
+                payload = json.load(lock_file)
+            owner_pid = int(payload.get("pid", -1))
+            timestamp = float(payload.get("timestamp", 0.0))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            logger.debug("Unable to parse registry lock metadata %s: %s", lock_path, exc)
+
+        if owner_pid is not None and owner_pid > 0:
+            if self._pid_is_running(owner_pid):
+                return False
+        else:
+            owner_pid = None
+
+        if timestamp <= 0.0:
+            try:
+                timestamp = lock_path.stat().st_mtime
+            except OSError:
+                timestamp = 0.0
+
+        if (
+            owner_pid is None
+            and timestamp > 0.0
+            and time.time() - timestamp < self._FALLBACK_STALE_GRACE_SECONDS
+        ):
+            return False
+
+        try:
+            os.unlink(lock_path)
+            if owner_pid:
+                logger.warning(
+                    "Removed stale registry lock %s owned by PID %d",
+                    lock_path,
+                    owner_pid,
+                )
+            else:
+                logger.warning(
+                    "Removed stale registry lock %s with missing metadata",
+                    lock_path,
+                )
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError as cleanup_error:
+            logger.debug(
+                "Failed to cleanup registry lock file %s: %s",
+                lock_path,
+                cleanup_error,
+            )
+            return False
+
+    @staticmethod
+    def _pid_is_running(pid: int) -> bool:
+        """Return True if the provided PID appears to be alive."""
+        if pid <= 0:
+            return False
+        if os.name == "nt":
+            if ctypes is None:
+                return True
+            kernel32 = ctypes.windll.kernel32
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+            )
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return True
+        return True
 
     def _load_registry(self) -> None:
         """Load registry from disk with file locking."""
