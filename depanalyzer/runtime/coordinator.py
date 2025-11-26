@@ -226,16 +226,22 @@ class TransactionCoordinator:
         """
         # Ensure executor is created
         if self._executor is None:
-            # Use explicit 'spawn' context for Windows compatibility
-            # On Unix, this is harmless; on Windows, it's required to avoid bootstrap errors
-            mp_context = multiprocessing.get_context("spawn")
-            self._executor = ProcessPoolExecutor(
-                max_workers=self.max_processes,
-                mp_context=mp_context,
-            )
+            # Only force 'spawn' on Windows; on POSIX, prefer the default (fork)
+            # to avoid known shutdown hangs in Python 3.12 spawn pools.
+            executor_kwargs = {"max_workers": self.max_processes}
+            if os.name == "nt":
+                executor_kwargs["mp_context"] = multiprocessing.get_context("spawn")
+                start_method = "spawn"
+            else:
+                start_method = (
+                    multiprocessing.get_start_method(allow_none=True) or "default"
+                )
+
+            self._executor = ProcessPoolExecutor(**executor_kwargs)
             logger.info(
-                "Process pool executor started with %d workers (spawn context)",
+                "Process pool executor started with %d workers (start_method=%s)",
                 self.max_processes,
+                start_method,
             )
 
         # Serialize transaction
@@ -414,7 +420,14 @@ class TransactionCoordinator:
         if self._executor is not None:
             self._log_executor_diagnostics("pre-shutdown")
             logger.info("Shutting down process pool (wait=%s)", wait)
-            self._executor.shutdown(wait=wait)
+            executor = self._executor
+            self._executor = None
+
+            # Use wait=False to avoid blocking on Python 3.12 spawn shutdown hangs.
+            executor.shutdown(wait=False)
+            if wait:
+                self._wait_for_executor_processes(executor, timeout=10.0)
+
             self._executor = None
             self._futures.clear()
             logger.info("Process pool shut down")
@@ -426,3 +439,46 @@ class TransactionCoordinator:
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Context manager exit."""
         self.shutdown(wait=True)
+
+    def _wait_for_executor_processes(
+        self, executor: ProcessPoolExecutor, timeout: float = 10.0
+    ) -> None:
+        """Best-effort wait for worker processes, with forced termination fallback."""
+        processes = getattr(executor, "_processes", {}) or {}
+        if not processes:
+            return
+
+        start = time.time()
+        for proc in processes.values():
+            remaining = timeout - (time.time() - start)
+            if remaining <= 0:
+                break
+            try:
+                proc.join(remaining)
+            except (OSError, ValueError):
+                logger.debug("Failed to join process %s", getattr(proc, "pid", "?"))
+
+        alive = [proc for proc in processes.values() if proc.is_alive()]
+        if not alive:
+            return
+
+        logger.warning(
+            "Force-terminating %d stuck worker process(es): %s",
+            len(alive),
+            ", ".join(str(getattr(proc, "pid", "?")) for proc in alive),
+        )
+        for proc in alive:
+            try:
+                proc.terminate()
+            except (OSError, ValueError) as exc:
+                logger.debug(
+                    "Failed to terminate process %s: %s",
+                    getattr(proc, "pid", "?"),
+                    exc,
+                )
+
+        for proc in alive:
+            try:
+                proc.join(timeout=1.0)
+            except (OSError, ValueError):
+                logger.debug("Failed to join terminated process %s", getattr(proc, "pid", "?"))
