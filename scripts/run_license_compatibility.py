@@ -110,14 +110,18 @@ def run_command(command: List[str], workdir: Optional[Path] = None) -> None:
         text=True,
         capture_output=True,
     )
+    if result.returncode != 0:
+        if result.stdout:
+            logger.error("stdout:\n%s", result.stdout)
+        if result.stderr:
+            logger.error("stderr:\n%s", result.stderr)
+        raise RuntimeError(
+            f"Command failed with exit code {result.returncode}: {' '.join(command)}"
+        )
     if result.stdout:
         logger.debug("stdout:\n%s", result.stdout)
     if result.stderr:
         logger.debug("stderr:\n%s", result.stderr)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Command failed with exit code {result.returncode}: {' '.join(command)}"
-        )
 
 
 def _update_task_phase(
