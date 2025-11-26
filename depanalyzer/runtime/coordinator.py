@@ -351,6 +351,60 @@ class TransactionCoordinator:
         """
         return dict(self._results)
 
+    def _log_executor_diagnostics(self, when: str) -> None:
+        """Log best-effort diagnostics for the process pool to debug shutdown hangs."""
+        executor = self._executor
+        if executor is None:
+            logger.debug("Executor diagnostics (%s): executor is None", when)
+            return
+
+        # Future state summary
+        try:
+            pending = [tx_id for future, tx_id in self._futures.items() if not future.done()]
+            done = [tx_id for future, tx_id in self._futures.items() if future.done()]
+            logger.info(
+                "Executor diagnostics (%s): futures total=%d, pending=%d (%s), done=%d (%s)",
+                when,
+                len(self._futures),
+                len(pending),
+                ", ".join(pending) or "-",
+                len(done),
+                ", ".join(done) or "-",
+            )
+        except Exception as exc:  # pragma: no cover - diagnostics only
+            logger.debug(
+                "Executor diagnostics (%s) failed while summarizing futures: %s",
+                when,
+                exc,
+            )
+
+        # Process state summary (uses private attributes defensively)
+        try:
+            processes = getattr(executor, "_processes", {}) or {}
+            if processes:
+                statuses = []
+                for pid, proc in processes.items():
+                    alive = proc.is_alive()
+                    exit_code = getattr(proc, "exitcode", None)
+                    status = f"{pid}:{'alive' if alive else 'dead'}"
+                    if exit_code is not None:
+                        status = f"{status}/exit={exit_code}"
+                    statuses.append(status)
+                logger.info(
+                    "Executor diagnostics (%s): processes=%d [%s]",
+                    when,
+                    len(processes),
+                    ", ".join(statuses),
+                )
+            else:
+                logger.info("Executor diagnostics (%s): processes=0", when)
+        except Exception as exc:  # pragma: no cover - diagnostics only
+            logger.debug(
+                "Executor diagnostics (%s) failed while summarizing processes: %s",
+                when,
+                exc,
+            )
+
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the process pool.
 
@@ -358,6 +412,7 @@ class TransactionCoordinator:
             wait: Whether to wait for pending tasks to complete.
         """
         if self._executor is not None:
+            self._log_executor_diagnostics("pre-shutdown")
             logger.info("Shutting down process pool (wait=%s)", wait)
             self._executor.shutdown(wait=wait)
             self._executor = None
