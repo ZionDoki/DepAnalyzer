@@ -12,7 +12,9 @@ transactions), this pool provides file-level parallelism for fine-grained code p
 
 
 import logging
+import multiprocessing
 import os
+import time
 from concurrent.futures import (
     BrokenExecutor,
     CancelledError,
@@ -216,6 +218,30 @@ class CodeParserPool:
         cls._instance = None
         cls._initialized = False
 
+    def _create_executor(self) -> ProcessPoolExecutor:
+        """Create a ProcessPoolExecutor with a POSIX-friendly start method."""
+        executor_kwargs = {"max_workers": self.max_workers}
+        start_method = "default"
+        if os.name == "nt":
+            executor_kwargs["mp_context"] = multiprocessing.get_context("spawn")
+            start_method = "spawn"
+        else:
+            try:
+                executor_kwargs["mp_context"] = multiprocessing.get_context("fork")
+                start_method = "fork"
+            except (ValueError, RuntimeError):
+                start_method = (
+                    multiprocessing.get_start_method(allow_none=True) or "default"
+                )
+
+        executor = ProcessPoolExecutor(**executor_kwargs)
+        logger.info(
+            "Process pool executor started with %d workers (start_method=%s)",
+            self.max_workers,
+            start_method,
+        )
+        return executor
+
     def _ensure_executor(self) -> ProcessPoolExecutor:
         """Ensure executor is created (lazy initialization).
 
@@ -223,10 +249,7 @@ class CodeParserPool:
             ProcessPoolExecutor: The process pool executor.
         """
         if self._executor is None:
-            self._executor = ProcessPoolExecutor(max_workers=self.max_workers)
-            logger.info(
-                "Process pool executor started with %d workers", self.max_workers
-            )
+            self._executor = self._create_executor()
         return self._executor
 
     def submit_file(
@@ -330,10 +353,92 @@ class CodeParserPool:
             wait: Whether to wait for pending tasks to complete.
         """
         if self._executor is not None:
+            executor = self._executor
+            self._log_executor_diagnostics("pre-shutdown")
             logger.info("Shutting down code parser pool (wait=%s)", wait)
-            self._executor.shutdown(wait=wait)
+            executor.shutdown(wait=False)
+            if wait:
+                self._wait_for_executor_processes(executor, timeout=10.0)
             self._executor = None
             logger.info("Code parser pool shut down")
+
+    def _log_executor_diagnostics(self, when: str) -> None:
+        """Log best-effort diagnostics for the pool to debug shutdown hangs."""
+        executor = self._executor
+        if executor is None:
+            logger.debug("CodeParserPool diagnostics (%s): executor is None", when)
+            return
+
+        try:
+            processes = getattr(executor, "_processes", {}) or {}
+            if processes:
+                statuses = []
+                for pid, proc in processes.items():
+                    alive = proc.is_alive()
+                    exit_code = getattr(proc, "exitcode", None)
+                    status = f"{pid}:{'alive' if alive else 'dead'}"
+                    if exit_code is not None:
+                        status = f"{status}/exit={exit_code}"
+                    statuses.append(status)
+                logger.info(
+                    "CodeParserPool diagnostics (%s): processes=%d [%s]",
+                    when,
+                    len(processes),
+                    ", ".join(statuses),
+                )
+            else:
+                logger.info("CodeParserPool diagnostics (%s): processes=0", when)
+        except Exception as exc:  # pragma: no cover - diagnostics only
+            logger.debug(
+                "CodeParserPool diagnostics (%s) failed: %s",
+                when,
+                exc,
+            )
+
+    def _wait_for_executor_processes(
+        self, executor: ProcessPoolExecutor, timeout: float = 10.0
+    ) -> None:
+        """Best-effort wait for worker processes, with forced termination fallback."""
+        processes = getattr(executor, "_processes", {}) or {}
+        if not processes:
+            return
+
+        start = time.time()
+        for proc in processes.values():
+            remaining = timeout - (time.time() - start)
+            if remaining <= 0:
+                break
+            try:
+                proc.join(remaining)
+            except (OSError, ValueError):
+                logger.debug("Failed to join process %s", getattr(proc, "pid", "?"))
+
+        alive = [proc for proc in processes.values() if proc.is_alive()]
+        if not alive:
+            return
+
+        logger.warning(
+            "Force-terminating %d stuck code parser worker(s): %s",
+            len(alive),
+            ", ".join(str(getattr(proc, "pid", "?")) for proc in alive),
+        )
+        for proc in alive:
+            try:
+                proc.terminate()
+            except (OSError, ValueError) as exc:
+                logger.debug(
+                    "Failed to terminate process %s: %s",
+                    getattr(proc, "pid", "?"),
+                    exc,
+                )
+
+        for proc in alive:
+            try:
+                proc.join(timeout=1.0)
+            except (OSError, ValueError):
+                logger.debug(
+                    "Failed to join terminated process %s", getattr(proc, "pid", "?")
+                )
 
     def __enter__(self) -> "CodeParserPool":
         """Context manager entry."""

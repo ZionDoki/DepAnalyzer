@@ -230,33 +230,44 @@ class ResolveDepsPhase(BasePhase):
         child_graph_ids = []
         completed, failed = 0, 0
 
-        for dep, future, child_tx_id in futures:
-            try:
-                result = future.result(timeout=600)
+        try:
+            for dep, future, child_tx_id in futures:
+                try:
+                    result = future.result(timeout=600)
 
-                if result.success:
-                    completed += 1
-                    logger.info(
-                        "Child %s completed: %s (%d nodes, %d edges)",
-                        child_tx_id,
-                        dep["name"],
-                        result.node_count,
-                        result.edge_count,
-                    )
+                    if result.success:
+                        completed += 1
+                        logger.info(
+                            "Child %s completed: %s (%d nodes, %d edges)",
+                            child_tx_id,
+                            dep["name"],
+                            result.node_count,
+                            result.edge_count,
+                        )
 
-                    # Link child graph
-                    self._link_dependency_graph(result.graph_id, dep)
-                    if result.graph_id:
-                        child_graph_ids.append(result.graph_id)
-                else:
+                        # Link child graph
+                        self._link_dependency_graph(result.graph_id, dep)
+                        if result.graph_id:
+                            child_graph_ids.append(result.graph_id)
+                    else:
+                        failed += 1
+                        logger.error("Child %s failed: %s", child_tx_id, result.error)
+
+                except _SAFE_EXCEPTIONS as e:
                     failed += 1
-                    logger.error("Child %s failed: %s", child_tx_id, result.error)
+                    logger.error("Failed to get result for child %s: %s", child_tx_id, e)
 
-            except _SAFE_EXCEPTIONS as e:
-                failed += 1
-                logger.error("Failed to get result for child %s: %s", child_tx_id, e)
-
-        logger.info("Resolution completed: %d succeeded, %d failed", completed, failed)
+            logger.info(
+                "Resolution completed: %d succeeded, %d failed", completed, failed
+            )
+        finally:
+            try:
+                coordinator.shutdown()
+            except (OSError, RuntimeError, ValueError) as exc:
+                logger.debug(
+                    "Failed to shut down child transaction coordinator cleanly: %s",
+                    exc,
+                )
         return child_graph_ids
 
     def _link_dependency_graph(

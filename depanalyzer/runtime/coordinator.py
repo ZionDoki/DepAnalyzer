@@ -226,16 +226,20 @@ class TransactionCoordinator:
         """
         # Ensure executor is created
         if self._executor is None:
-            # Only force 'spawn' on Windows; on POSIX, prefer the default (fork)
-            # to avoid known shutdown hangs in Python 3.12 spawn pools.
+            # Only force 'spawn' on Windows; on POSIX, prefer fork to dodge
+            # Python 3.12 spawn shutdown hangs.
             executor_kwargs = {"max_workers": self.max_processes}
             if os.name == "nt":
                 executor_kwargs["mp_context"] = multiprocessing.get_context("spawn")
                 start_method = "spawn"
             else:
-                start_method = (
-                    multiprocessing.get_start_method(allow_none=True) or "default"
-                )
+                try:
+                    executor_kwargs["mp_context"] = multiprocessing.get_context("fork")
+                    start_method = "fork"
+                except (ValueError, RuntimeError):
+                    start_method = (
+                        multiprocessing.get_start_method(allow_none=True) or "default"
+                    )
 
             self._executor = ProcessPoolExecutor(**executor_kwargs)
             logger.info(
