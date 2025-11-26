@@ -163,27 +163,42 @@ class ParsePhase(BasePhase):
         code_pool = CodeParserPool.get_instance()
         futures_list = []
 
-        for ecosystem, file_paths in code_files_to_parse.items():
-            logger.info("Submitting %d code files for %s", len(file_paths), ecosystem)
-            code_cfg = self.state.graph_build_config.get_code_parser_config(ecosystem)
-            batch_futures = code_pool.submit_batch(file_paths, ecosystem, config=code_cfg)
-            futures_list.extend(batch_futures)
+        try:
+            for ecosystem, file_paths in code_files_to_parse.items():
+                logger.info("Submitting %d code files for %s", len(file_paths), ecosystem)
+                code_cfg = self.state.graph_build_config.get_code_parser_config(ecosystem)
+                batch_futures = code_pool.submit_batch(
+                    file_paths,
+                    ecosystem,
+                    config=code_cfg,
+                )
+                futures_list.extend(batch_futures)
 
-        logger.info("Waiting for %d code files to be parsed", len(futures_list))
-        code_results = code_pool.wait_for_completion(futures_list, timeout=300)
+            logger.info("Waiting for %d code files to be parsed", len(futures_list))
+            code_results = code_pool.wait_for_completion(futures_list, timeout=300)
 
-        # Process results
-        successful, skipped, failed = 0, 0, 0
-        for file_path, parse_result in code_results.items():
-            if parse_result.get("skipped"):
-                skipped += 1
-            elif parse_result.get("error"):
-                failed += 1
-            else:
-                self._process_code_parse_result(file_path, parse_result)
-                successful += 1
+            # Process results
+            successful, skipped, failed = 0, 0, 0
+            for file_path, parse_result in code_results.items():
+                if parse_result.get("skipped"):
+                    skipped += 1
+                elif parse_result.get("error"):
+                    failed += 1
+                else:
+                    self._process_code_parse_result(file_path, parse_result)
+                    successful += 1
 
-        logger.info("Stage 2 completed: %d ok, %d skipped, %d failed", successful, skipped, failed)
+            logger.info(
+                "Stage 2 completed: %d ok, %d skipped, %d failed",
+                successful,
+                skipped,
+                failed,
+            )
+        finally:
+            try:
+                code_pool.shutdown(wait=True)
+            except (RuntimeError, ValueError, OSError) as e:
+                logger.debug("Failed to shut down code parser pool cleanly: %s", e)
 
     def _process_code_parse_result(self, file_path: Path, parse_result: Dict[str, Any]) -> None:
         """Process code parse result via CodeDependencyMapper."""
