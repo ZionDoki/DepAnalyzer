@@ -14,7 +14,7 @@ logger = logging.getLogger("depanalyzer.parsers.maven.code_parser")
 _TREE_SITTER_AVAILABLE = True
 try:
     import tree_sitter_java as tsj
-    from tree_sitter import Language, Parser, Query
+    from tree_sitter import Language, Parser, Query, QueryCursor
 
     JAVA_LANGUAGE = Language(tsj.language())
 except (ImportError, AttributeError, OSError, TypeError) as err:  # pragma: no cover
@@ -24,13 +24,11 @@ except (ImportError, AttributeError, OSError, TypeError) as err:  # pragma: no c
 
 
 IMPORT_QUERY = """
-    (import_declaration
-        name: (_) @import_name)
+    (import_declaration (scoped_identifier) @import_name)
 """
 
 PACKAGE_QUERY = """
-    (package_declaration
-        name: (_) @package_name)
+    (package_declaration (scoped_identifier) @package_name)
 """
 
 
@@ -61,8 +59,7 @@ class MavenCodeParser(BaseCodeParser):
             return {**result, "error": str(exc)}
 
         try:
-            parser = Parser()
-            parser.set_language(JAVA_LANGUAGE)
+            parser = Parser(JAVA_LANGUAGE)
             tree = parser.parse(content)
 
             imports = _run_query(tree, content, IMPORT_QUERY, "import_name")
@@ -89,17 +86,32 @@ class MavenCodeParser(BaseCodeParser):
 def _run_query(tree, content: bytes, query_str: str, capture_name: str) -> List[str]:
     """Run a tree-sitter query and collect captured identifiers."""
     query = Query(JAVA_LANGUAGE, query_str)
-    captures = query.captures(tree.root_node)
+    cursor = QueryCursor(query)
+    captures = cursor.captures(tree.root_node)
+
     results: List[str] = []
-    for node, name in captures:
-        if name != capture_name:
-            continue
-        try:
-            text = content[node.start_byte : node.end_byte].decode("utf8").strip()
-        except UnicodeDecodeError:
-            continue
-        if text:
-            results.append(text)
+    
+    # Handle dict return from captures (new binding behavior)
+    if isinstance(captures, dict):
+        nodes = captures.get(capture_name, [])
+        for node in nodes:
+            try:
+                text = content[node.start_byte : node.end_byte].decode("utf8").strip()
+                if text:
+                    results.append(text)
+            except UnicodeDecodeError:
+                continue
+    # Handle list return from captures (potential older/different binding behavior)
+    else:
+        for node, name in captures:
+            if name != capture_name:
+                continue
+            try:
+                text = content[node.start_byte : node.end_byte].decode("utf8").strip()
+                if text:
+                    results.append(text)
+            except UnicodeDecodeError:
+                continue
 
     # Deduplicate while preserving order
     seen: Set[str] = set()
@@ -114,7 +126,7 @@ def _run_query(tree, content: bytes, query_str: str, capture_name: str) -> List[
 def _extract_native_libs(text: str) -> List[str]:
     """Extract System.loadLibrary arguments."""
     libs: Set[str] = set()
-    pattern = re.compile(r"System\\.loadLibrary\\(\\s*\"([^\"]+)\"\\s*\\)")
+    pattern = re.compile(r'System\.loadLibrary\(\s*"([^"]+)"\s*\)')
     for match in pattern.finditer(text):
         libs.add(match.group(1))
     return list(libs)
