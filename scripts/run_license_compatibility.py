@@ -372,6 +372,23 @@ def _jsonify(obj: Any) -> Any:
     return obj
 
 
+def _is_project_completed(output_dir: Path) -> bool:
+    """Check if a project has already been processed successfully.
+
+    Args:
+        output_dir: Output directory for the project.
+
+    Returns:
+        True if key result files exist, indicating the project was completed.
+    """
+    required_files = [
+        output_dir / "graph.json",
+        output_dir / "license_map.json",
+        output_dir / "compatibility_results.json",
+    ]
+    return all(f.exists() for f in required_files)
+
+
 def _derive_project_output_dir(
     base_dir: Path, project_path: Path, index: int, total: int
 ) -> Path:
@@ -596,12 +613,22 @@ def run_pipeline(args: argparse.Namespace) -> None:
 
     summaries: List[Dict[str, Any]] = []
     failures: List[str] = []
+    skipped: List[str] = []
 
     progress = _create_progress()
 
     if progress is None:
         for index, project_path in enumerate(project_paths, start=1):
             project_output_dir = _derive_project_output_dir(output_base, project_path, index, len(project_paths))
+            if not args.force and _is_project_completed(project_output_dir):
+                logger.info("Skipping %s (already completed)", project_path)
+                skipped.append(str(project_path))
+                summaries.append({
+                    "project": str(project_path),
+                    "output_dir": str(project_output_dir),
+                    "status": "skipped",
+                })
+                continue
             try:
                 summary = _run_single_project(
                     project_path,
@@ -628,6 +655,15 @@ def run_pipeline(args: argparse.Namespace) -> None:
         with progress:
             for index, project_path in enumerate(project_paths, start=1):
                 project_output_dir = _derive_project_output_dir(output_base, project_path, index, len(project_paths))
+                if not args.force and _is_project_completed(project_output_dir):
+                    logger.info("Skipping %s (already completed)", project_path)
+                    skipped.append(str(project_path))
+                    summaries.append({
+                        "project": str(project_path),
+                        "output_dir": str(project_output_dir),
+                        "status": "skipped",
+                    })
+                    continue
                 task_id = progress.add_task(
                     description=project_output_dir.name,
                     total=3,
@@ -663,6 +699,9 @@ def run_pipeline(args: argparse.Namespace) -> None:
         with summary_path.open("w", encoding="utf-8") as handle:
             json.dump(summaries, handle, indent=2, ensure_ascii=False)
         logger.info("Batch summary written to %s", summary_path)
+
+    if skipped:
+        logger.info("Skipped %d project(s) with existing results", len(skipped))
 
     if failures:
         raise RuntimeError(f"One or more projects failed: {', '.join(failures)}")
@@ -754,6 +793,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--force-scancode",
         action="store_true",
         help="Force re-run ScanCode even if cached license maps exist.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force re-run all projects even if output files already exist.",
     )
     parser.add_argument(
         "-v",
