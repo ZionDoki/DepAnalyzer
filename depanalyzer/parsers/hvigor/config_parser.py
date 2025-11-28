@@ -44,11 +44,41 @@ class HvigorParser(BaseParser):
             workspace_root: Workspace root path.
             graph_manager: Transaction graph manager.
             eventbus: Event bus for publishing parse events.
-        Returns:
+            Returns:
             None.
         """
         super().__init__(workspace_root, graph_manager, eventbus, config=config)
         self._last_config_result: Dict[str, Any] = {}
+        self._known_modules: set[str] = set()
+        self._pending_root_packages: list[tuple[Dict[str, Any], str]] = []
+        self._pending_root_locks: list[tuple[Dict[str, Any], str]] = []
+        self._root_package_applied_modules: set[str] = set()
+        self._root_lock_applied_modules: set[str] = set()
+
+    def _ensure_module_node(self, module_name: str) -> str:
+        """Ensure a module node exists for the given module name."""
+        module_id = f"module:{module_name}"
+        existing = self.graph_manager.get_node(module_id)
+        if existing is None:
+            module_root = (self.workspace_root / module_name).resolve()
+            module_spec = NodeSpec(
+                id=module_id,
+                type=NodeType.MODULE,
+                label=module_id,
+                src_path=str(module_root),
+                name=module_name,
+                parser_name=self.NAME,
+                confidence=0.9,
+                attrs={
+                    "origin": "in_repo",
+                    "provenance": "package_config",
+                    "declared_via": "oh-package.json5",
+                },
+            )
+            self.graph_manager.add_node_spec(module_spec)
+        elif existing.get("type") != NodeType.MODULE.value:
+            self.graph_manager.update_node_attribute(module_id, "type", NodeType.MODULE.value)
+        return module_id
 
     def parse(self, target_path: Path) -> None:
         """Parse a single config file and update the graph.
@@ -273,6 +303,7 @@ class HvigorParser(BaseParser):
 
             module_id = f"module:{module_name}"
             module_root = Path(self.workspace_root) / module_name
+            self._known_modules.add(module_name)
 
             module_spec = NodeSpec(
                 id=module_id,
@@ -310,6 +341,9 @@ class HvigorParser(BaseParser):
                 },
             )
             self.publish_parse_event(event)
+
+        self._flush_pending_root_packages()
+        self._flush_pending_root_locks()
 
     def _process_module_config(self, result: Dict[str, Any], config_file_id: str):
         """Process module.json5 file."""
@@ -361,15 +395,15 @@ class HvigorParser(BaseParser):
         )
         self.publish_parse_event(event)
 
+        self._flush_pending_root_packages()
+        self._flush_pending_root_locks()
+
     def _get_workspace_modules(self) -> Dict[str, str]:
         """Get mapping of package names to module names for workspace modules."""
-        if hasattr(self, "_cached_workspace_map"):
-            return self._cached_workspace_map
-
-        self._cached_workspace_map = {}
+        workspace_map: Dict[str, str] = {}
         build_profile = self.workspace_root / "build-profile.json5"
         if not build_profile.exists():
-            return self._cached_workspace_map
+            return {name: name for name in self._known_modules}
 
         try:
             with open(build_profile, "r", encoding="utf-8") as f:
@@ -382,7 +416,8 @@ class HvigorParser(BaseParser):
 
                 # mod_name is usually the directory name relative to root
                 # Add the directory name itself as a known local name
-                self._cached_workspace_map[mod_name] = mod_name
+                workspace_map[mod_name] = mod_name
+                self._known_modules.add(mod_name)
 
                 # Check for package name alias in oh-package.json5
                 mod_path = self.workspace_root / mod_name
@@ -394,7 +429,7 @@ class HvigorParser(BaseParser):
                             pkg_data = json5.load(pf)
                             pkg_name = pkg_data.get("name")
                             if pkg_name:
-                                self._cached_workspace_map[pkg_name] = mod_name
+                                workspace_map[pkg_name] = mod_name
                     except Exception:
                         pass
 
@@ -403,14 +438,75 @@ class HvigorParser(BaseParser):
                 "Failed to scan workspace modules: %s", e
             )
 
-        return self._cached_workspace_map
+        if not workspace_map and self._known_modules:
+            return {name: name for name in self._known_modules}
+
+        return workspace_map
+
+    def _collect_module_ids(self) -> list[str]:
+        """Return current Hvigor module node ids present in the graph.
+
+        Restrict to modules created by this parser to avoid mixing in
+        other ecosystems' module nodes.
+        """
+        module_ids: list[str] = []
+        for node_id, attrs in self.graph_manager.nodes():
+            if (attrs or {}).get("type") != NodeType.MODULE.value:
+                continue
+            parser_name = (attrs or {}).get("parser_name")
+            if parser_name != self.NAME:
+                continue
+            module_ids.append(str(node_id))
+        return module_ids
+
+    def _flush_pending_root_packages(self) -> None:
+        """Re-process deferred root-level oh-package.json5 files once modules exist."""
+        module_ids = self._collect_module_ids()
+        if not module_ids or not self._pending_root_packages:
+            return
+
+        new_targets = [mid for mid in module_ids if mid not in self._root_package_applied_modules]
+        if not new_targets:
+            return
+
+        pending = list(self._pending_root_packages)
+        for result, config_file_id in pending:
+            self._process_package_dependencies(
+                result,
+                config_file_id,
+                target_module_ids_override=new_targets,
+            )
+        self._root_package_applied_modules.update(new_targets)
+
+    def _flush_pending_root_locks(self) -> None:
+        """Re-process deferred root-level oh-package-lock.json5 files once modules exist."""
+        module_ids = self._collect_module_ids()
+        if not module_ids or not self._pending_root_locks:
+            return
+
+        new_targets = [mid for mid in module_ids if mid not in self._root_lock_applied_modules]
+        if not new_targets:
+            return
+
+        pending = list(self._pending_root_locks)
+        for result, config_file_id in pending:
+            self._process_lock_file(
+                result,
+                config_file_id,
+                target_module_ids_override=new_targets,
+            )
+        self._root_lock_applied_modules.update(new_targets)
 
     def _process_package_dependencies(
-        self, result: Dict[str, Any], config_file_id: str
+        self,
+        result: Dict[str, Any],
+        config_file_id: str,
+        target_module_ids_override: list[str] | None = None,
     ):
         """Process oh-package.json5 dependencies."""
         config_file = result.get("file")
         workspace_map = self._get_workspace_modules()
+        target_module_ids = []
 
         # Determine owning module from config file path
         # oh-package.json5 files can be at:
@@ -426,32 +522,7 @@ class HvigorParser(BaseParser):
             elif len(parts) >= 2:
                 # Module level: parts[0] is the module name
                 module_name = parts[0]
-                owning_module_id = f"module:{module_name}"
-
-                # Ensure owning module node exists with correct type.
-                existing = self.graph_manager.get_node(owning_module_id)
-                if existing is None:
-                    module_root = (self.workspace_root / module_name).resolve()
-                    module_spec = NodeSpec(
-                        id=owning_module_id,
-                        type=NodeType.MODULE,
-                        label=owning_module_id,
-                        src_path=str(module_root),
-                        name=module_name,
-                        parser_name=self.NAME,
-                        confidence=0.9,
-                        attrs={
-                            "origin": "in_repo",
-                            "provenance": "package_config",
-                            "declared_via": "oh-package.json5",
-                        },
-                    )
-                    self.graph_manager.add_node_spec(module_spec)
-                elif existing.get("type") != NodeType.MODULE.value:
-                    # Upgrade placeholder/unknown nodes to proper module type
-                    self.graph_manager.update_node_attribute(
-                        owning_module_id, "type", NodeType.MODULE
-                    )
+                owning_module_id = self._ensure_module_node(module_name)
 
                 # Link module to its config file
                 edge_spec = EdgeSpec(
@@ -468,6 +539,29 @@ class HvigorParser(BaseParser):
                 )
         except ValueError:
             pass
+
+        if target_module_ids_override is not None:
+            target_module_ids = list(target_module_ids_override)
+        elif owning_module_id:
+            target_module_ids = [owning_module_id]
+        else:
+            # Root-level deps apply to all discovered modules in the workspace.
+            module_names = {name for name in workspace_map.values()}
+            # Fall back to existing module nodes when build-profile is missing.
+            if not module_names:
+                module_names = {
+                    n.split("module:", 1)[1]
+                    for n, attrs in self.graph_manager.nodes()
+                    if isinstance(n, str) and n.startswith("module:")
+                    and (attrs or {}).get("type") == NodeType.MODULE.value
+                }
+            if not module_names and self._known_modules:
+                module_names = set(self._known_modules)
+            if not module_names:
+                # Defer processing until modules are discovered.
+                self._pending_root_packages.append((result, config_file_id))
+                return
+            target_module_ids = [self._ensure_module_node(name) for name in module_names]
 
         # Process regular dependencies
         deps = result.get("dependencies", [])
@@ -521,13 +615,13 @@ class HvigorParser(BaseParser):
                     self.graph_manager.add_node_spec(target_spec)
                 elif target_existing.get("type") != NodeType.MODULE.value:
                     self.graph_manager.update_node_attribute(
-                        target_module_id, "type", NodeType.MODULE
+                        target_module_id, "type", NodeType.MODULE.value
                     )
 
                 # Create edge from owning module to target module
-                if owning_module_id:
+                for module_id in target_module_ids:
                     edge_spec = EdgeSpec(
-                        source=owning_module_id,
+                        source=module_id,
                         target=target_module_id,
                         kind=EdgeKind.DEPENDS_ON,
                         parser_name=self.NAME,
@@ -535,7 +629,7 @@ class HvigorParser(BaseParser):
                     self.graph_manager.add_edge_spec(edge_spec)
                     logger.debug(
                         "Created local dependency edge: %s -> %s",
-                        owning_module_id,
+                        module_id,
                         target_module_id,
                     )
             else:
@@ -565,9 +659,9 @@ class HvigorParser(BaseParser):
                 self.graph_manager.add_node_spec(lib_spec)
 
                 # Create edge from owning module to external library
-                if owning_module_id:
+                for module_id in target_module_ids:
                     edge_spec = EdgeSpec(
-                        source=owning_module_id,
+                        source=module_id,
                         target=lib_id,
                         kind=EdgeKind.DEPENDS_ON,
                         parser_name=self.NAME,
@@ -575,7 +669,7 @@ class HvigorParser(BaseParser):
                     self.graph_manager.add_edge_spec(edge_spec)
                     logger.debug(
                         "Created external dependency edge: %s -> %s",
-                        owning_module_id,
+                        module_id,
                         lib_id,
                     )
 
@@ -771,9 +865,16 @@ class HvigorParser(BaseParser):
                     e,
                 )
 
-    def _process_lock_file(self, result: Dict[str, Any], _config_file_id: str):
+    def _process_lock_file(
+        self,
+        result: Dict[str, Any],
+        _config_file_id: str,
+        target_module_ids_override: list[str] | None = None,
+    ):
         """Process oh-package-lock.json5 file."""
         config_file = result.get("file")
+        workspace_map = self._get_workspace_modules()
+        target_module_ids = []
 
         # Determine owning module from lock file path (same logic as oh-package.json5)
         owning_module_id = None
@@ -782,9 +883,30 @@ class HvigorParser(BaseParser):
             parts = rel_to_root.parts
             if len(parts) >= 2:
                 module_name = parts[0]
-                owning_module_id = f"module:{module_name}"
+                owning_module_id = self._ensure_module_node(module_name)
         except ValueError:
             pass
+
+        if target_module_ids_override is not None:
+            target_module_ids = list(target_module_ids_override)
+        elif owning_module_id:
+            target_module_ids = [owning_module_id]
+        else:
+            module_names = {name for name in workspace_map.values()}
+            if not module_names:
+                module_names = {
+                    n.split("module:", 1)[1]
+                    for n, attrs in self.graph_manager.nodes()
+                    if isinstance(n, str)
+                    and n.startswith("module:")
+                    and (attrs or {}).get("type") == NodeType.MODULE.value
+                }
+            if not module_names and self._known_modules:
+                module_names = set(self._known_modules)
+            if not module_names:
+                self._pending_root_locks.append((result, _config_file_id))
+                return
+            target_module_ids = [self._ensure_module_node(name) for name in module_names]
 
         for dep in result.get("external_dependencies", []):
             lib_name = dep.get("name")
@@ -820,16 +942,16 @@ class HvigorParser(BaseParser):
             )
 
             # Create edge from owning module to external library
-            if owning_module_id:
+            for module_id in target_module_ids:
                 self.add_edge(
-                    source=owning_module_id,
+                    source=module_id,
                     target=lib_id,
                     edge_kind=EdgeKind.DEPENDS_ON,
                     parser_name=self.NAME,
                 )
                 logger.debug(
                     "Created lock file dependency edge: %s -> %s",
-                    owning_module_id,
+                    module_id,
                     lib_id,
                 )
 

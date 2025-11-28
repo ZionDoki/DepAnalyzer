@@ -9,6 +9,7 @@ from depanalyzer.runtime.policies.file_completeness import (
     FileCompletenessJoinPolicy,
     FallbackJoinStrategy,
 )
+from depanalyzer.runtime.policies.license_attach import LicenseAttachmentPolicy
 from depanalyzer.runtime.policies.protocols import (
     AnalyzePolicy,
     AnalyzeStrategy,
@@ -38,6 +39,7 @@ __all__ = [
     "ExportStrategy",
     "FileCompletenessJoinPolicy",
     "FallbackJoinStrategy",
+    "LicenseAttachmentPolicy",
     "JoinPolicy",
     "JoinStrategy",
     "LifecycleHook",

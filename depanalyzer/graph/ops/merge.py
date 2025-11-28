@@ -61,6 +61,63 @@ def _load_graph_from_cache(cache_path: Path) -> Tuple[nx.MultiDiGraph, Dict]:
     return g, metadata
 
 
+def _compute_dead_nodes_for_graph(graph: nx.MultiDiGraph) -> List[str]:
+    """Compute unreachable nodes for a merged graph.
+
+    Traverses forward along all edges and also allows reachability to flow
+    from members back to their containers via ``contains`` edges to account
+    for SCC clusters and other grouping nodes.
+    """
+
+    def _has_contains_edge(u: str, v: str) -> bool:
+        edge_data = graph.get_edge_data(u, v) or {}
+        return any((attrs or {}).get("kind") == EdgeKind.CONTAINS.value for attrs in edge_data.values())
+
+    roots: List[str] = [
+        node_id
+        for node_id, attrs in graph.nodes(data=True)
+        if (attrs or {}).get("type") in {"hap", "har", "hsp", "executable"}
+    ]
+
+    reachable: Set[str] = set()
+    stack: List[str] = list(roots)
+
+    while stack:
+        current = stack.pop()
+        if current in reachable:
+            continue
+
+        reachable.add(current)
+
+        for succ in graph.successors(current):
+            if succ not in reachable:
+                stack.append(succ)
+
+        for pred in graph.predecessors(current):
+            if pred in reachable:
+                continue
+            if _has_contains_edge(pred, current):
+                stack.append(pred)
+
+    all_nodes: Set[str] = set(graph.nodes())
+    return sorted(all_nodes - reachable)
+
+
+def _filter_dead_nodes_to_main_graph(
+    dead_nodes: List[str], graph: nx.MultiDiGraph, main_graph_id: str
+) -> List[str]:
+    """Keep only dead nodes that belong to the main graph namespace."""
+    filtered: List[str] = []
+    for nid in dead_nodes:
+        try:
+            attrs = graph.nodes[nid]
+        except Exception:
+            continue
+        if attrs.get("graph_id") == main_graph_id:
+            filtered.append(nid)
+    return sorted(filtered)
+
+
 def merge_graph_with_dependencies(
     main_graph_id: str,
     cache_root: Path | None = None,
@@ -225,6 +282,21 @@ def merge_graph_with_dependencies(
         merged.number_of_edges(),
         added_cross_edges,
     )
+
+    # Recompute dead nodes on the full merged graph (before cycle breaking)
+    # to ensure reachability analysis isn't affected by removed edges.
+    main_meta = dict(main_meta or {})
+    try:
+        recomputed_dead = _compute_dead_nodes_for_graph(merged)
+        filtered_dead = _filter_dead_nodes_to_main_graph(
+            recomputed_dead, merged, main_graph_id
+        )
+        if filtered_dead:
+            main_meta["dead_nodes"] = filtered_dead
+        else:
+            main_meta.pop("dead_nodes", None)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.debug("Failed to recompute dead nodes for merged graph: %s", exc)
 
     # Remove cycles before exporting to keep downstream processing fast.
     acyclic_graph, removed_edges = break_cycles(merged)

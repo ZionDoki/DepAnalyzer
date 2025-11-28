@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
 import subprocess
@@ -25,6 +26,51 @@ DEFAULT_PROJECT = Path("/mnt/c/Workspace/dialog_hub-master")
 DEFAULT_LISCOPLENS_PATH = Path("/mnt/c/Workspace/liscopelens")
 
 logger = logging.getLogger("depanalyzer.scripts.license_pipeline")
+
+DEFAULT_LISCOPLENS_CONFIG: Dict[str, Any] = {
+    "blacklist": [],
+    "license_isolations": [],
+    "permissive_spreads": ["COMPILE", "STATIC_LINKING"],
+    "edge_isolations": [],
+    "edge_permissive_spreads": ["STATIC_LINKING"],
+    "default_edge_behavior": "inherit",
+    "edge_literal_mapping": {
+        "dependency": "DEPENDENCY",
+        "include": "INCLUDE",
+        "link": "STATIC_LINKING",
+        "dynamic_link": "DYNAMIC_LINKING",
+        "compile_depend": "COMPILE",
+        "runtime_depend": "RUNTIME",
+    },
+    "literal_mapping": {
+        "code": "COMPILE",
+        "system_header": "COMPILE",
+        "project_header": "COMPILE",
+        "header": "COMPILE",
+        "config": "GENERATED",
+        "build_config": "GENERATED",
+        "subdirectory": "COMPILE",
+        "module": "COMPILE",
+        "target": "COMPILE",
+        "artifact": "COMPILE",
+        "process": "COMPILE",
+        "toolchain": "COMPILE",
+        "proxy": "STATIC_LINKING",
+        "external_library": "STATIC_LINKING",
+        "external_dep": "STATIC_LINKING",
+        "hap": "COMPILE",
+        "hsp": "DYNAMIC_LINKING",
+        "har": "STATIC_LINKING",
+        "shared_library": "DYNAMIC_LINKING",
+        "static_library": "STATIC_LINKING",
+        "executable": "COMPILE",
+        "asset": "GENERATED",
+        "license": "GENERATED",
+        "scc_cluster": "COMPILE",
+        "code_scc_cluster": "COMPILE",
+        "unknown": "COMPILE",
+    },
+}
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -473,6 +519,27 @@ def _load_project_paths(args: argparse.Namespace) -> List[Path]:
     return resolved
 
 
+def _load_liscopelens_config(config_path: Optional[Path]) -> Dict[str, Any]:
+    """Load liscopelens config from disk or use default."""
+    if not config_path:
+        return copy.deepcopy(DEFAULT_LISCOPLENS_CONFIG)
+
+    resolved = config_path.expanduser().resolve()
+    if not resolved.exists():
+        raise FileNotFoundError(f"Config file not found: {resolved}")
+
+    if resolved.suffix.lower() in {".toml", ".tml"}:
+        try:
+            import tomllib  # Python 3.11+
+        except ImportError as exc:  # pragma: no cover - defensive fallback
+            raise RuntimeError("tomllib is required to parse TOML configs") from exc
+        with resolved.open("rb") as handle:
+            return tomllib.load(handle)
+
+    with resolved.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
 def _run_single_project(
     project_path: Path,
     args: argparse.Namespace,
@@ -481,6 +548,7 @@ def _run_single_project(
     output_dir: Path,
     progress: Optional[Progress],
     task_id: Optional[TaskID],
+    liscopelens_config: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Execute scan → scancode → liscopelens compatibility pipeline for one project.
 
@@ -492,6 +560,7 @@ def _run_single_project(
         output_dir: Destination directory for pipeline outputs.
         progress: Optional Rich progress instance.
         task_id: Optional progress task identifier.
+        liscopelens_config: Configuration mapping passed to liscopelens.
 
     Returns:
         Dictionary summarizing outputs and validation metrics.
@@ -558,6 +627,7 @@ def _run_single_project(
         context, results = compatibility_runner(
             license_map,
             str(graph_output),
+            config=liscopelens_config,
             args={"ignore_unk": True, "merge_cycles": True},
         )
     validation = _validate_alignment(graph_dict, license_map, context, logger)
@@ -567,6 +637,7 @@ def _run_single_project(
         "metadata": metadata,
         "results": serialized_results,
         "validation": validation,
+        "config_source": str(args.liscopelens_config) if args.liscopelens_config else "builtin",
     }
     with compatibility_output.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
@@ -598,8 +669,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
     """
     ensure_liscopelens_importable(args.liscopelens_path)
     try:
-        from liscopelens.api import check_compatibility  # pylint: disable=import-error
-        from liscopelens.utils.graph import GraphManager  # pylint: disable=import-error
+        from liscopelens.api import check_compatibility 
+        from liscopelens.utils.graph import GraphManager 
     except ImportError as exc:
         logger.error(
             "liscopelens is not installed. Install with `pip install liscopelens` "
@@ -610,6 +681,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
     project_paths = _load_project_paths(args)
     output_base = args.output_dir.expanduser().resolve()
     output_base.mkdir(parents=True, exist_ok=True)
+    liscopelens_config = _load_liscopelens_config(args.liscopelens_config)
 
     summaries: List[Dict[str, Any]] = []
     failures: List[str] = []
@@ -638,9 +710,10 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     project_output_dir,
                     None,
                     None,
+                    liscopelens_config,
                 )
                 summaries.append({**summary, "status": "ok"})
-            except Exception as exc:  # pylint: disable=broad-except
+            except Exception as exc: 
                 logger.error("Project %s failed: %s", project_path, exc)
                 summaries.append(
                     {
@@ -679,9 +752,10 @@ def run_pipeline(args: argparse.Namespace) -> None:
                         project_output_dir,
                         progress,
                         task_id,
+                        liscopelens_config,
                     )
                     summaries.append({**summary, "status": "ok"})
-                except Exception as exc:  # pylint: disable=broad-except
+                except Exception as exc: 
                     _update_task_phase(progress, task_id, "failed")
                     logger.error("Project %s failed: %s", project_path, exc)
                     summaries.append(
@@ -805,6 +879,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable debug logging.",
     )
+    parser.add_argument(
+        "--liscopelens-config",
+        type=Path,
+        help="Path to liscopelens config (TOML/JSON). Defaults to built-in hvigor/depanalyzer mapping when omitted.",
+    )
     return parser
 
 
@@ -821,7 +900,7 @@ def main() -> None:
 
     try:
         run_pipeline(args)
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception as exc: 
         logger.error("Pipeline failed: %s", exc)
         sys.exit(1)
 

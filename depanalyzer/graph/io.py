@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from typing import Dict, Iterable, List, Set, Tuple
 
@@ -66,10 +67,13 @@ def break_cycles(
 
     For every SCC, we:
     - create a virtual cluster node
-    - redirect incoming edges from outside the SCC to the cluster
-    - redirect outgoing edges from the SCC to the cluster
     - remove all original edges among SCC members
-    - attach members to the cluster via ``contains`` edges
+    - attach members to the cluster via ``contains`` edges (cluster -> member)
+
+    Note: We do NOT rewire external edges to point to the cluster; inbound/outbound
+    edges remain connected to the original members. This preserves the outer
+    connectivity while eliminating cycles, and allows analyses that care about
+    SCC grouping to follow the contains edges explicitly.
 
     Args:
         graph: Input graph (MultiDiGraph).
@@ -116,36 +120,61 @@ def break_cycles(
                     provisional=True,
                 )
 
-            edges_to_add: List[Tuple[str, str, Dict]] = []
-            edges_to_remove: List[Tuple[str, str, int | str | None]] = []
-
+            # Rewire external edges to the cluster while preserving metadata so
+            # downstream consumers keep edge semantics (e.g., depends_on).
+            pred_edges = []
+            succ_edges = []
             for member in members:
-                # Incoming edges from outside the SCC -> cluster
-                in_edges = list(dag.in_edges(member, keys=True, data=True))
-                for upstream, _, key, data in in_edges:
-                    if upstream in member_set:
-                        edges_to_remove.append((upstream, member, key))
+                try:
+                    edge_data = dag.get_edge_data
+                except Exception:  # pragma: no cover - defensive
+                    edge_data = None
+
+                for pred in dag.predecessors(member):
+                    if pred in member_set:
                         continue
-                    payload = dict(data or {})
-                    payload["original_target"] = str(member)
-                    edges_to_add.append((str(upstream), cluster_id, payload))
-                    edges_to_remove.append((upstream, member, key))
+                    data_map = edge_data(pred, member) if edge_data else None
+                    for attrs in (data_map or {}).values():
+                        pred_edges.append((pred, dict(attrs or {})))
 
-                # Outgoing edges to outside the SCC: cluster -> downstream
-                out_edges = list(dag.out_edges(member, keys=True, data=True))
-                for _, downstream, key, data in out_edges:
-                    if downstream in member_set:
-                        edges_to_remove.append((member, downstream, key))
+                for succ in dag.successors(member):
+                    if succ in member_set:
                         continue
-                    payload = dict(data or {})
-                    payload["original_source"] = str(member)
-                    edges_to_add.append((cluster_id, str(downstream), payload))
-                    edges_to_remove.append((member, downstream, key))
+                    data_map = edge_data(member, succ) if edge_data else None
+                    for attrs in (data_map or {}).values():
+                        succ_edges.append((succ, dict(attrs or {})))
 
-            for source, target, payload in edges_to_add:
-                dag.add_edge(source, target, **payload)
+            seen_pred = set()
+            for pred, attrs in pred_edges:
+                try:
+                    dedup_token = json.dumps(attrs or {}, sort_keys=True, default=str)
+                except Exception:
+                    dedup_token = str(attrs)
+                dedup_key = (pred, dedup_token)
+                if dedup_key in seen_pred:
+                    continue
+                seen_pred.add(dedup_key)
+                dag.add_edge(pred, cluster_id, **attrs)
 
-            for source, target, key in edges_to_remove:
+            seen_succ = set()
+            for succ, attrs in succ_edges:
+                try:
+                    dedup_token = json.dumps(attrs or {}, sort_keys=True, default=str)
+                except Exception:
+                    dedup_token = str(attrs)
+                dedup_key = (succ, dedup_token)
+                if dedup_key in seen_succ:
+                    continue
+                seen_succ.add(dedup_key)
+                dag.add_edge(cluster_id, succ, **attrs)
+
+            # Remove all edges among members (including self-loops). Deduplicate
+            # to avoid double-counting under platform-specific ordering quirks.
+            internal_edges = {
+                (u, v, k)
+                for u, v, k in dag.subgraph(member_set).edges(keys=True)
+            }
+            for source, target, key in internal_edges:
                 if removed_edges >= max_removals:
                     logger.warning(
                         "Reached max_removals=%d while breaking cycles; graph may "
@@ -156,7 +185,7 @@ def break_cycles(
                 if _remove_edge_with_key(dag, source, target, key):
                     removed_edges += 1
 
-            # Attach members to the virtual cluster.
+            # Attach members to the virtual cluster (cluster -> member).
             for member in members:
                 dag.add_edge(
                     cluster_id,

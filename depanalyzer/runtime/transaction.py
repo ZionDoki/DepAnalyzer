@@ -24,6 +24,7 @@ from depanalyzer.runtime.policies import (
     DefaultCodeDependencyMapper,
     FileCompletenessJoinPolicy,
     JoinPolicy,
+    LicenseAttachmentPolicy,
     LifecycleHook,
 )
 from depanalyzer.runtime.transaction_state import TransactionState
@@ -106,6 +107,7 @@ class Transaction:
         """
         # Prepare graph build config and code dependency mappers
         _graph_build_config = graph_build_config or GraphBuildConfig.default()
+        _explicit_join_supplied = (join_policies is not None) or (join_strategies is not None)
 
         _code_dependency_mappers: Dict[str, CodeDependencyMapper] = {}
         if code_dependency_mappers is not None:
@@ -117,6 +119,18 @@ class Transaction:
 
         # Join policies (append fallback when enabled)
         _join_policies = list(join_policies or join_strategies or [])
+        try:
+            if _graph_build_config.license_link.enabled:
+                already_present = any(
+                    isinstance(p, LicenseAttachmentPolicy) for p in _join_policies
+                )
+                if not already_present:
+                    _join_policies.append(
+                        LicenseAttachmentPolicy(_graph_build_config.license_link)
+                    )
+        except AttributeError:
+            pass
+
         try:
             if _graph_build_config.fallback.enabled:
                 _join_policies.append(FileCompletenessJoinPolicy(_graph_build_config.fallback))

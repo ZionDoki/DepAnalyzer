@@ -14,7 +14,7 @@ def _find_cluster_node(graph: nx.MultiDiGraph) -> str:
 
 
 def test_break_cycles_creates_virtual_node_and_rewires_edges() -> None:
-    """Cycles are replaced by a virtual node that preserves external wiring."""
+    """Cycles are replaced by a virtual node attached to members."""
     graph = nx.MultiDiGraph()
     graph.add_edge("x", "a", kind="depends_on")
     graph.add_edge("a", "b", kind="depends_on")
@@ -25,9 +25,9 @@ def test_break_cycles_creates_virtual_node_and_rewires_edges() -> None:
     acyclic, removed = break_cycles(graph)
 
     cluster = _find_cluster_node(acyclic)
-    assert removed == 5
-    assert acyclic.has_edge("x", cluster)
-    assert acyclic.has_edge(cluster, "y")
+    assert removed == 3
+    assert acyclic.has_edge("x", "a")
+    assert acyclic.has_edge("c", "y")
     assert acyclic.has_edge(cluster, "a")
     assert acyclic.has_edge(cluster, "b")
     assert acyclic.has_edge(cluster, "c")

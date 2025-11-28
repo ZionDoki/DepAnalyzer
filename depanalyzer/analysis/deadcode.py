@@ -4,6 +4,7 @@ import logging
 from typing import List, Set
 
 from depanalyzer.graph import GraphManager
+from depanalyzer.graph.models.schema import EdgeKind
 
 logger = logging.getLogger("depanalyzer.analysis.deadcode")
 
@@ -71,6 +72,7 @@ class DeadcodeAnalyzer:
             Set[str]: Set of reachable node IDs.
         """
         reachable = set()
+        graph = self.graph_manager.backend.native_graph
         stack = list(roots)
 
         while stack:
@@ -80,9 +82,19 @@ class DeadcodeAnalyzer:
 
             reachable.add(current)
 
-            # Add predecessors (dependencies)
-            for pred in self.graph_manager.backend.predecessors(current):
-                if pred not in reachable:
+            # Traverse forward along all outgoing edges (consumer -> dependency).
+            for succ in graph.successors(current):
+                if succ not in reachable:
+                    stack.append(succ)
+
+            # Allow reachability to flow from members to their SCC/cluster
+            # containers via `contains` edges (container -> member).
+            for pred in graph.predecessors(current):
+                if pred in reachable:
+                    continue
+
+                edge_data = graph.get_edge_data(pred, current) or {}
+                if any((attrs or {}).get("kind") == EdgeKind.CONTAINS.value for attrs in edge_data.values()):
                     stack.append(pred)
 
         return reachable

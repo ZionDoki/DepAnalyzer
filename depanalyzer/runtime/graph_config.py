@@ -237,6 +237,23 @@ class FallbackConfig:
     include_isolated_nodes: bool = True
 
 
+@dataclass
+class LicenseLinkConfig:
+    """Configuration for attaching license files to graph roots."""
+
+    enabled: bool = True
+    file_patterns: list[str] = field(
+        default_factory=lambda: [
+            "LICENSE",
+            "LICENSE.*",
+            "COPYING",
+            "COPYING.*",
+            "NOTICE",
+            "NOTICE.*",
+        ]
+    )
+
+
 # ---------------------------------------------------------------------------
 # Aggregate graph build configuration
 # ---------------------------------------------------------------------------
@@ -265,6 +282,7 @@ class GraphBuildConfig:
     contract_match: ContractMatchConfig = field(default_factory=ContractMatchConfig)
     uncertainty: UncertaintyPolicyConfig = field(default_factory=UncertaintyPolicyConfig)
     fallback: FallbackConfig = field(default_factory=FallbackConfig)
+    license_link: LicenseLinkConfig = field(default_factory=LicenseLinkConfig)
 
     # Optional per-ecosystem configuration objects provided by parser
     # packages via EcosystemConfigRegistry. When present, they take
@@ -447,6 +465,18 @@ class GraphBuildConfig:
                 ),
             )
 
+        license_link_data = data.get("license_link", {}) or {}
+        if isinstance(license_link_data, dict):
+            patterns = license_link_data.get(
+                "file_patterns", cfg.license_link.file_patterns
+            )
+            cfg.license_link = LicenseLinkConfig(
+                enabled=bool(license_link_data.get("enabled", cfg.license_link.enabled)),
+                file_patterns=list(patterns)
+                if isinstance(patterns, list)
+                else cfg.license_link.file_patterns,
+            )
+
         return cfg
 
 
@@ -459,6 +489,7 @@ __all__ = [
     "ContractMatchConfig",
     "UncertaintyPolicyConfig",
     "FallbackConfig",
+    "LicenseLinkConfig",
     "HvigorDetectConfig",
     "CMakeDetectConfig",
     "HvigorParserConfig",

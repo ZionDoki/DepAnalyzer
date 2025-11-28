@@ -39,6 +39,7 @@ class NodeType(str, Enum):
     SUBDIRECTORY = "subdirectory"
     TOOLCHAIN = "toolchain"
     PROXY = "proxy"
+    LICENSE = "license"
 
     # Legacy / transitional types kept for compatibility
     HEADER = "header"
