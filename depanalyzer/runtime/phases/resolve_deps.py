@@ -348,18 +348,65 @@ class ResolveDepsPhase(BasePhase):
 
         for node_id in node_ids:
             try:
-                # Update node to point to the resolved dependency graph
+                attrs = self.state.graph_manager.get_node(node_id) or {}
+                prior_type = attrs.get("type")
+                src_hint = dep_info.get("source")
+                try:
+                    src_path = str(Path(src_hint).resolve()) if src_hint else None
+                except OSError:
+                    src_path = src_hint
+
+                # Update node to point to the resolved dependency graph and
+                # upgrade to a package-style node so license/metadata flow
+                # through a stable container.
                 self.state.graph_manager.update_node_attribute(
                     node_id, "child_graph_id", dep_graph_id
                 )
                 self.state.graph_manager.update_node_attribute(
-                    node_id, "type", NodeType.PROXY.value
+                    node_id, "type", NodeType.MODULE.value
                 )
-                # Ensure it's marked as proxy
+                if src_path:
+                    self.state.graph_manager.update_node_attribute(
+                        node_id, "src_path", src_path
+                    )
+                # Preserve provenance and proxy markers for uncertainty/merge.
                 self.state.graph_manager.update_node_attribute(
-                    node_id, "proxy_target", dep_info.get("source")
+                    node_id,
+                    "proxy_target",
+                    src_hint or dep_info.get("source"),
                 )
-                logger.debug("Updated node %s -> child graph %s", node_id, dep_graph_id)
+                self.state.graph_manager.update_node_attribute(
+                    node_id,
+                    "proxied_type",
+                    prior_type,
+                )
+                self.state.graph_manager.update_node_attribute(
+                    node_id,
+                    "is_proxy",
+                    True,
+                )
+                if dep_info.get("name"):
+                    self.state.graph_manager.update_node_attribute(
+                        node_id, "name", dep_info.get("name")
+                    )
+                if dep_info.get("version"):
+                    self.state.graph_manager.update_node_attribute(
+                        node_id, "version", dep_info.get("version")
+                    )
+                self.state.graph_manager.update_node_attribute(
+                    node_id, "origin", "external"
+                )
+                self.state.graph_manager.update_node_attribute(
+                    node_id,
+                    "provenance",
+                    attrs.get("provenance") or "dependency_resolution",
+                )
+                logger.debug(
+                    "Updated node %s -> child graph %s (prior_type=%s)",
+                    node_id,
+                    dep_graph_id,
+                    prior_type,
+                )
             except ValueError:
                 logger.warning("Node %s no longer exists, skipping update", node_id)
 

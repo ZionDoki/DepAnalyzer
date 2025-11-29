@@ -81,9 +81,10 @@ class GlobalContractLinker:
         if provider_id and not graph_manager.has_node(provider_id):
             graph_manager.add_node(
                 provider_id,
-                NodeType.ARTIFACT,
+                NodeType.SHARED_LIBRARY,
                 parser_name="global_contract_linker",
                 artifact_name=contract.artifact_name,
+                linkage_kind="shared",
                 origin="in_repo",
                 provenance="contract_provider",
             )
@@ -91,9 +92,10 @@ class GlobalContractLinker:
         if consumer_id and not graph_manager.has_node(consumer_id):
             graph_manager.add_node(
                 consumer_id,
-                NodeType.ARTIFACT,
+                NodeType.SHARED_LIBRARY,
                 parser_name="global_contract_linker",
                 artifact_name=contract.artifact_name,
+                linkage_kind="shared",
                 origin="in_repo",
                 provenance="contract_consumer",
             )

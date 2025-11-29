@@ -115,7 +115,7 @@ class MavenParser(BaseParser):
         )
         artifact_spec = NodeSpec(
             id=artifact_id_str,
-            type=NodeType.ARTIFACT,
+            type=NodeType.TARGET,
             label=artifact_id_str,
             src_path=str(artifact_path),
             name=f"{artifact_id}.{packaging}",
@@ -126,6 +126,7 @@ class MavenParser(BaseParser):
                 "artifact_id": artifact_id,
                 "version": version,
                 "packaging": packaging,
+                "target_type": packaging,
                 "origin": "in_repo",
                 "provenance": "maven_pom",
             },

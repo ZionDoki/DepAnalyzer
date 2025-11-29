@@ -6,7 +6,15 @@ import logging
 from pathlib import Path
 from typing import Dict, Set
 
-from depanalyzer.graph import EdgeKind, EdgeSpec, GraphManager, LinkClass, NodeSpec, NodeType
+from depanalyzer.graph import (
+    EdgeKind,
+    EdgeSpec,
+    GraphManager,
+    LinkClass,
+    NodeSpec,
+    NodeType,
+    canonicalize_normalized_id,
+)
 from depanalyzer.runtime.context import JoinContext
 from depanalyzer.runtime.graph_config import FallbackConfig
 from depanalyzer.runtime.policies.protocols import JoinPolicy
@@ -30,7 +38,13 @@ class FileCompletenessJoinPolicy(JoinPolicy):
             logger.debug("FileCompletenessJoinPolicy: missing graph or workspace")
             return
 
-        fallback_root_id = self._config.root_id or "fallback:license_scan"
+        raw_root_id = self._config.root_id or "fallback:license_scan"
+        normalized_root_id = raw_root_id
+        if not str(raw_root_id).startswith("//"):
+            normalized_root_id = f"//{str(raw_root_id).lstrip('/')}"
+        normalized_root_id = normalized_root_id.replace("\\", "/")
+        fallback_root_id = canonicalize_normalized_id(normalized_root_id)
+
         if not graph.has_node(fallback_root_id):
             graph.add_node_spec(
                 NodeSpec(

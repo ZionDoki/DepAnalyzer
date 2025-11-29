@@ -1,8 +1,8 @@
 """Schema normalization helpers for graph export.
 
 This module centralizes node and edge schema defaults and provides
-utilities to convert internal node identifiers into canonical GN-style
-IDs and labels for export.
+utilities to convert internal node identifiers into canonical //-prefixed
+IDs and labels for export (GN-inspired but not strict GN target strings).
 """
 
 from __future__ import annotations
@@ -14,15 +14,38 @@ from depanalyzer.utils.path_utils import normalize_node_id
 
 
 def canonicalize_normalized_id(normalized_id: str) -> str:
-    """Convert a normalized node ID into GN-style form.
+    """Convert a normalized node ID into canonical export form with slash separators.
 
     Args:
-        normalized_id: Normalized node ID (//...).
+        normalized_id: Normalized node ID (//... or path-like string).
 
     Returns:
-        GN-style identifier matching export output.
+        Canonical identifier using leading '//' and '/' separators.
     """
-    return _gn_style_id(normalized_id)
+    value = str(normalized_id).strip()
+    if not value:
+        return value
+
+    body = value[2:] if value.startswith("//") else value.lstrip("/")
+    body = body.replace("\\", "/")
+
+    special_prefixes = ("system:", "external:", "include:", "proxy:")
+    if any(body.startswith(prefix) for prefix in special_prefixes):
+        return "//" + body
+
+    def _split_segment(segment: str) -> list[str]:
+        # Keep segments with explicit scopes (e.g., @ohos/pkg) intact.
+        if segment.startswith("@"):
+            return [segment]
+        if ":" in segment:
+            return [part for part in segment.split(":") if part]
+        return [segment]
+
+    parts: list[str] = []
+    for seg in body.split("/"):
+        parts.extend(_split_segment(seg))
+
+    return "//" + "/".join(part for part in parts if part)
 
 
 def _derive_normalized_path(
@@ -66,44 +89,12 @@ def _derive_normalized_path(
     return None
 
 
-def _gn_style_id(normalized_id: str) -> str:
-    """Convert a normalized path ID into GN-style `//path/to:target` form.
-
-    Special IDs like `//system:*`, `//external:*`, `//include:*`, `//proxy:*`
-    are returned unchanged.
-
-    Args:
-        normalized_id: Normalized node ID (//...).
-
-    Returns:
-        GN-style identifier string.
-    """
-    if not normalized_id.startswith("//"):
-        return normalized_id
-
-    body = normalized_id[2:]
-
-    # Special namespaces are already canonical
-    special_prefixes = ("system:", "external:", "include:", "proxy:")
-    if any(body.startswith(prefix) for prefix in special_prefixes):
-        return normalized_id
-
-    if ":" in body:
-        return normalized_id
-
-    if "/" not in body:
-        return normalized_id
-
-    dir_part, leaf = body.rsplit("/", 1)
-    return f"//{dir_part}:{leaf}"
-
-
 def canonicalize_node(
     raw_id: str,
     attrs: Dict[str, Any],
     root_path: Optional[Path],
 ) -> Tuple[str, Dict[str, Any]]:
-    """Apply schema defaults and GN-style identity to a node.
+    """Apply schema defaults and canonical //-prefixed identity to a node.
 
     Args:
         raw_id: Original node identifier.
@@ -151,6 +142,21 @@ def canonicalize_node(
             canonical_id = canonicalize_normalized_id(normalized)
         else:
             canonical_id = raw_id
+
+    # If still not a path-like canonical id, coerce obvious path/drive/id forms.
+    if not str(canonical_id).startswith("//"):
+        if not str(canonical_id).startswith(
+            (
+                "ext_lib:",
+                "module:",
+                "dep_graph:",
+            )
+        ):
+            if any(ch in str(canonical_id) for ch in ("/", "\\", ":")):
+                coerced = canonicalize_normalized_id(
+                    "//" + str(canonical_id).lstrip("/\\")
+                )
+                canonical_id = coerced
 
     # Always derive label from canonical ID so id/label stay in sync in exports.
     new_attrs["label"] = canonical_id

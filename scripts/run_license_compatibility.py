@@ -47,7 +47,7 @@ DEFAULT_LISCOPLENS_CONFIG: Dict[str, Any] = {
         "system_header": "COMPILE",
         "project_header": "COMPILE",
         "header": "COMPILE",
-        "config": "GENERATED",
+        "config": "COMPILE",
         "build_config": "GENERATED",
         "subdirectory": "COMPILE",
         "module": "COMPILE",
@@ -65,7 +65,7 @@ DEFAULT_LISCOPLENS_CONFIG: Dict[str, Any] = {
         "static_library": "STATIC_LINKING",
         "executable": "COMPILE",
         "asset": "GENERATED",
-        "license": "GENERATED",
+        "license": "COMPILE",
         "scc_cluster": "COMPILE",
         "code_scc_cluster": "COMPILE",
         "unknown": "COMPILE",
@@ -519,6 +519,40 @@ def _load_project_paths(args: argparse.Namespace) -> List[Path]:
     return resolved
 
 
+def _resolve_shadow_map(
+    project_paths: List[Path], args: argparse.Namespace
+) -> Dict[Path, Optional[Path]]:
+    """Resolve shadow.json mapping per project."""
+    shadow_map: Dict[Path, Optional[Path]] = {p: None for p in project_paths}
+    shadow_files: List[Path] = [p.expanduser().resolve() for p in getattr(args, "shadow_files", [])]
+    shadow_dir: Optional[Path] = getattr(args, "shadow_dir", None)
+
+    if shadow_files:
+        if len(shadow_files) == 1:
+            shadow_path = shadow_files[0]
+            if not shadow_path.exists():
+                raise FileNotFoundError(f"Shadow file not found: {shadow_path}")
+            for proj in project_paths:
+                shadow_map[proj] = shadow_path
+        else:
+            for proj, shadow_path in zip(project_paths, shadow_files):
+                if not shadow_path.exists():
+                    raise FileNotFoundError(f"Shadow file not found: {shadow_path}")
+                shadow_map[proj] = shadow_path
+
+    if shadow_dir and all(path is None for path in shadow_map.values()):
+        base = shadow_dir.expanduser().resolve()
+        for proj in project_paths:
+            candidate = base / f"{proj.name}.json"
+            legacy = base / proj.name / "shadow.json"
+            if candidate.exists():
+                shadow_map[proj] = candidate
+            elif legacy.exists():
+                shadow_map[proj] = legacy
+
+    return shadow_map
+
+
 def _load_liscopelens_config(config_path: Optional[Path]) -> Dict[str, Any]:
     """Load liscopelens config from disk or use default."""
     if not config_path:
@@ -549,6 +583,7 @@ def _run_single_project(
     progress: Optional[Progress],
     task_id: Optional[TaskID],
     liscopelens_config: Dict[str, Any],
+    shadow_path: Optional[Path],
 ) -> Dict[str, Any]:
     """Execute scan → scancode → liscopelens compatibility pipeline for one project.
 
@@ -561,6 +596,7 @@ def _run_single_project(
         progress: Optional Rich progress instance.
         task_id: Optional progress task identifier.
         liscopelens_config: Configuration mapping passed to liscopelens.
+        shadow_path: Optional path to shadow.json passed to liscopelens (file_shadow).
 
     Returns:
         Dictionary summarizing outputs and validation metrics.
@@ -623,11 +659,23 @@ def _run_single_project(
     graph_dict, metadata = load_graph(graph_output)
     license_map = {k: _normalize_spdx_expression(v) for k, v in load_license_map(license_output).items()}
 
+    shadow_payload: Optional[Dict[str, Any]] = None
+    if shadow_path:
+        try:
+            with shadow_path.open("r", encoding="utf-8") as handle:
+                shadow_payload = json.load(handle)
+            if not isinstance(shadow_payload, dict):
+                raise ValueError(f"shadow file is not a JSON object: {shadow_path}")
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"Failed to load shadow file {shadow_path}: {exc}") from exc
+
     with _suspend_progress(progress):
         context, results = compatibility_runner(
             license_map,
             str(graph_output),
             config=liscopelens_config,
+            file_shadow=shadow_payload,
+            license_shadow=None,
             args={"ignore_unk": True, "merge_cycles": True},
         )
     validation = _validate_alignment(graph_dict, license_map, context, logger)
@@ -638,6 +686,7 @@ def _run_single_project(
         "results": serialized_results,
         "validation": validation,
         "config_source": str(args.liscopelens_config) if args.liscopelens_config else "builtin",
+        "shadow_file": str(shadow_path) if shadow_path else None,
     }
     with compatibility_output.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
@@ -679,6 +728,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
         raise RuntimeError("liscopelens is required for the license pipeline") from exc
 
     project_paths = _load_project_paths(args)
+    shadow_map = _resolve_shadow_map(project_paths, args)
     output_base = args.output_dir.expanduser().resolve()
     output_base.mkdir(parents=True, exist_ok=True)
     liscopelens_config = _load_liscopelens_config(args.liscopelens_config)
@@ -711,6 +761,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     None,
                     None,
                     liscopelens_config,
+                    shadow_map.get(project_path),
                 )
                 summaries.append({**summary, "status": "ok"})
             except Exception as exc: 
@@ -734,6 +785,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     summaries.append({
                         "project": str(project_path),
                         "output_dir": str(project_output_dir),
+                        "shadow_file": str(shadow_map.get(project_path)) if shadow_map.get(project_path) else None,
                         "status": "skipped",
                     })
                     continue
@@ -753,6 +805,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
                         progress,
                         task_id,
                         liscopelens_config,
+                        shadow_map.get(project_path),
                     )
                     summaries.append({**summary, "status": "ok"})
                 except Exception as exc: 
@@ -883,6 +936,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--liscopelens-config",
         type=Path,
         help="Path to liscopelens config (TOML/JSON). Defaults to built-in hvigor/depanalyzer mapping when omitted.",
+    )
+    parser.add_argument(
+        "--shadow-file",
+        dest="shadow_files",
+        action="append",
+        type=Path,
+        default=[],
+        help="Path to shadow.json passed to liscopelens (file_shadow). Can be provided multiple times; single value applies to all projects.",
+    )
+    parser.add_argument(
+        "--shadow-dir",
+        type=Path,
+        help="Root directory containing per-project shadow.json files (expects <dir>/<project_name>/shadow.json).",
     )
     return parser
 

@@ -104,5 +104,50 @@ class HvigorCodeDependencyMapper(BaseCodeDependencyMapper):
             )
             graph.add_edge_spec(edge_spec)
 
+        # Link unresolved imports to known dependency/package nodes so
+        # code-level references connect to external modules.
+        unresolved = parse_result.get("unresolved") or []
+        if unresolved:
+            dep_targets: Dict[str, str] = {}
+            for node_id, attrs in graph.nodes():
+                ntype = attrs.get("type")
+                if ntype not in {
+                    NodeType.EXTERNAL_LIBRARY.value,
+                    NodeType.MODULE.value,
+                    NodeType.PROXY.value,
+                    NodeType.SHARED_LIBRARY.value,
+                }:
+                    continue
+                name = attrs.get("name") or ""
+                if name:
+                    dep_targets.setdefault(name, node_id)
+                # Also index by cleaned id fragments for best-effort matching
+                dep_targets.setdefault(str(node_id).split("@", 1)[0].split(":", 1)[-1], node_id)
+
+            for spec in unresolved:
+                try:
+                    raw = str(spec).strip().strip("\"'")
+                except Exception:
+                    continue
+                if not raw:
+                    continue
+                candidate = raw.lstrip("@")
+                base = candidate.split("/")[0] if "/" in candidate else candidate
+                target_node = dep_targets.get(raw) or dep_targets.get(candidate) or dep_targets.get(base)
+                if not target_node:
+                    continue
+                graph.add_edge_spec(
+                    EdgeSpec(
+                        source=file_node_id,
+                        target=target_node,
+                        kind=EdgeKind.IMPORT,
+                        parser_name=parser_name,
+                        attrs={
+                            "link_class": LinkClass.SEMANTIC.value,
+                            "derived_from": "hvigor_unresolved_import",
+                        },
+                    )
+                )
+
 
 __all__ = ["HvigorCodeDependencyMapper"]

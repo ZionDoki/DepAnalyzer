@@ -126,7 +126,7 @@ def _register_native_contract(graph: GraphManager, lib_name: str) -> None:
         graph.add_node_spec(
             NodeSpec(
                 id=artifact_id,
-                type=NodeType.ARTIFACT,
+                type=NodeType.SHARED_LIBRARY,
                 label=artifact_id,
                 name=f"lib{lib_name}.so",
                 parser_name="maven_code",
@@ -134,6 +134,7 @@ def _register_native_contract(graph: GraphManager, lib_name: str) -> None:
                 attrs={
                     "origin": "in_repo",
                     "provenance": "jni_load",
+                    "linkage_kind": "shared",
                 },
             )
         )

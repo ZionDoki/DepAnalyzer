@@ -5,7 +5,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Iterable, Set
 
 import json5
 
@@ -17,6 +17,14 @@ from depanalyzer.graph.contract import BuildInterfaceContract, ContractType
 from depanalyzer.graph.contract_registry import ContractRegistry
 
 logger = logging.getLogger("depanalyzer.parsers.hvigor.config")
+
+# Hvigor module node types (including packaging-specific variants).
+HVIGOR_MODULE_NODE_TYPES = {
+    NodeType.MODULE.value,
+    NodeType.HAP.value,
+    NodeType.HAR.value,
+    NodeType.HSP.value,
+}
 
 
 class HvigorParser(BaseParser):
@@ -54,30 +62,282 @@ class HvigorParser(BaseParser):
         self._pending_root_locks: list[tuple[Dict[str, Any], str]] = []
         self._root_package_applied_modules: set[str] = set()
         self._root_lock_applied_modules: set[str] = set()
+        self._native_module_hints: dict[str, dict[str, Any]] = {}
 
-    def _ensure_module_node(self, module_name: str) -> str:
+    def _resolve_module_node_type(self, module_type: str | None) -> NodeType:
+        """Map hvigor module type strings to concrete NodeType variants."""
+        if not module_type:
+            return NodeType.MODULE
+
+        module_type = str(module_type).lower()
+        if module_type in {"entry", "feature", "hap"}:
+            return NodeType.HAP
+        if module_type == "har":
+            return NodeType.HAR
+        if module_type == "hsp":
+            return NodeType.HSP
+        return NodeType.MODULE
+
+    def _should_update_module_node_type(
+        self, existing_type: str | None, new_type: NodeType
+    ) -> bool:
+        """Return True when we should update a module node's type."""
+        if not existing_type:
+            return True
+        if existing_type not in HVIGOR_MODULE_NODE_TYPES:
+            return True
+        if existing_type == NodeType.MODULE.value and new_type != NodeType.MODULE:
+            return True
+        return False
+
+    @staticmethod
+    def _is_hvigor_module(attrs: Dict[str, Any] | None) -> bool:
+        """Check whether a node dict represents a Hvigor module."""
+        if not attrs:
+            return False
+        return (
+            attrs.get("parser_name") == HvigorParser.NAME
+            and attrs.get("type") in HVIGOR_MODULE_NODE_TYPES
+        )
+
+    def _update_native_hint(
+        self,
+        module_name: str,
+        *,
+        native_dirs: Iterable[str] | None = None,
+        native_artifacts: Iterable[str] | None = None,
+        evidence: Iterable[str] | None = None,
+        is_native: bool | None = None,
+    ) -> None:
+        """Accumulate native metadata for a module for later node updates."""
+        hints = self._native_module_hints.setdefault(
+            module_name,
+            {
+                "native_dirs": set(),
+                "native_artifacts": set(),
+                "evidence": set(),
+                "is_native": False,
+            },
+        )
+
+        if native_dirs:
+            hints["native_dirs"].update(str(p) for p in native_dirs)
+        if native_artifacts:
+            hints["native_artifacts"].update(str(p) for p in native_artifacts)
+        if evidence:
+            hints["evidence"].update(str(e) for e in evidence)
+        if is_native:
+            hints["is_native"] = hints["is_native"] or bool(is_native)
+        if hints["native_dirs"] or hints["native_artifacts"]:
+            hints["is_native"] = True
+
+    def _build_native_attrs(self, module_name: str) -> Dict[str, Any]:
+        """Build native-related attribute payload for a module node."""
+        hints = self._native_module_hints.get(module_name)
+        if not hints:
+            return {}
+
+        attrs: Dict[str, Any] = {}
+        native_dirs = sorted(hints.get("native_dirs") or [])
+        native_artifacts = sorted(hints.get("native_artifacts") or [])
+        evidence = sorted(hints.get("evidence") or [])
+
+        if native_dirs:
+            attrs["native_dirs"] = native_dirs
+        if native_artifacts:
+            attrs["native_artifacts"] = native_artifacts
+        if evidence:
+            attrs["native_evidence"] = evidence
+        if hints.get("is_native") or native_dirs or native_artifacts:
+            attrs["has_native_code"] = True
+
+        return attrs
+
+    def _merge_node_attributes(self, node_id: str, attrs: Dict[str, Any]) -> None:
+        """Merge attributes into an existing node, preserving truthy flags."""
+        if not self.graph_manager.has_node(node_id):
+            return
+
+        node = self.graph_manager.get_node(node_id) or {}
+
+        for key, value in attrs.items():
+            if value is None:
+                continue
+
+            if isinstance(value, list):
+                existing = node.get(key) or []
+                merged: list[Any] = list(existing) if isinstance(existing, list) else []
+                for item in value:
+                    if item not in merged:
+                        merged.append(item)
+                self.graph_manager.update_node_attribute(node_id, key, merged)
+                node[key] = merged
+            else:
+                if key == "has_native_code" and node.get(key):
+                    continue
+                self.graph_manager.update_node_attribute(node_id, key, value)
+                node[key] = value
+
+    def _apply_native_attrs_to_node(self, module_id: str, module_name: str) -> None:
+        """Apply accumulated native hints to an existing module node."""
+        native_attrs = self._build_native_attrs(module_name)
+        if not native_attrs:
+            return
+        self._merge_node_attributes(module_id, native_attrs)
+
+    def _extract_native_dirs_from_external_native_options(
+        self, module_name: str, module_root: Path, module_entry: Dict[str, Any]
+    ) -> Set[str]:
+        """Extract native directories from build-profile externalNativeOptions."""
+        opts = module_entry.get("externalNativeOptions")
+        if not opts:
+            return set()
+
+        native_paths: Set[str] = set()
+
+        def _collect_paths(candidate: Any) -> list[str]:
+            if isinstance(candidate, str) and candidate.strip():
+                return [candidate]
+            if isinstance(candidate, (list, tuple)):
+                return [str(item) for item in candidate if isinstance(item, str) and item.strip()]
+            return []
+
+        if isinstance(opts, dict):
+            for key in ("path", "paths", "cmakeListsPath", "buildFile"):
+                native_paths.update(_collect_paths(opts.get(key)))
+            # Some configs may specify the path directly without a known key.
+            for value in opts.values():
+                native_paths.update(_collect_paths(value))
+        else:
+            native_paths.update(_collect_paths(opts))
+
+        resolved_dirs: Set[str] = set()
+        for raw_path in native_paths:
+            try:
+                path_obj = Path(raw_path)
+                if not path_obj.is_absolute():
+                    path_obj = (module_root / path_obj).resolve()
+                else:
+                    path_obj = path_obj.resolve()
+                resolved_dirs.add(str(path_obj if path_obj.is_dir() else path_obj.parent))
+            except OSError:
+                continue
+
+        evidence = ["externalNativeOptions"]
+        if resolved_dirs:
+            self._update_native_hint(
+                module_name,
+                native_dirs=resolved_dirs,
+                evidence=evidence,
+                is_native=True,
+            )
+        else:
+            self._update_native_hint(
+                module_name,
+                evidence=evidence,
+                is_native=True,
+            )
+        return resolved_dirs
+
+    def _scan_module_native_artifacts(self, module_name: str, module_root: Path) -> None:
+        """Scan common Hvigor native output locations for shared libraries."""
+        native_dirs: Set[str] = set()
+        native_artifacts: Set[str] = set()
+
+        candidates = [
+            module_root / "libs",
+            module_root / "src" / "main" / "libs",
+        ]
+
+        for root_dir in candidates:
+            if not root_dir.is_dir():
+                continue
+            try:
+                for so_path in root_dir.rglob("*.so"):
+                    if "node_modules" in so_path.parts:
+                        continue
+                    try:
+                        normalized = (
+                            self.graph_manager.normalize_path(so_path)
+                            if self.graph_manager.root_path
+                            else str(so_path.resolve())
+                        )
+                    except Exception:
+                        normalized = str(so_path.resolve())
+                    native_artifacts.add(normalized)
+                    try:
+                        native_dirs.add(str(so_path.parent.resolve()))
+                    except OSError:
+                        native_dirs.add(str(so_path.parent))
+            except (OSError, ValueError) as exc:
+                logger.debug("Skipping native scan for %s: %s", module_root, exc)
+
+        if native_dirs or native_artifacts:
+            self._update_native_hint(
+                module_name,
+                native_dirs=native_dirs,
+                native_artifacts=native_artifacts,
+                evidence=["shared_library_present"],
+                is_native=True,
+            )
+
+    def _collect_native_metadata(
+        self, module_name: str, module_root: Path, module_entry: Dict[str, Any] | None
+    ) -> None:
+        """Collect native evidence from config entry and on-disk artifacts."""
+        if module_entry:
+            self._extract_native_dirs_from_external_native_options(
+                module_name, module_root, module_entry
+            )
+        self._scan_module_native_artifacts(module_name, module_root)
+
+    def _ensure_module_node(
+        self,
+        module_name: str,
+        *,
+        provenance: str = "package_config",
+        declared_via: str = "oh-package.json5",
+        module_root_override: Path | None = None,
+        over_approx: bool = False,
+        confidence: float = 0.9,
+        module_type: str | None = None,
+    ) -> str:
         """Ensure a module node exists for the given module name."""
         module_id = f"module:{module_name}"
+        module_root = module_root_override or (self.workspace_root / module_name).resolve()
+        resolved_type = self._resolve_module_node_type(module_type)
+
+        self._collect_native_metadata(module_name, module_root, None)
+        native_attrs = self._build_native_attrs(module_name)
+
+        attrs = {
+            "origin": "in_repo",
+            "provenance": provenance,
+            "declared_via": declared_via,
+        }
+        attrs.update(native_attrs)
+
         existing = self.graph_manager.get_node(module_id)
         if existing is None:
-            module_root = (self.workspace_root / module_name).resolve()
             module_spec = NodeSpec(
                 id=module_id,
-                type=NodeType.MODULE,
+                type=resolved_type,
                 label=module_id,
                 src_path=str(module_root),
                 name=module_name,
                 parser_name=self.NAME,
-                confidence=0.9,
-                attrs={
-                    "origin": "in_repo",
-                    "provenance": "package_config",
-                    "declared_via": "oh-package.json5",
-                },
+                confidence=confidence,
+                over_approx=over_approx,
+                attrs=attrs,
             )
             self.graph_manager.add_node_spec(module_spec)
-        elif existing.get("type") != NodeType.MODULE.value:
-            self.graph_manager.update_node_attribute(module_id, "type", NodeType.MODULE.value)
+        else:
+            if self._should_update_module_node_type(existing.get("type"), resolved_type):
+                self.graph_manager.update_node_attribute(module_id, "type", resolved_type.value)
+            self._merge_node_attributes(module_id, attrs)
+            # Ensure src_path is populated for path-based reasoning.
+            if not existing.get("src_path"):
+                self.graph_manager.update_node_attribute(module_id, "src_path", str(module_root))
         return module_id
 
     def parse(self, target_path: Path) -> None:
@@ -91,7 +351,7 @@ class HvigorParser(BaseParser):
         self._process_config_result(parsed_data)
 
     def _parse_single_config(self, file_path: Path) -> Dict[str, Any]:
-        """Parse a single JSON5 config file and classify its content."""
+        """Parse a single JSON/JSON5 config file and classify its content."""
         result = {"file": file_path, "type": "unknown"}
         try:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -108,6 +368,7 @@ class HvigorParser(BaseParser):
                     **config.get("dependencies", {}),
                     **config.get("devDependencies", {}),
                 }
+                result["package_name"] = config.get("name")
                 # Store dependency list with version info (including file: dependencies)
                 result["dependencies"] = [
                     {"name": name, "version": version}
@@ -124,11 +385,12 @@ class HvigorParser(BaseParser):
                 if "types" in config:
                     result["bridge_dts"] = config.get("types")
 
-            elif file_path.name == "module.json5":
+            elif file_path.name in {"module.json5", "module.json"}:
                 result["type"] = "module_config"
                 module_cfg = config.get("module", {}) or {}
                 result["module_name"] = module_cfg.get("name", file_path.parent.name)
                 result["module_type"] = module_cfg.get("type")
+                result["declared_via"] = file_path.name
             elif file_path.name == "oh-package-lock.json5":
                 result["type"] = "lock_file"
                 # ohpm lock v3 uses packages/specifiers structure
@@ -298,28 +560,50 @@ class HvigorParser(BaseParser):
                 if isinstance(module_item, dict)
                 else module_item
             )
+            module_type = module_item.get("type") if isinstance(module_item, dict) else None
             if not module_name or not isinstance(module_name, str):
                 continue
 
             module_id = f"module:{module_name}"
             module_root = Path(self.workspace_root) / module_name
             self._known_modules.add(module_name)
+            resolved_type = self._resolve_module_node_type(module_type)
 
-            module_spec = NodeSpec(
-                id=module_id,
-                type=NodeType.MODULE,
-                label=module_id,
-                src_path=str(module_root.resolve()),
-                name=module_name,
-                parser_name=self.NAME,
-                confidence=1.0,
-                attrs={
-                    "origin": "in_repo",
-                    "provenance": "build_profile",
-                    "declared_via": "build-profile.json5",
-                },
-            )
-            self.graph_manager.add_node_spec(module_spec)
+            module_entry = module_item if isinstance(module_item, dict) else None
+            self._collect_native_metadata(module_name, module_root.resolve(), module_entry)
+            native_attrs = self._build_native_attrs(module_name)
+
+            attrs = {
+                "origin": "in_repo",
+                "provenance": "build_profile",
+                "declared_via": "build-profile.json5",
+                "module_type": module_type,
+            }
+            attrs.update(native_attrs)
+
+            existing = self.graph_manager.get_node(module_id)
+            if existing is None:
+                module_spec = NodeSpec(
+                    id=module_id,
+                    type=resolved_type,
+                    label=module_id,
+                    src_path=str(module_root.resolve()),
+                    name=module_name,
+                    parser_name=self.NAME,
+                    confidence=1.0,
+                    attrs=attrs,
+                )
+                self.graph_manager.add_node_spec(module_spec)
+            else:
+                if self._should_update_module_node_type(existing.get("type"), resolved_type):
+                    self.graph_manager.update_node_attribute(
+                        module_id, "type", resolved_type.value
+                    )
+                if not existing.get("src_path"):
+                    self.graph_manager.update_node_attribute(
+                        module_id, "src_path", str(module_root.resolve())
+                    )
+                self._merge_node_attributes(module_id, attrs)
 
             edge_spec = EdgeSpec(
                 source=module_id,
@@ -346,33 +630,57 @@ class HvigorParser(BaseParser):
         self._flush_pending_root_locks()
 
     def _process_module_config(self, result: Dict[str, Any], config_file_id: str):
-        """Process module.json5 file."""
+        """Process module.json/module.json5 file."""
         module_name = result.get("module_name")
         if not module_name:
             return
 
         config_file = result.get("file")
+        if not config_file:
+            return
         module_id = f"module:{module_name}"
         module_root = config_file.parent.parent.parent
 
         module_type = result.get("module_type")
+        declared_via = result.get("declared_via") or config_file.name
+        resolved_type = self._resolve_module_node_type(module_type)
 
-        module_spec = NodeSpec(
-            id=module_id,
-            type=NodeType.MODULE,
-            label=module_id,
-            src_path=str(module_root.resolve()),
-            name=module_name,
-            parser_name=self.NAME,
-            confidence=1.0,
-            attrs={
-                "origin": "in_repo",
-                "provenance": "module_config",
-                "declared_via": "module.json5",
-                "module_type": module_type,
-            },
-        )
-        self.graph_manager.add_node_spec(module_spec)
+        self._collect_native_metadata(module_name, module_root.resolve(), None)
+        native_attrs = self._build_native_attrs(module_name)
+
+        attrs = {
+            "origin": "in_repo",
+            "provenance": "module_config",
+            "declared_via": declared_via,
+            "module_type": module_type,
+        }
+        attrs.update(native_attrs)
+
+        existing = self.graph_manager.get_node(module_id)
+        if existing is None:
+            module_spec = NodeSpec(
+                id=module_id,
+                type=resolved_type,
+                label=module_id,
+                src_path=str(module_root.resolve()),
+                name=module_name,
+                parser_name=self.NAME,
+                confidence=1.0,
+                attrs=attrs,
+            )
+            self.graph_manager.add_node_spec(module_spec)
+        else:
+            if self._should_update_module_node_type(existing.get("type"), resolved_type):
+                self.graph_manager.update_node_attribute(
+                    module_id, "type", resolved_type.value
+                )
+            if module_type and existing.get("module_type") != module_type:
+                self.graph_manager.update_node_attribute(module_id, "module_type", module_type)
+            if not existing.get("src_path"):
+                self.graph_manager.update_node_attribute(
+                    module_id, "src_path", str(module_root.resolve())
+                )
+            self._merge_node_attributes(module_id, attrs)
 
         edge_spec = EdgeSpec(
             source=module_id,
@@ -390,7 +698,7 @@ class HvigorParser(BaseParser):
                 "module_id": module_id,
                 "module_name": module_name,
                 "module_root": str(module_root.relative_to(self.workspace_root)),
-                "declared_via": "module.json5",
+                "declared_via": declared_via,
             },
         )
         self.publish_parse_event(event)
@@ -451,13 +759,37 @@ class HvigorParser(BaseParser):
         """
         module_ids: list[str] = []
         for node_id, attrs in self.graph_manager.nodes():
-            if (attrs or {}).get("type") != NodeType.MODULE.value:
-                continue
-            parser_name = (attrs or {}).get("parser_name")
-            if parser_name != self.NAME:
+            if not self._is_hvigor_module(attrs):
                 continue
             module_ids.append(str(node_id))
         return module_ids
+
+    def _should_infer_missing_modules(self) -> bool:
+        """Return True when the parser should synthesize modules from configs."""
+        cfg = getattr(self, "config", None)
+        if cfg is None:
+            return True
+        return bool(getattr(cfg, "infer_missing_modules", True))
+
+    def _infer_root_module(
+        self, result: Dict[str, Any], declared_via: str
+    ) -> str | None:
+        """Create a best-effort root module when no modules are known."""
+        module_name = result.get("package_name") or self.workspace_root.name or "workspace_root"
+        try:
+            module_id = self._ensure_module_node(
+                module_name,
+                provenance="package_config",
+                declared_via=declared_via,
+                module_root_override=self.workspace_root,
+                over_approx=True,
+                confidence=0.7,
+            )
+            self._known_modules.add(module_name)
+            return module_id
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to infer root module from %s: %s", declared_via, exc)
+            return None
 
     def _flush_pending_root_packages(self) -> None:
         """Re-process deferred root-level oh-package.json5 files once modules exist."""
@@ -552,16 +884,36 @@ class HvigorParser(BaseParser):
                 module_names = {
                     n.split("module:", 1)[1]
                     for n, attrs in self.graph_manager.nodes()
-                    if isinstance(n, str) and n.startswith("module:")
-                    and (attrs or {}).get("type") == NodeType.MODULE.value
+                    if isinstance(n, str)
+                    and n.startswith("module:")
+                    and self._is_hvigor_module(attrs)
                 }
             if not module_names and self._known_modules:
                 module_names = set(self._known_modules)
+            created_fallback = False
+            if not module_names and self._should_infer_missing_modules():
+                inferred = self._infer_root_module(result, "oh-package.json5")
+                if inferred:
+                    target_module_ids = [inferred]
+                    created_fallback = True
+                    edge_spec = EdgeSpec(
+                        source=inferred,
+                        target=config_file_id,
+                        kind=EdgeKind.DEFINED_BY,
+                        parser_name=self.NAME,
+                    )
+                    self.graph_manager.add_edge_spec(edge_spec)
             if not module_names:
-                # Defer processing until modules are discovered.
+                # Defer to pending queue so newly discovered modules also get the deps.
                 self._pending_root_packages.append((result, config_file_id))
-                return
-            target_module_ids = [self._ensure_module_node(name) for name in module_names]
+                if owning_module_id is None and target_module_ids:
+                    self._root_package_applied_modules.update(target_module_ids)
+                if not target_module_ids:
+                    return
+            if not target_module_ids:
+                target_module_ids = [self._ensure_module_node(name) for name in module_names]
+            if owning_module_id is None:
+                self._root_package_applied_modules.update(target_module_ids)
 
         # Process regular dependencies
         deps = result.get("dependencies", [])
@@ -596,11 +948,14 @@ class HvigorParser(BaseParser):
 
                 # Ensure target module node exists so it does not stay as type=unknown
                 target_existing = self.graph_manager.get_node(target_module_id)
+                resolved_target_type = self._resolve_module_node_type(
+                    (target_existing or {}).get("module_type") if target_existing else None
+                )
                 if target_existing is None:
                     target_root = (self.workspace_root / target_module_name).resolve()
                     target_spec = NodeSpec(
                         id=target_module_id,
-                        type=NodeType.MODULE,
+                        type=resolved_target_type,
                         label=target_module_id,
                         src_path=str(target_root),
                         name=target_module_name,
@@ -613,9 +968,11 @@ class HvigorParser(BaseParser):
                         },
                     )
                     self.graph_manager.add_node_spec(target_spec)
-                elif target_existing.get("type") != NodeType.MODULE.value:
+                elif self._should_update_module_node_type(
+                    target_existing.get("type"), resolved_target_type
+                ):
                     self.graph_manager.update_node_attribute(
-                        target_module_id, "type", NodeType.MODULE.value
+                        target_module_id, "type", resolved_target_type.value
                     )
 
                 # Create edge from owning module to target module
@@ -798,7 +1155,7 @@ class HvigorParser(BaseParser):
                         if not self.graph_manager.has_node(expected_artifact_id):
                             artifact_spec = NodeSpec(
                                 id=expected_artifact_id,
-                                type=NodeType.ARTIFACT,
+                                type=NodeType.SHARED_LIBRARY,
                                 label=str(expected_artifact_path),
                                 src_path=str(expected_artifact_path),
                                 name=f"lib{lib_name}.so",
@@ -809,6 +1166,7 @@ class HvigorParser(BaseParser):
                                     "provenance": "hvigor_native_dep",
                                     "declared_via": "oh-package.json5",
                                     "ecosystem": "hvigor",
+                                    "linkage_kind": "shared",
                                 },
                             )
                             self.graph_manager.add_node_spec(artifact_spec)
@@ -899,14 +1257,26 @@ class HvigorParser(BaseParser):
                     for n, attrs in self.graph_manager.nodes()
                     if isinstance(n, str)
                     and n.startswith("module:")
-                    and (attrs or {}).get("type") == NodeType.MODULE.value
+                    and self._is_hvigor_module(attrs)
                 }
             if not module_names and self._known_modules:
                 module_names = set(self._known_modules)
+            created_fallback = False
+            if not module_names and self._should_infer_missing_modules():
+                inferred = self._infer_root_module(result, "oh-package-lock.json5")
+                if inferred:
+                    target_module_ids = [inferred]
+                    created_fallback = True
             if not module_names:
                 self._pending_root_locks.append((result, _config_file_id))
-                return
-            target_module_ids = [self._ensure_module_node(name) for name in module_names]
+                if owning_module_id is None and target_module_ids:
+                    self._root_lock_applied_modules.update(target_module_ids)
+                if not target_module_ids:
+                    return
+            if not target_module_ids:
+                target_module_ids = [self._ensure_module_node(name) for name in module_names]
+            if owning_module_id is None:
+                self._root_lock_applied_modules.update(target_module_ids)
 
         for dep in result.get("external_dependencies", []):
             lib_name = dep.get("name")

@@ -115,6 +115,24 @@ python scripts/run_license_compatibility.py \
   --project-path /path/to/repo \
   --output-dir ./results \
   --third-party
+
+If you maintain liscopelens `shadow.json` overrides, pass them explicitly:
+```bash
+# Single shadow applied to all projects
+python scripts/run_license_compatibility.py \
+  --project-path /path/to/repo \
+  --shadow-file /path/to/shadow.json
+
+# Batch with one shadow per project (order follows the project flags)
+python scripts/run_license_compatibility.py \
+  --project-path /path/to/project1 --shadow-file /shadows/project1/shadow.json \
+  --project-path /path/to/project2 --shadow-file /shadows/project2/shadow.json
+
+# Batch with a shadow directory (expects <shadow-dir>/<project-name>.json)
+python scripts/run_license_compatibility.py \
+  --projects-dir /path/to/projects_root \
+  --shadow-dir /path/to/shadow_root
+```
 ```
 
 **Batch Processing:**
@@ -264,7 +282,7 @@ depanalyzer scan /path/to/repo -o graph.json --fallback-tree
 ```toml
 [fallback]
 enabled = true                           # Enable fallback tree (default: false)
-root_id = "fallback:license_scan"       # Root node ID (default: "fallback:license_scan")
+root_id = "//fallback/license_scan"       # Root node ID (default)
 include_isolated_nodes = true            # Connect isolated nodes to root (default: true)
 ```
 
@@ -273,7 +291,7 @@ include_isolated_nodes = true            # Connect isolated nodes to root (defau
 {
   "fallback": {
     "enabled": true,
-    "root_id": "fallback:license_scan",
+    "root_id": "//fallback/license_scan",
     "include_isolated_nodes": true
   }
 }

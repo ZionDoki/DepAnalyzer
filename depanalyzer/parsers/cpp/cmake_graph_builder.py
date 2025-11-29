@@ -104,12 +104,17 @@ class CMakeGraphBuilder:
         self.graph_manager.add_node_spec(node_spec)
         log.debug("Created target node: %s (type=%s)", target_id, ntype.value)
 
-        # Create a logical artifact node produced by this target so downstream
+        # Create a logical output node produced by this target so downstream
         # consumers (Hvigor/Hap packaging, etc.) can reference build outputs.
         artifact_id = f"{target_id}:artifact"
+        output_type = ntype if ntype in (
+            NodeType.SHARED_LIBRARY,
+            NodeType.STATIC_LIBRARY,
+            NodeType.EXECUTABLE,
+        ) else NodeType.TARGET
         artifact_spec = NodeSpec(
             id=artifact_id,
-            type=NodeType.ARTIFACT,
+            type=output_type,
             label=artifact_id,
             parser_name=event.source,
             confidence=confidence,
@@ -117,6 +122,7 @@ class CMakeGraphBuilder:
                 "produced_by": target_id,
                 "target_type": ntype.value,
                 "name": target_name,
+                "linkage_kind": attrs.get("linkage_kind"),
             },
         )
         self.graph_manager.add_node_spec(artifact_spec)
@@ -127,7 +133,7 @@ class CMakeGraphBuilder:
             parser_name=event.source,
             confidence=confidence,
         )
-        log.debug("Created artifact node for target %s -> %s", target_id, artifact_id)
+        log.debug("Created output node for target %s -> %s (type=%s)", target_id, artifact_id, output_type.value)
 
         self._register_provider_contracts(
             target_id=target_id,
@@ -174,7 +180,7 @@ class CMakeGraphBuilder:
             return
 
         is_module_library = raw_node_type == "module_library"
-        if node_type not in (NodeType.SHARED_LIBRARY,) and not is_module_library:
+        if node_type not in (NodeType.SHARED_LIBRARY, NodeType.STATIC_LIBRARY) and not is_module_library:
             return
 
         if not src_path:

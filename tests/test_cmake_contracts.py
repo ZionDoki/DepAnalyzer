@@ -53,6 +53,46 @@ def test_cmake_graph_builder_registers_provider_contract(tmp_path: Path) -> None
     assert provider.metadata.get("native_dir") == str(cmake_dir.resolve())
 
 
+def test_cmake_graph_builder_registers_provider_contract_for_static_library(tmp_path: Path) -> None:
+    """Static libraries should also publish provider contracts (bridged as .so)."""
+    registry = ContractRegistry.get_instance()
+    registry.reset()
+
+    cmake_dir = tmp_path / "native"
+    cmake_dir.mkdir()
+    cmake_file = cmake_dir / "CMakeLists.txt"
+    cmake_file.write_text("", encoding="utf-8")
+
+    graph_manager = GraphManager(graph_id="g", root_path=tmp_path)
+    builder = CMakeGraphBuilder(graph_manager, EventBus())
+
+    event = Event(
+        event_type=EventType.CMAKE_TARGET_CREATED,
+        source="cmake",
+        data={
+            "target_id": "//native/CMakeLists.txt:staticlib",
+            "node_type": "static_library",
+            "target_name": "staticlib",
+            "src_path": str(cmake_file),
+            "declared_via": "add_library",
+            "origin": "in_repo",
+            "provenance": "cmake_add_target",
+            "confidence": 1.0,
+            "imported": False,
+        },
+    )
+
+    builder._handle_target_created(event)
+
+    providers = registry.get_providers("libstaticlib.so")
+    registry.reset()
+
+    assert providers, "Expected provider contract for static_library target"
+    provider = providers[0]
+    assert provider.metadata.get("target_id") == "//native/CMakeLists.txt:staticlib"
+    assert provider.metadata.get("native_dir") == str(cmake_dir.resolve())
+
+
 def test_transaction_resets_contract_registry(tmp_path: Path) -> None:
     """Each transaction should start with a clean contract registry."""
     registry = ContractRegistry.get_instance()

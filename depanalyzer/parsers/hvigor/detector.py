@@ -19,6 +19,7 @@ class HvigorDetector(BaseDetector):
         "**/build-profile.json5",
         "**/oh-package.json5",
         "**/module.json5",
+        "**/module.json",
         "**/oh-package-lock.json5",
         "**/hvigor-config.json5",
     ]
@@ -97,7 +98,7 @@ class HvigorDetector(BaseDetector):
             return "build_profile"
         elif file_name == "oh-package.json5":
             return "package_config"
-        elif file_name == "module.json5":
+        elif file_name in ("module.json5", "module.json"):
             return "module_config"
         elif file_name == "oh-package-lock.json5":
             return "lock_file"

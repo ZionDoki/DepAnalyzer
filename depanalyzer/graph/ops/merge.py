@@ -61,6 +61,13 @@ def _load_graph_from_cache(cache_path: Path) -> Tuple[nx.MultiDiGraph, Dict]:
     return g, metadata
 
 
+def _sanitize_label(node_id: str) -> str:
+    """Best-effort GN-like label: leading '//' and '/' separators, no ':'."""
+    if node_id.startswith("//"):
+        return node_id.replace(":", "/")
+    return node_id
+
+
 def _compute_dead_nodes_for_graph(graph: nx.MultiDiGraph) -> List[str]:
     """Compute unreachable nodes for a merged graph.
 
@@ -187,6 +194,7 @@ def merge_graph_with_dependencies(
             new_attrs.setdefault("graph_id", graph_id)
             new_attrs.setdefault("graph_namespace", namespace)
             new_attrs.setdefault("orig_id", str(node_id))
+            new_attrs["label"] = _sanitize_label(new_id)
             merged.add_node(new_id, **new_attrs)
 
         for u, v, _key, attrs in graph.edges(data=True, keys=True):
@@ -246,7 +254,7 @@ def merge_graph_with_dependencies(
     #    roots of the corresponding dependency graphs.
     proxy_nodes: List[Tuple[str, Dict]] = []
     for node_id, attrs in merged.nodes(data=True):
-        if attrs.get("type") == "proxy" and attrs.get("child_graph_id"):
+        if attrs.get("child_graph_id"):
             proxy_nodes.append((node_id, attrs))
 
     added_cross_edges = 0

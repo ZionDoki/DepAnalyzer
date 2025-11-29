@@ -233,7 +233,7 @@ class FallbackConfig:
     """
 
     enabled: bool = False
-    root_id: str = "fallback:license_scan"
+    root_id: str = "//fallback/license_scan"
     include_isolated_nodes: bool = True
 
 

@@ -123,7 +123,7 @@ class UncertaintyAnalyzer:
         # over-approximations by design.
         if cfg.mark_proxy_nodes_as_conditional:
             for _, attrs in graph.nodes(data=True):
-                if attrs.get("type") == "proxy":
+                if attrs.get("type") == "proxy" or attrs.get("child_graph_id"):
                     self._mark_conditional(attrs, reason="proxy_reference")
 
         # Unresolved external_dep nodes (no resolved_path) are conditional.

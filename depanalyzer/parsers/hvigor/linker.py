@@ -25,6 +25,14 @@ from depanalyzer.parsers.base import BaseLinker
 
 logger = logging.getLogger("depanalyzer.parsers.hvigor.linker")
 
+# Hvigor module node types to consider for membership/packaging.
+HVIGOR_MODULE_NODE_TYPES = {
+    NodeType.MODULE.value,
+    NodeType.HAP.value,
+    NodeType.HAR.value,
+    NodeType.HSP.value,
+}
+
 
 class HvigorLinker(BaseLinker):
     """Linker for Hvigor/ArkTS ecosystem."""
@@ -72,7 +80,7 @@ class HvigorLinker(BaseLinker):
 
         modules: Dict[str, Path] = {}
         for node_id, attrs in graph_manager.nodes():
-            if attrs.get("type") != NodeType.MODULE.value:
+            if attrs.get("type") not in HVIGOR_MODULE_NODE_TYPES:
                 continue
 
             if attrs.get("parser_name") != "hvigor":
@@ -146,7 +154,7 @@ class HvigorLinker(BaseLinker):
         """Create packaging nodes (HAP/HAR/HSP) and link them to modules.
 
         Uses the `module_type` attribute recorded on module nodes by
-        HvigorParser when parsing module.json5. For now we use a simple
+        HvigorParser when parsing module.json/module.json5. For now we use a simple
         mapping:
 
         - module_type in {"entry", "feature"} -> HAP
@@ -159,14 +167,22 @@ class HvigorLinker(BaseLinker):
         created_edges = 0
 
         for module_id, attrs in graph_manager.nodes():
-            if attrs.get("type") != NodeType.MODULE.value:
+            if attrs.get("type") not in HVIGOR_MODULE_NODE_TYPES:
                 continue
             if attrs.get("parser_name") != "hvigor":
                 continue
 
             module_type = attrs.get("module_type")
+            node_type = attrs.get("type")
             if not module_type:
-                continue
+                if node_type == NodeType.HAP.value:
+                    module_type = "hap"
+                elif node_type == NodeType.HAR.value:
+                    module_type = "har"
+                elif node_type == NodeType.HSP.value:
+                    module_type = "hsp"
+                else:
+                    continue
 
             module_name = attrs.get("name") or module_id.split(":", 1)[-1]
 
