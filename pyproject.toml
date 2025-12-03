@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "depanalyzer"
-version = "0.1.5"
+version = "0.1.9"
 description = "Dependency analyzer tool"
 authors = [
     "Zihao <zhangzihao2025@lzu.edu.cn>",
