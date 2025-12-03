@@ -9,14 +9,33 @@ based on DependencySpec specifications.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from depanalyzer.parsers.base import DependencySpec
 from depanalyzer.parsers.registry import EcosystemRegistry
 
 logger = logging.getLogger("depanalyzer.runtime.dependency_resolver")
+
+
+def _load_dependency_metadata(dep_path: Path) -> Optional[Dict[str, Any]]:
+    """Load dependency metadata from known cache files if present."""
+    candidates = [
+        dep_path / ".hvigor_meta.json",
+    ]
+
+    for meta_path in candidates:
+        try:
+            if not meta_path.is_file():
+                continue
+            with meta_path.open("r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            logger.debug("Failed reading dependency metadata from %s: %s", meta_path, exc)
+
+    return None
 
 
 def resolve_dependencies(
@@ -88,6 +107,7 @@ def resolve_dependencies(
             dep_path = fetcher.fetch(spec)
 
             if dep_path and dep_path.exists():
+                dep_metadata = _load_dependency_metadata(dep_path)
                 logger.info(
                     "Successfully fetched dependency %s to: %s",
                     spec.name,
@@ -99,6 +119,7 @@ def resolve_dependencies(
                         "version": spec.version,
                         "ecosystem": spec.ecosystem,
                         "source": str(dep_path),
+                        "metadata": dep_metadata,
                         "spec": spec,
                         "success": True,
                     }

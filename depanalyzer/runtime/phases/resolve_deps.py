@@ -222,6 +222,7 @@ class ResolveDepsPhase(BasePhase):
         completed, failed = 0, 0
         for dep in successful_deps:
             logger.info("Creating child transaction for: %s", dep["name"])
+            self._attach_dependency_metadata(dep)
 
             # Use factory to create child transaction (avoids circular import)
             child_tx = factory.create(
@@ -445,3 +446,66 @@ class ResolveDepsPhase(BasePhase):
             logger.error(
                 "Failed to update GlobalDAG for %s: %s", self.state.graph_id, e
             )
+
+    def _attach_dependency_metadata(self, dep: Dict[str, Any]) -> None:
+        """Attach resolved dependency metadata to originating nodes."""
+        if not self.state.graph_manager:
+            return
+
+        meta = dep.get("metadata") or {}
+        if not meta:
+            return
+
+        spec = dep.get("spec")
+        if not spec:
+            return
+
+        node_ids = self._dependency_node_map.get(spec, [])
+        if not node_ids:
+            return
+
+        license_value = meta.get("license")
+        resolved_version = meta.get("resolved_version")
+        repository = meta.get("repository")
+        license_only = meta.get("license_only")
+        fetched_via = meta.get("fetched_via")
+
+        for node_id in node_ids:
+            try:
+                current = self.state.graph_manager.get_node(node_id) or {}
+
+                if resolved_version:
+                    self.state.graph_manager.update_node_attribute(
+                        node_id, "resolved_version", resolved_version
+                    )
+                    if not current.get("version"):
+                        self.state.graph_manager.update_node_attribute(
+                            node_id, "version", resolved_version
+                        )
+
+                if license_value:
+                    self.state.graph_manager.update_node_attribute(
+                        node_id, "license", license_value
+                    )
+                    self.state.graph_manager.update_node_attribute(
+                        node_id,
+                        "declared_license_expression_spdx",
+                        license_value,
+                    )
+
+                if repository is not None:
+                    self.state.graph_manager.update_node_attribute(
+                        node_id, "repository", repository
+                    )
+
+                if license_only is not None:
+                    self.state.graph_manager.update_node_attribute(
+                        node_id, "license_only", bool(license_only)
+                    )
+
+                if fetched_via:
+                    self.state.graph_manager.update_node_attribute(
+                        node_id, "fetched_via", fetched_via
+                    )
+            except ValueError:
+                logger.warning("Node %s no longer exists, skipping metadata attach", node_id)
