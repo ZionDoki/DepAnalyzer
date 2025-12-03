@@ -7,6 +7,7 @@ import argparse
 import copy
 import json
 import logging
+import os
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -135,12 +136,65 @@ def ensure_liscopelens_importable(liscopelens_path: Path) -> None:
         logger.info("Added liscopelens to sys.path: %s", resolved)
 
 
-def run_command(command: List[str], workdir: Optional[Path] = None) -> None:
+def _build_subprocess_env() -> Dict[str, str]:
+    """Prepare environment for subprocess commands with repo on PYTHONPATH.
+
+    Returns:
+        Environment mapping including the repository root on PYTHONPATH.
+    """
+    env = os.environ.copy()
+    pythonpath_parts: List[str] = [str(REPO_ROOT)]
+    existing = env.get("PYTHONPATH")
+    if existing:
+        pythonpath_parts.append(existing)
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
+    return env
+
+
+def _ensure_depanalyzer_importable(env: Mapping[str, str]) -> None:
+    """Fail fast when depanalyzer is unavailable for subprocess invocations.
+
+    Args:
+        env: Environment mapping used for subprocess calls.
+
+    Returns:
+        None.
+
+    Raises:
+        RuntimeError: If depanalyzer cannot be imported.
+    """
+    check_cmd = [sys.executable, "-c", "import depanalyzer.main"]
+    result = subprocess.run(
+        check_cmd,
+        check=False,
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+    if result.returncode != 0:
+        if result.stdout:
+            logger.error("stdout:\n%s", result.stdout)
+        if result.stderr:
+            logger.error("stderr:\n%s", result.stderr)
+        logger.error(
+            "depanalyzer is not installed or not importable. Install with "
+            "`pip install -e .` from the repository root or ensure PYTHONPATH "
+            "includes this checkout."
+        )
+        raise RuntimeError("depanalyzer is required for the license pipeline")
+
+
+def run_command(
+    command: List[str],
+    workdir: Optional[Path] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> None:
     """Run a subprocess command and raise on failure.
 
     Args:
         command: Command and arguments to execute.
         workdir: Optional working directory for the command.
+        env: Environment mapping to use for the subprocess.
 
     Returns:
         None.
@@ -155,6 +209,7 @@ def run_command(command: List[str], workdir: Optional[Path] = None) -> None:
         check=False,
         text=True,
         capture_output=True,
+        env=dict(env) if env is not None else None,
     )
     if result.returncode != 0:
         if result.stdout:
@@ -584,6 +639,7 @@ def _run_single_project(
     task_id: Optional[TaskID],
     liscopelens_config: Dict[str, Any],
     shadow_path: Optional[Path],
+    subprocess_env: Mapping[str, str],
 ) -> Dict[str, Any]:
     """Execute scan → scancode → liscopelens compatibility pipeline for one project.
 
@@ -597,6 +653,7 @@ def _run_single_project(
         task_id: Optional progress task identifier.
         liscopelens_config: Configuration mapping passed to liscopelens.
         shadow_path: Optional path to shadow.json passed to liscopelens (file_shadow).
+        subprocess_env: Environment mapping passed to subprocess calls.
 
     Returns:
         Dictionary summarizing outputs and validation metrics.
@@ -633,7 +690,7 @@ def _run_single_project(
     if not args.disable_fallback_tree:
         scan_cmd.append("--fallback-tree")
 
-    run_command(scan_cmd)
+    run_command(scan_cmd, env=subprocess_env)
 
     _update_task_phase(progress, task_id, "scancode", advance=True)
     scancode_cmd = [
@@ -653,7 +710,7 @@ def _run_single_project(
     if args.force_scancode:
         scancode_cmd.append("--force")
 
-    run_command(scancode_cmd)
+    run_command(scancode_cmd, env=subprocess_env)
 
     _update_task_phase(progress, task_id, "compatibility", advance=True)
     graph_dict, metadata = load_graph(graph_output)
@@ -716,6 +773,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
     Returns:
         None.
     """
+    subprocess_env = _build_subprocess_env()
+    _ensure_depanalyzer_importable(subprocess_env)
     ensure_liscopelens_importable(args.liscopelens_path)
     try:
         from liscopelens.api import check_compatibility 
@@ -762,6 +821,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     None,
                     liscopelens_config,
                     shadow_map.get(project_path),
+                    subprocess_env,
                 )
                 summaries.append({**summary, "status": "ok"})
             except Exception as exc: 
@@ -806,6 +866,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
                         task_id,
                         liscopelens_config,
                         shadow_map.get(project_path),
+                        subprocess_env,
                     )
                     summaries.append({**summary, "status": "ok"})
                 except Exception as exc: 

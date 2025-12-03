@@ -153,6 +153,7 @@ class TransactionCoordinator:
         if TransactionCoordinator._initialized:
             return
 
+        self._owner_pid = os.getpid()
         self.max_processes = max_processes or os.cpu_count() or 4
         self._executor: Optional[ProcessPoolExecutor] = None
         self._futures: Dict[Future, str] = {}  # Future -> transaction_id
@@ -183,6 +184,19 @@ class TransactionCoordinator:
             return cls._instance
 
         instance: "TransactionCoordinator" = cls._instance
+        current_pid = os.getpid()
+        owner_pid = getattr(instance, "_owner_pid", current_pid)
+        if owner_pid != current_pid:
+            logger.debug(
+                "Resetting TransactionCoordinator singleton after fork "
+                "(owner_pid=%s, current_pid=%s)",
+                owner_pid,
+                current_pid,
+            )
+            cls._instance = None
+            cls._initialized = False
+            cls._instance = cls(max_processes)
+            return cls._instance
 
         if (
             max_processes is not None
@@ -211,7 +225,9 @@ class TransactionCoordinator:
     def reset_instance(cls) -> None:
         """Reset the singleton instance (mainly for testing)."""
         if cls._instance is not None:
-            cls._instance.shutdown()
+            owner_pid = getattr(cls._instance, "_owner_pid", os.getpid())
+            if owner_pid == os.getpid():
+                cls._instance.shutdown()
         cls._instance = None
         cls._initialized = False
 

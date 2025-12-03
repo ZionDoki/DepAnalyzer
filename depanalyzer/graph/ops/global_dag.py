@@ -18,6 +18,7 @@ import logging
 import os
 import time
 from contextlib import contextmanager
+import errno
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
@@ -141,6 +142,22 @@ class GlobalDAG:
 
         return instance
 
+    @staticmethod
+    def _lock_owner_alive(pid: int) -> bool:
+        """Best-effort check whether a PID is still alive."""
+        if pid <= 0:
+            return False
+
+        try:
+            # os.kill(pid, 0) is a cross-platform liveness probe
+            os.kill(pid, 0)
+            return True
+        except OSError as exc:  # pragma: no cover - platform dependent
+            if getattr(exc, "errno", None) == errno.ESRCH:
+                return False
+            # Access denied or other errors are treated as "probably alive"
+            return True
+
     def _lock_path(self) -> Path:
         """Return path to the lock file used for cross-process coordination."""
         # Use a lock file next to the DAG JSON, e.g. global_dag.json.lock
@@ -184,8 +201,51 @@ class GlobalDAG:
                         str(lock_path),
                         os.O_CREAT | os.O_EXCL | os.O_RDWR,
                     )
+                    try:
+                        os.write(fd, str(os.getpid()).encode("utf-8"))
+                    except OSError:
+                        # Best effort; lock identity is optional
+                        pass
                     break
                 except FileExistsError as lock_err:
+                    # Remove stale lock files left behind by crashed processes.
+                    age = None
+                    try:
+                        stat_result = lock_path.stat()
+                        age = time.time() - stat_result.st_mtime
+                    except OSError:
+                        pass
+
+                    stale = False
+                    owner_pid = -1
+                    try:
+                        with lock_path.open("r", encoding="utf-8") as f:
+                            content = f.read().strip()
+                            owner_pid = int(content) if content.isdigit() else -1
+                        if owner_pid > 0 and not self._lock_owner_alive(owner_pid):
+                            stale = True
+                    except OSError:
+                        # Could not read owner PID; rely on age check below
+                        pass
+                    except ValueError:
+                        pass
+
+                    # Only fall back to age-based expiry when owner PID is unknown
+                    # (write failed or malformed) to avoid evicting active writers.
+                    if owner_pid <= 0 and age is not None and age > max(timeout, 30):
+                        stale = True
+
+                    if stale:
+                        try:
+                            os.unlink(lock_path)
+                            logger.warning(
+                                "Removed stale GlobalDAG lock file: %s", lock_path
+                            )
+                            continue
+                        except OSError:
+                            # If removal fails, keep waiting
+                            pass
+
                     if time.time() - start > timeout:
                         logger.error("Timeout acquiring GlobalDAG lock: %s", lock_path)
                         raise TimeoutError(
