@@ -34,6 +34,7 @@ from depanalyzer.graph.id_utils import (
     derive_dependency_namespace,
     ensure_namespace_unique,
 )
+from depanalyzer.graph.models.schema import NodeType
 from depanalyzer.utils.path_utils import normalize_node_id
 from depanalyzer.utils.scancode_installer import (
     DEFAULT_INSTALL_ROOT,
@@ -336,6 +337,308 @@ def _extract_spdx_expression(fentry: Dict[str, Any]) -> str | None:
     return None
 
 
+def _load_dependency_metadata(root_path: Path) -> Dict[str, Any] | None:
+    """Load dependency metadata written by fetchers.
+
+    Args:
+        root_path: Dependency root path.
+
+    Returns:
+        Parsed metadata dictionary when available, otherwise None.
+    """
+    candidates = [root_path / ".hvigor_meta.json"]
+    for meta_path in candidates:
+        try:
+            if not meta_path.is_file():
+                continue
+            with meta_path.open("r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            logger.debug("Failed reading dependency metadata from %s: %s", meta_path, exc)
+    return None
+
+
+def _extract_embedded_dependency_metadata(
+    graph_metadata: Dict[str, Any], graph_nodes: List[Dict[str, Any]]
+) -> Dict[str, Any] | None:
+    """Extract dependency metadata that was embedded in exported graphs.
+
+    Args:
+        graph_metadata: Graph-level metadata dictionary.
+        graph_nodes: List of graph nodes (raw export format).
+
+    Returns:
+        Embedded dependency metadata if present, otherwise None.
+    """
+    if isinstance(graph_metadata, dict):
+        embedded = graph_metadata.get("dependency_metadata")
+        if isinstance(embedded, dict) and embedded:
+            return embedded
+        meta_license = graph_metadata.get("license")
+        meta_license_only = graph_metadata.get("license_only")
+        if meta_license is not None and meta_license_only is not None:
+            candidate: Dict[str, Any] = {
+                "license": meta_license,
+                "license_only": bool(meta_license_only),
+            }
+            resolved_version = graph_metadata.get("resolved_version")
+            if resolved_version:
+                candidate["resolved_version"] = resolved_version
+            if graph_metadata.get("name"):
+                candidate["name"] = graph_metadata.get("name")
+            return candidate
+
+    for node in graph_nodes:
+        if not isinstance(node, dict):
+            continue
+        node_meta = node.get("dependency_metadata")
+        if isinstance(node_meta, dict) and node_meta:
+            return node_meta
+
+    for node in graph_nodes:
+        if not isinstance(node, dict):
+            continue
+        lic_expr = node.get("license")
+        lic_only = node.get("license_only")
+        if lic_expr is None or lic_only is None:
+            continue
+
+        candidate: Dict[str, Any] = {
+            "license": lic_expr,
+            "license_only": bool(lic_only),
+        }
+        resolved_version = node.get("resolved_version") or node.get("version")
+        if resolved_version:
+            candidate["resolved_version"] = resolved_version
+        if node.get("name"):
+            candidate["name"] = node.get("name")
+        return candidate
+
+    return None
+
+
+def _resolve_dependency_metadata(
+    root_path: Path | None,
+    graph_metadata: Dict[str, Any],
+    graph_nodes: List[Dict[str, Any]],
+) -> Dict[str, Any] | None:
+    """Resolve dependency metadata from filesystem or embedded export.
+
+    Args:
+        root_path: Dependency root path (if available).
+        graph_metadata: Graph metadata loaded from export.
+        graph_nodes: Graph node list loaded from export.
+
+    Returns:
+        Best-effort metadata dictionary, or None when missing.
+    """
+    if root_path:
+        dep_metadata = _load_dependency_metadata(root_path)
+        if dep_metadata:
+            return dep_metadata
+
+    return _extract_embedded_dependency_metadata(graph_metadata or {}, graph_nodes)
+
+
+def _rank_node_id(node_id: str) -> Tuple[int, int]:
+    """Rank node IDs so shallower IDs are preferred when attaching metadata."""
+    parts = [segment for segment in str(node_id).strip("/").split("/") if segment]
+    return (len(parts), len(str(node_id)))
+
+
+def _pick_license_node_from_graph(
+    graph_nodes: List[Dict[str, Any]], dep_metadata: Dict[str, Any] | None
+) -> str | None:
+    """Select the best graph node to attach metadata-derived licenses."""
+    preferred_types = {
+        NodeType.MODULE.value,
+        NodeType.EXTERNAL_DEP.value,
+        NodeType.EXTERNAL_LIBRARY.value,
+        NodeType.HAP.value,
+        NodeType.HAR.value,
+        NodeType.HSP.value,
+    }
+
+    target_name = str(dep_metadata.get("name") or "").lower() if dep_metadata else ""
+    target_version = str(
+        dep_metadata.get("resolved_version")
+        or dep_metadata.get("version")
+        or ""
+    ).lower() if dep_metadata else ""
+
+    best_id: str | None = None
+    best_score = -1
+    best_rank = (10_000, 10_000)
+
+    for node in graph_nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = node.get("id")
+        if not node_id:
+            continue
+        node_type = str(node.get("type") or "").lower()
+        node_name = str(node.get("name") or "").lower()
+        node_version = str(node.get("version") or "").lower()
+        label_lower = str(node.get("label") or "").lower()
+        id_lower = str(node_id).lower()
+
+        match_name = bool(target_name) and (
+            node_name == target_name
+            or target_name in label_lower
+            or target_name in id_lower
+        )
+        match_version = bool(target_version) and (
+            node_version == target_version
+            or target_version in label_lower
+            or target_version in id_lower
+        )
+
+        if not match_name and not match_version:
+            continue
+
+        score = 0
+        if match_name:
+            score += 3
+        if match_version:
+            score += 2
+        if node_type in preferred_types:
+            score += 1
+
+        rank = _rank_node_id(str(node_id))
+        if score > best_score or (score == best_score and rank < best_rank):
+            best_id = str(node_id)
+            best_score = score
+            best_rank = rank
+
+    return best_id
+
+
+def _merge_metadata_license(
+    dep_metadata: Dict[str, Any] | None,
+    graph_nodes: List[Dict[str, Any]],
+    graph_node_ids: Set[str],
+    license_map: Dict[str, str],
+) -> bool:
+    """Inject license map entries from dependency metadata when available."""
+    if not dep_metadata:
+        return False
+
+    if not dep_metadata.get("license_only"):
+        return False
+
+    license_expr = _normalize_spdx_expression(dep_metadata.get("license"))
+    if not license_expr:
+        return False
+
+    target_id = _pick_license_node_from_graph(graph_nodes, dep_metadata)
+    if not target_id:
+        return False
+
+    canonical_id = canonicalize_normalized_id(str(target_id))
+    if graph_node_ids and canonical_id not in graph_node_ids:
+        return False
+
+    if canonical_id in license_map:
+        return False
+
+    license_map[canonical_id] = license_expr
+    return True
+
+
+def _derive_graph_namespace(
+    graph_id: str,
+    metadata: Dict[str, Any],
+    summary: Dict[str, Any],
+    namespace_assignments: Dict[str, str],
+) -> str:
+    """Compute or reuse namespace for a graph."""
+    base_namespace = derive_dependency_namespace(graph_id, metadata, summary)
+    return ensure_namespace_unique(base_namespace, graph_id, namespace_assignments)
+
+
+def _read_graph_payload(
+    graph_id: str, graphs_root: Path, registry: GraphRegistry
+) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
+    """Load graph JSON payload (metadata + nodes) for a graph ID."""
+    cache_entry = registry.get_entry(graph_id)
+    summary = cache_entry.get("summary") if cache_entry else {}
+
+    cache_path: Path | None = None
+    if cache_entry:
+        cache_path = Path(cache_entry.get("cache_path", ""))
+    if cache_path is None or not cache_path.is_file():
+        fallback_path = graphs_root / f"{graph_id}.json"
+        cache_path = fallback_path if fallback_path.is_file() else None
+
+    if cache_path is None:
+        raise FileNotFoundError(f"Graph {graph_id} cache not found")
+
+    with cache_path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    metadata = data.get("metadata", {}) or {}
+    graph_section = data.get("graph")
+    if isinstance(graph_section, dict) and graph_section.get("nodes"):
+        graph_body = graph_section
+    else:
+        graph_body = data
+    graph_nodes = graph_body.get("nodes") if isinstance(graph_body, dict) else None
+
+    return metadata, summary or {}, graph_nodes or []
+
+
+def _find_parent_proxy_nodes(
+    graph_id: str,
+    graphs_root: Path,
+    registry: GraphRegistry,
+    namespace_assignments: Dict[str, str],
+    graph_namespace_map: Dict[str, str],
+    root_graphs: Set[str],
+    include_deps: bool,
+) -> List[str]:
+    """Find parent proxy node IDs (merged namespace) that point to a child graph."""
+    try:
+        dag = GlobalDAG.get_instance(cache_dir=graphs_root)
+        parent_ids = dag.get_dependents(graph_id)
+    except Exception:
+        return []
+
+    merged_ids: List[str] = []
+
+    for parent_id in parent_ids:
+        try:
+            metadata, summary, parent_nodes = _read_graph_payload(
+                parent_id, graphs_root, registry
+            )
+        except Exception:
+            continue
+
+        parent_namespace = graph_namespace_map.get(parent_id)
+        if parent_namespace is None:
+            parent_namespace = _derive_graph_namespace(
+                parent_id, metadata, summary, namespace_assignments
+            )
+            graph_namespace_map[parent_id] = parent_namespace
+
+        is_dependency = include_deps and parent_id not in root_graphs
+
+        for node in parent_nodes:
+            if not isinstance(node, dict):
+                continue
+            if node.get("child_graph_id") != graph_id:
+                continue
+            node_id = node.get("id")
+            if not node_id:
+                continue
+            canonical_id = canonicalize_normalized_id(str(node_id))
+            merged_id = apply_namespace_prefix(
+                canonical_id, parent_namespace, is_dependency
+            )
+            merged_ids.append(merged_id)
+
+    return merged_ids
+
+
 def _run_scancode(
     root_path: Path,
     namespace: str | None,
@@ -518,6 +821,7 @@ def scancode_command(args) -> int:
 
         node_license_map: Dict[str, str] = {}
         namespace_assignments: Dict[str, str] = {}
+        graph_namespace_map: Dict[str, str] = {}
 
         for graph_id in target_graphs:
             cache_entry = registry.get_entry(graph_id)
@@ -557,12 +861,14 @@ def scancode_command(args) -> int:
                 graph_body = data
             graph_nodes = graph_body.get("nodes") if isinstance(graph_body, dict) else None
             graph_node_ids = {
-                n.get("id") for n in (graph_nodes or []) if isinstance(n, dict) and n.get("id")
+                canonicalize_normalized_id(str(n.get("id")))
+                for n in (graph_nodes or [])
+                if isinstance(n, dict) and n.get("id")
             }
-            base_namespace = derive_dependency_namespace(graph_id, metadata, summary)
-            graph_namespace = ensure_namespace_unique(
-                base_namespace, graph_id, namespace_assignments
+            graph_namespace = _derive_graph_namespace(
+                graph_id, metadata, summary, namespace_assignments
             )
+            graph_namespace_map[graph_id] = graph_namespace
 
             root_path_str = metadata.get("root_path")
             path_namespace = metadata.get("path_namespace")
@@ -612,6 +918,24 @@ def scancode_command(args) -> int:
                 )
                 continue
 
+            dep_metadata = _resolve_dependency_metadata(
+                root_path, metadata, graph_nodes or []
+            )
+            dep_license_expr = _normalize_spdx_expression(
+                dep_metadata.get("license") if dep_metadata else None
+            )
+            parent_proxy_ids: List[str] = []
+            if dep_license_expr:
+                parent_proxy_ids = _find_parent_proxy_nodes(
+                    graph_id,
+                    graphs_root,
+                    registry,
+                    namespace_assignments,
+                    graph_namespace_map,
+                    root_graphs,
+                    include_deps,
+                )
+
             # Check for cached license map
             license_cache_path = graphs_root / f"{graph_id}.licenses.json"
             if license_cache_path.is_file() and not force:
@@ -619,13 +943,19 @@ def scancode_command(args) -> int:
                     with license_cache_path.open("r", encoding="utf-8") as f:
                         license_map = json.load(f)
                     canonical_map = _canonicalize_license_map(license_map)
-                    if graph_node_ids is not None:
-                        filtered_map = {
-                            k: v for k, v in canonical_map.items() if k in graph_node_ids
-                        }
-                    else:
-                        filtered_map = canonical_map
-                    if canonical_map != license_map:
+                    filtered_map = {
+                        k: v
+                        for k, v in canonical_map.items()
+                        if not graph_node_ids or k in graph_node_ids
+                    }
+                    metadata_added = _merge_metadata_license(
+                        dep_metadata,
+                        graph_nodes or [],
+                        graph_node_ids,
+                        filtered_map,
+                    )
+                    cache_needs_update = metadata_added or canonical_map != license_map
+                    if cache_needs_update:
                         try:
                             with license_cache_path.open("w", encoding="utf-8") as f:
                                 json.dump(filtered_map, f, indent=2)
@@ -642,6 +972,10 @@ def scancode_command(args) -> int:
                             include_deps and not is_main_graph,
                         )
                     )
+                    # Add proxy node licenses directly (already in final format)
+                    if dep_license_expr:
+                        for proxy_id in parent_proxy_ids:
+                            node_license_map.setdefault(proxy_id, dep_license_expr)
                     logger.info(
                         "Loaded cached license map for %s (%d entries)",
                         graph_id,
@@ -668,13 +1002,15 @@ def scancode_command(args) -> int:
                 return 1
 
             canonical_map = _canonicalize_license_map(license_map)
-            if graph_node_ids is not None:
-                filtered_map = {
-                    k: v for k, v in canonical_map.items() if k in graph_node_ids
-                }
-            else:
-                filtered_map = canonical_map
-
+            filtered_map = {
+                k: v for k, v in canonical_map.items() if not graph_node_ids or k in graph_node_ids
+            }
+            _merge_metadata_license(
+                dep_metadata,
+                graph_nodes or [],
+                graph_node_ids,
+                filtered_map,
+            )
             # Cache per-graph license map
             try:
                 with license_cache_path.open("w", encoding="utf-8") as f:
@@ -693,6 +1029,10 @@ def scancode_command(args) -> int:
                     include_deps and not is_main_graph,
                 )
             )
+            # Add proxy node licenses directly (already in final format)
+            if dep_license_expr:
+                for proxy_id in parent_proxy_ids:
+                    node_license_map.setdefault(proxy_id, dep_license_expr)
             logger.info(
                 "Captured %d license entries for %s (namespace=%s)",
                 len(filtered_map),

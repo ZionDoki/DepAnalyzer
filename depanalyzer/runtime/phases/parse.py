@@ -87,6 +87,15 @@ class ParsePhase(BasePhase):
                 root_path=self.state.workspace.root_path if self.state.workspace else None,
                 path_namespace=path_namespace,
             )
+            initial_metadata = getattr(self.state, "graph_metadata", {}) or {}
+            if initial_metadata:
+                for key, value in initial_metadata.items():
+                    try:
+                        self.state.graph_manager.set_metadata(key, value)
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.debug(
+                            "Failed to seed graph metadata key %s: %s", key, exc
+                        )
             logger.info(
                 "Initialized GraphManager (graph_id=%s, namespace=%s)",
                 self.state.graph_id, path_namespace

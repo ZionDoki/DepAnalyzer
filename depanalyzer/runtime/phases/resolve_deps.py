@@ -222,7 +222,21 @@ class ResolveDepsPhase(BasePhase):
         completed, failed = 0, 0
         for dep in successful_deps:
             logger.info("Creating child transaction for: %s", dep["name"])
+
+            # Persist dependency metadata on originating nodes before spawning child runs.
             self._attach_dependency_metadata(dep)
+
+            graph_metadata: Dict[str, Any] = {}
+            dep_metadata = dep.get("metadata") or {}
+            if dep_metadata:
+                graph_metadata["dependency_metadata"] = dep_metadata
+            if dep.get("name"):
+                graph_metadata["name"] = dep.get("name")
+            if dep.get("version"):
+                graph_metadata["version"] = dep.get("version")
+            for meta_key in ("resolved_version", "license", "license_only"):
+                if dep.get(meta_key) is not None:
+                    graph_metadata[meta_key] = dep.get(meta_key)
 
             # Use factory to create child transaction (avoids circular import)
             child_tx = factory.create(
@@ -237,6 +251,7 @@ class ResolveDepsPhase(BasePhase):
                 dep_cache_root=self.state.dep_cache_root,
                 workspace_cache_root=self.state.workspace_cache_root,
                 graph_build_config=self.state.graph_build_config,
+                graph_metadata=graph_metadata,
             )
 
             if use_process_pool and coordinator is not None:
@@ -324,6 +339,44 @@ class ResolveDepsPhase(BasePhase):
                 )
         return child_graph_ids
 
+    def _attach_dependency_metadata(self, dep_info: Dict[str, Any]) -> None:
+        """Embed dependency metadata into originating nodes for export.
+
+        Args:
+            dep_info: Dependency resolution record containing metadata.
+
+        Returns:
+            None
+        """
+        graph = self.state.graph_manager
+        if graph is None:
+            return
+
+        spec = dep_info.get("spec")
+        metadata = dep_info.get("metadata")
+        if not spec or not metadata:
+            return
+
+        node_ids = self._dependency_node_map.get(spec, [])
+        if not node_ids:
+            return
+
+        for node_id in node_ids:
+            try:
+                if metadata.get("license") is not None:
+                    graph.update_node_attribute(node_id, "license", metadata.get("license"))
+                if "license_only" in metadata:
+                    graph.update_node_attribute(
+                        node_id, "license_only", metadata.get("license_only")
+                    )
+                if metadata.get("resolved_version"):
+                    graph.update_node_attribute(
+                        node_id, "resolved_version", metadata.get("resolved_version")
+                    )
+                graph.update_node_attribute(node_id, "dependency_metadata", metadata)
+            except ValueError:
+                logger.debug("Node %s disappeared before metadata attachment", node_id)
+
     def _link_dependency_graph(
         self, dep_graph_id: str, dep_info: Dict[str, Any]
     ) -> None:
@@ -390,9 +443,10 @@ class ResolveDepsPhase(BasePhase):
                     self.state.graph_manager.update_node_attribute(
                         node_id, "name", dep_info.get("name")
                     )
-                if dep_info.get("version"):
+                resolved_version = dep_info.get("resolved_version") or dep_info.get("version")
+                if resolved_version:
                     self.state.graph_manager.update_node_attribute(
-                        node_id, "version", dep_info.get("version")
+                        node_id, "version", resolved_version
                     )
                 self.state.graph_manager.update_node_attribute(
                     node_id, "origin", "external"
@@ -446,66 +500,3 @@ class ResolveDepsPhase(BasePhase):
             logger.error(
                 "Failed to update GlobalDAG for %s: %s", self.state.graph_id, e
             )
-
-    def _attach_dependency_metadata(self, dep: Dict[str, Any]) -> None:
-        """Attach resolved dependency metadata to originating nodes."""
-        if not self.state.graph_manager:
-            return
-
-        meta = dep.get("metadata") or {}
-        if not meta:
-            return
-
-        spec = dep.get("spec")
-        if not spec:
-            return
-
-        node_ids = self._dependency_node_map.get(spec, [])
-        if not node_ids:
-            return
-
-        license_value = meta.get("license")
-        resolved_version = meta.get("resolved_version")
-        repository = meta.get("repository")
-        license_only = meta.get("license_only")
-        fetched_via = meta.get("fetched_via")
-
-        for node_id in node_ids:
-            try:
-                current = self.state.graph_manager.get_node(node_id) or {}
-
-                if resolved_version:
-                    self.state.graph_manager.update_node_attribute(
-                        node_id, "resolved_version", resolved_version
-                    )
-                    if not current.get("version"):
-                        self.state.graph_manager.update_node_attribute(
-                            node_id, "version", resolved_version
-                        )
-
-                if license_value:
-                    self.state.graph_manager.update_node_attribute(
-                        node_id, "license", license_value
-                    )
-                    self.state.graph_manager.update_node_attribute(
-                        node_id,
-                        "declared_license_expression_spdx",
-                        license_value,
-                    )
-
-                if repository is not None:
-                    self.state.graph_manager.update_node_attribute(
-                        node_id, "repository", repository
-                    )
-
-                if license_only is not None:
-                    self.state.graph_manager.update_node_attribute(
-                        node_id, "license_only", bool(license_only)
-                    )
-
-                if fetched_via:
-                    self.state.graph_manager.update_node_attribute(
-                        node_id, "fetched_via", fetched_via
-                    )
-            except ValueError:
-                logger.warning("Node %s no longer exists, skipping metadata attach", node_id)

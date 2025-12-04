@@ -8,7 +8,7 @@ compatibility while internally delegating to the PhaseOrchestrator.
 import uuid
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Sequence
 
 from depanalyzer.parsers.cpp.code_dependency_mapper import CppCodeDependencyMapper
 from depanalyzer.parsers.hvigor.code_dependency_mapper import HvigorCodeDependencyMapper
@@ -69,6 +69,7 @@ class Transaction:
         graph_cache_root: Optional[Path] = None,
         dep_cache_root: Optional[Path] = None,
         workspace_cache_root: Optional[Path] = None,
+        graph_metadata: Optional[Dict[str, Any]] = None,
         graph_build_config: Optional[GraphBuildConfig] = None,
         lifecycle_hooks: Optional[Sequence[LifecycleHook]] = None,
         code_dependency_mappers: Optional[Mapping[str, CodeDependencyMapper]] = None,
@@ -95,6 +96,7 @@ class Transaction:
             graph_cache_root: Root directory for graph cache
             dep_cache_root: Root directory for dependency cache
             workspace_cache_root: Root directory for workspace cache
+            graph_metadata: Optional initial graph metadata to seed GraphManager
             graph_build_config: Configuration for graph building
             lifecycle_hooks: Lifecycle hooks for before/after phase callbacks
             code_dependency_mappers: Ecosystem-specific code dependency mappers
@@ -156,6 +158,7 @@ class Transaction:
             workspace_cache_root=(
                 Path(workspace_cache_root) if workspace_cache_root else None
             ),
+            graph_metadata=dict(graph_metadata or {}),
             graph_build_config=_graph_build_config,
             lifecycle_hooks=list(lifecycle_hooks or []),
             code_dependency_mappers=_code_dependency_mappers,

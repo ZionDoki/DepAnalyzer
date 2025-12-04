@@ -139,6 +139,7 @@ class TransactionState:
     current_phase: Optional[LifecyclePhase] = None
     start_time: float = 0.0
     graph_cache_path: Optional[Path] = None  # Set by ExportPhase
+    graph_metadata: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def asset_projection_strategy(self) -> Optional[AssetProjectionPolicy]:
