@@ -6,6 +6,8 @@ dist/
 test_*
 !tests/**/test_*.py
 AGENTS.md
+GEMINI.md
+
 *.json
 *.pyc
 *cache

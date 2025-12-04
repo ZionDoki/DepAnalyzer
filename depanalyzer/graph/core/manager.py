@@ -13,7 +13,7 @@ import networkx as nx
 
 from depanalyzer.utils.path_utils import normalize_node_id
 
-from .backend import GraphBackend
+from .backend import GraphBackend, NetworkXBackend
 from ..models.schema import (
     EdgeKind,
     EdgeSpec,
@@ -55,8 +55,15 @@ class GraphManager:
         self.root_path = Path(root_path).resolve() if root_path else None
 
         self.path_namespace = path_namespace
-        self._backend = GraphBackend()
+        self._backend: GraphBackend = NetworkXBackend()
         self._metadata: Dict[str, Any] = {}
+
+        # Lazy loading registry for external graphs (graph_id -> Path)
+        self._external_graph_registry: Dict[str, Path] = {}
+
+        # Node existence cache for performance optimization
+        # This avoids repeated has_node() calls to the backend
+        self._node_cache: Set[str] = set()
 
         logger.info("GraphManager initialized with ID: %s", self.graph_id)
         if self.root_path:
@@ -71,6 +78,57 @@ class GraphManager:
         keeping the attribute access explicit instead of touching _backend.
         """
         return self._backend
+
+    def register_external_graph(self, graph_id: str, path: Path) -> None:
+        """Register an external graph for potential lazy loading.
+        
+        Args:
+            graph_id: Unique identifier of the external graph.
+            path: File path to the graph file.
+        """
+        self._external_graph_registry[graph_id] = path
+        logger.debug("Registered external graph %s at %s", graph_id, path)
+
+    def mount_external_node(self, node_id: str, external_graph_id: str, **attributes) -> None:
+        """Create a proxy node that points to a node in an external graph.
+        
+        Args:
+            node_id: The node ID in the current graph.
+            external_graph_id: The ID of the graph where the real definition lives.
+            **attributes: Additional attributes.
+        """
+        self.add_node(
+            node_id, 
+            NodeType.PROXY.value, 
+            external_graph_id=external_graph_id,
+            **attributes
+        )
+        
+    def lazy_load_subgraph(self, graph_id: str) -> Optional["GraphManager"]:
+        """Load a referenced external graph.
+        
+        This is a placeholder for the "Graph of Graphs" logic.
+        In a full implementation, this would load the graph from disk (or cache)
+        and potentially merge relevant parts or return it for query.
+        
+        Args:
+            graph_id: ID of the graph to load.
+            
+        Returns:
+            GraphManager containing the loaded graph, or None if not found.
+        """
+        if graph_id not in self._external_graph_registry:
+            logger.warning("Attempted to load unknown external graph: %s", graph_id)
+            return None
+            
+        path = self._external_graph_registry[graph_id]
+        try:
+            # Recursively load the external graph
+            # Note: deeply nested loading policies should be handled by the caller
+            return GraphManager.load(path)
+        except Exception as e:
+            logger.error("Failed to lazy load graph %s from %s: %s", graph_id, path, e)
+            return None
 
     def add_node(
         self,
@@ -106,6 +164,9 @@ class GraphManager:
         attrs = dict(attributes)
         if evidence:
             attrs.setdefault("evidence", evidence)
+            
+        # Extract explicit schema fields that might be in attributes
+        external_graph_id = attrs.pop("external_graph_id", None)
 
         spec = NodeSpec(
             id=node_id,
@@ -117,21 +178,42 @@ class GraphManager:
             path=attrs.get("path"),
             name=attrs.get("name"),
             parser_name=attrs.get("parser_name"),
+            external_graph_id=external_graph_id,
             attrs=attrs,
         )
         self.add_node_spec(spec)
+
+    def _has_node_cached(self, node_id: str) -> bool:
+        """Check if node exists using cache for performance.
+
+        This method uses an in-memory cache to avoid repeated backend lookups.
+        The cache is populated on first access and updated on node additions.
+
+        Args:
+            node_id: Node identifier to check.
+
+        Returns:
+            bool: True if node exists.
+        """
+        if node_id in self._node_cache:
+            return True
+        if self._backend.has_node(node_id):
+            self._node_cache.add(node_id)
+            return True
+        return False
 
     def add_node_spec(self, spec: NodeSpec) -> None:
         """Add a node described by a NodeSpec.
 
         This is the preferred entry point for new code constructing nodes.
         """
-        if self._backend.has_node(spec.id):
+        if self._has_node_cached(spec.id):
             logger.debug("Node %s already exists, skipping", spec.id)
             return
 
         validate_node(spec, self.root_path)
         self._backend.add_node(spec.id, **spec.to_backend_attrs())
+        self._node_cache.add(spec.id)
         logger.debug("Added node: %s (type=%s)", spec.id, spec.type.value)
 
     def add_edge(
@@ -184,30 +266,30 @@ class GraphManager:
         )
         return self.add_edge_spec(spec)
 
+    def _ensure_node_exists(self, node_id: str) -> None:
+        """Ensure a node exists, creating a provisional one if needed.
+
+        Args:
+            node_id: Node identifier to ensure exists.
+        """
+        if not self._has_node_cached(node_id):
+            provisional_node = NodeSpec(
+                id=node_id,
+                type=NodeType.UNKNOWN,
+                provisional=True,
+                attrs={},
+            )
+            validate_node(provisional_node, self.root_path)
+            self._backend.add_node(node_id, **provisional_node.to_backend_attrs())
+            self._node_cache.add(node_id)
+
     def add_edge_spec(self, spec: EdgeSpec) -> int:
         """Add an edge described by an EdgeSpec.
 
         This is the preferred entry point for new code constructing edges.
         """
-        if not self._backend.has_node(spec.source):
-            provisional_node = NodeSpec(
-                id=spec.source,
-                type=NodeType.UNKNOWN,
-                provisional=True,
-                attrs={},
-            )
-            validate_node(provisional_node, self.root_path)
-            self._backend.add_node(spec.source, **provisional_node.to_backend_attrs())
-
-        if not self._backend.has_node(spec.target):
-            provisional_node = NodeSpec(
-                id=spec.target,
-                type=NodeType.UNKNOWN,
-                provisional=True,
-                attrs={},
-            )
-            validate_node(provisional_node, self.root_path)
-            self._backend.add_node(spec.target, **provisional_node.to_backend_attrs())
+        self._ensure_node_exists(spec.source)
+        self._ensure_node_exists(spec.target)
 
         validate_edge(spec)
         key = self._backend.add_edge(
@@ -223,6 +305,57 @@ class GraphManager:
             key,
         )
         return key
+
+    def add_edges_batch(self, specs: List[EdgeSpec]) -> List[int]:
+        """Add multiple edges in batch for improved performance.
+
+        This method optimizes bulk edge additions by:
+        1. Pre-collecting all required nodes
+        2. Creating missing nodes in one pass
+        3. Adding all edges
+
+        Args:
+            specs: List of EdgeSpec objects to add.
+
+        Returns:
+            List[int]: List of edge keys for the added edges.
+        """
+        if not specs:
+            return []
+
+        # Collect all unique node IDs needed
+        needed_nodes: Set[str] = set()
+        for spec in specs:
+            needed_nodes.add(spec.source)
+            needed_nodes.add(spec.target)
+
+        # Find nodes that need to be created
+        missing_nodes = needed_nodes - self._node_cache
+        for node_id in missing_nodes:
+            if not self._backend.has_node(node_id):
+                provisional_node = NodeSpec(
+                    id=node_id,
+                    type=NodeType.UNKNOWN,
+                    provisional=True,
+                    attrs={},
+                )
+                validate_node(provisional_node, self.root_path)
+                self._backend.add_node(node_id, **provisional_node.to_backend_attrs())
+            self._node_cache.add(node_id)
+
+        # Add all edges
+        keys: List[int] = []
+        for spec in specs:
+            validate_edge(spec)
+            key = self._backend.add_edge(
+                spec.source,
+                spec.target,
+                **spec.to_backend_attrs(),
+            )
+            keys.append(key)
+
+        logger.debug("Added %d edges in batch", len(specs))
+        return keys
 
     def normalize_path(self, path: Union[str, Path]) -> str:
         """

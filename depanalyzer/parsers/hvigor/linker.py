@@ -365,7 +365,16 @@ class HvigorLinker(BaseLinker):
     def _link_shared_libraries_to_cpp_roots(self) -> None:
         """Link Hvigor shared libraries to C++ subgraph roots using contracts."""
         graph_manager = self.graph_manager
-        registry = ContractRegistry()
+        
+        # Use the registry provided via BaseLinker/initialization
+        # Fallback to new instance/legacy if not available (though strict DI is preferred)
+        if hasattr(self, "contract_registry") and self.contract_registry:
+            registry = self.contract_registry
+        else:
+            # Fallback to legacy singleton (or new instance if singleton removed)
+            # Ideally this path should not be hit in the new architecture
+            from depanalyzer.graph.contract_registry import ContractRegistry
+            registry = ContractRegistry.get_instance()
 
         matched_contracts = registry.match_contracts()
         if not matched_contracts:

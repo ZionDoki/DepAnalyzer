@@ -26,8 +26,9 @@ class MavenParser(BaseParser):
         graph_manager: GraphManager,
         eventbus,
         config: Any | None = None,
+        contract_registry: Any | None = None,
     ) -> None:
-        super().__init__(workspace_root, graph_manager, eventbus, config=config)
+        super().__init__(workspace_root, graph_manager, eventbus, config=config, contract_registry=contract_registry)
         self._last_source_roots: List[Path] = []
         self._last_module_root: Optional[Path] = None
         self._last_module_id: Optional[str] = None

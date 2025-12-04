@@ -56,7 +56,7 @@ class MavenCodeDependencyMapper(BaseCodeDependencyMapper):
 
         # JNI bridging: register consumer artifacts when System.loadLibrary is present.
         for lib_name in parse_result.get("native_libs", []):
-            _register_native_contract(graph, lib_name)
+            _register_native_contract(graph, lib_name, transaction_ctx)
 
 
 def _normalize_code_node(
@@ -120,7 +120,9 @@ def _resolve_import(
     return f"java_import:{import_name}", None
 
 
-def _register_native_contract(graph: GraphManager, lib_name: str) -> None:
+def _register_native_contract(
+    graph: GraphManager, lib_name: str, ctx: TransactionContext
+) -> None:
     artifact_id = f"artifact:maven:lib{lib_name}.so"
     if not graph.has_node(artifact_id):
         graph.add_node_spec(
@@ -139,10 +141,8 @@ def _register_native_contract(graph: GraphManager, lib_name: str) -> None:
             )
         )
 
-    # No provider available yet; GlobalContractLinker will match by artifact_name.
     try:
         from depanalyzer.graph.contract import BuildInterfaceContract, ContractType
-        from depanalyzer.graph.contract_registry import ContractRegistry
     except ImportError:
         return
 
@@ -155,7 +155,8 @@ def _register_native_contract(graph: GraphManager, lib_name: str) -> None:
         evidence=[f"jni_load:{lib_name}"],
         metadata={"lib_name": lib_name},
     )
-    ContractRegistry().register(contract)
+    if ctx.contract_registry:
+        ctx.contract_registry.register(contract)
 
 
 __all__ = ["MavenCodeDependencyMapper"]

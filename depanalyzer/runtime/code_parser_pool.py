@@ -28,9 +28,77 @@ from depanalyzer.parsers.registry import EcosystemRegistry
 
 logger = logging.getLogger("depanalyzer.runtime.code_parser_pool")
 
+# =============================================================================
+# Configuration Constants
+# =============================================================================
+
+# Default timeout for parsing a single file (seconds)
+DEFAULT_FILE_PARSE_TIMEOUT: float = 60.0
+
+# Default timeout for batch parsing operations (seconds)
+DEFAULT_BATCH_TIMEOUT: float = 300.0
+
+# Cache TTL for parser instances (seconds) - parsers unused for this long are cleaned up
+_CACHE_TTL: float = 300.0
+
+# =============================================================================
+# Process-level Parser Cache
+# =============================================================================
+
 # Process-level parser cache (per worker process)
 # This avoids re-initializing expensive parsers (tree-sitter) for each file
 _CODE_PARSER_CACHE: Dict[str, Any] = {}
+
+# Timestamps for cache entries (for TTL-based cleanup)
+_CACHE_TIMESTAMPS: Dict[str, float] = {}
+
+
+def _cleanup_expired_cache() -> int:
+    """Clean up expired parser cache entries based on TTL.
+
+    Returns:
+        int: Number of cache entries cleaned up.
+    """
+    now = time.time()
+    expired = [k for k, t in _CACHE_TIMESTAMPS.items() if now - t > _CACHE_TTL]
+
+    for key in expired:
+        parser = _CODE_PARSER_CACHE.pop(key, None)
+        _CACHE_TIMESTAMPS.pop(key, None)
+        # Call cleanup method if parser supports it
+        if parser and hasattr(parser, "cleanup"):
+            try:
+                parser.cleanup()
+            except Exception:
+                pass
+
+    if expired:
+        logger.debug(
+            "[PID %d] Cleaned up %d expired parser cache entries: %s",
+            os.getpid(),
+            len(expired),
+            ", ".join(expired),
+        )
+
+    return len(expired)
+
+
+def clear_parser_cache() -> None:
+    """Explicitly clear all parser cache entries.
+
+    Call this to free memory when parsing is complete.
+    """
+    count = len(_CODE_PARSER_CACHE)
+    for parser in _CODE_PARSER_CACHE.values():
+        if hasattr(parser, "cleanup"):
+            try:
+                parser.cleanup()
+            except Exception:
+                pass
+    _CODE_PARSER_CACHE.clear()
+    _CACHE_TIMESTAMPS.clear()
+    if count > 0:
+        logger.debug("[PID %d] Cleared %d parser cache entries", os.getpid(), count)
 
 
 def _get_code_parser(ecosystem: str, config: Any | None = None):
@@ -41,10 +109,16 @@ def _get_code_parser(ecosystem: str, config: Any | None = None):
 
     Args:
         ecosystem: Ecosystem identifier (cpp, hvigor, etc.).
+        config: Optional configuration for the parser.
 
     Returns:
         BaseCodeParser instance or None if not found.
     """
+    # Periodically clean up expired cache entries
+    _cleanup_expired_cache()
+
+    now = time.time()
+
     if ecosystem not in _CODE_PARSER_CACHE:
         try:
             registry = EcosystemRegistry.get_instance()
@@ -72,6 +146,9 @@ def _get_code_parser(ecosystem: str, config: Any | None = None):
         except (ImportError, AttributeError, TypeError, ValueError, RuntimeError) as e:
             logger.error("Failed to create code parser for %s: %s", ecosystem, e)
             return None
+
+    # Update timestamp for TTL tracking
+    _CACHE_TIMESTAMPS[ecosystem] = now
 
     return _CODE_PARSER_CACHE[ecosystem]
 
@@ -306,45 +383,67 @@ class CodeParserPool:
         return futures
 
     def wait_for_completion(
-        self, futures: List[Tuple[Path, Future]], timeout: Optional[float] = None
+        self,
+        futures: List[Tuple[Path, Future]],
+        timeout: Optional[float] = None,
+        per_file_timeout: Optional[float] = None,
     ) -> Dict[Path, Dict[str, Any]]:
         """Wait for all futures to complete and collect results.
 
         Args:
             futures: List of (file_path, future) tuples.
-            timeout: Optional timeout in seconds.
+            timeout: Optional total timeout in seconds (deprecated, use per_file_timeout).
+            per_file_timeout: Timeout for each individual file parse operation.
+                Defaults to DEFAULT_FILE_PARSE_TIMEOUT (60 seconds).
 
         Returns:
             Dict[Path, Dict[str, Any]]: Map of file_path to parse result.
         """
         results = {}
+        # Use per_file_timeout if specified, otherwise fall back to timeout, then default
+        file_timeout = per_file_timeout or timeout or DEFAULT_FILE_PARSE_TIMEOUT
+        timed_out_count = 0
 
-        try:
-            for file_path, future in futures:
-                try:
-                    result = future.result(timeout=timeout)
-                    results[file_path] = result
-                except (CancelledError, BrokenExecutor, OSError, ValueError, RuntimeError) as e:
-                    logger.error("Failed to get result for %s: %s", file_path, e)
-                    results[file_path] = {
-                        "file": str(file_path),
-                        "error": str(e),
-                    }
+        for file_path, future in futures:
+            try:
+                result = future.result(timeout=file_timeout)
+                results[file_path] = result
+            except TimeoutError:
+                timed_out_count += 1
+                logger.error(
+                    "Timeout parsing file %s after %.1fs", file_path, file_timeout
+                )
+                results[file_path] = {
+                    "file": str(file_path),
+                    "error": "timeout",
+                    "error_type": "TimeoutError",
+                    "timeout_seconds": file_timeout,
+                }
+                # Cancel the future to free resources
+                future.cancel()
+            except (CancelledError, BrokenExecutor, OSError, ValueError, RuntimeError) as e:
+                logger.error("Failed to get result for %s: %s", file_path, e)
+                results[file_path] = {
+                    "file": str(file_path),
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                }
 
-            successful = sum(
-                1 for r in results.values() if "error" not in r and "skipped" not in r
-            )
-            failed = len(results) - successful
+        successful = sum(
+            1 for r in results.values() if "error" not in r and "skipped" not in r
+        )
+        skipped = sum(1 for r in results.values() if r.get("skipped"))
+        failed = len(results) - successful - skipped
 
-            logger.info(
-                "Code parsing completed: %d successful, %d failed", successful, failed
-            )
+        logger.info(
+            "Code parsing completed: %d successful, %d skipped, %d failed (%d timed out)",
+            successful,
+            skipped,
+            failed,
+            timed_out_count,
+        )
 
-            return results
-
-        except TimeoutError:
-            logger.error("Timeout waiting for code parsing to complete")
-            raise
+        return results
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the process pool.

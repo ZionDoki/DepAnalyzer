@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from depanalyzer.graph.contract import BuildInterfaceContract, ContractType
 from depanalyzer.graph.contract_registry import ContractRegistry
@@ -27,15 +27,22 @@ log = logging.getLogger("depanalyzer.parsers.cpp.cmake_graph_builder")
 class CMakeGraphBuilder:
     """Construct graph nodes and edges from CMake parser events."""
 
-    def __init__(self, graph_manager: GraphManager, eventbus: EventBus):
+    def __init__(self, graph_manager: GraphManager, eventbus: EventBus, contract_registry: Optional[ContractRegistry] = None):
         """Initialize the CMake graph builder.
 
         Args:
             graph_manager: Graph manager for adding nodes and edges.
             eventbus: Event bus for subscribing to events.
+            contract_registry: Contract registry for cross-language linking.
         """
         self.graph_manager = graph_manager
         self.eventbus = eventbus
+        if contract_registry:
+            self.contract_registry = contract_registry
+        else:
+            # Fallback to legacy singleton if not provided (for tests or old code)
+            from depanalyzer.graph.contract_registry import ContractRegistry
+            self.contract_registry = ContractRegistry.get_instance()
         self._register_handlers()
 
     def _register_handlers(self) -> None:
@@ -202,7 +209,7 @@ class CMakeGraphBuilder:
             cmake_dir,
         ]
 
-        registry = ContractRegistry.get_instance()
+        registry = self.contract_registry
         provider_count = 0
         seen_providers: set[str] = set()
 
@@ -415,7 +422,7 @@ class CMakeGraphBuilder:
         if not provider_artifact or not artifact_name:
             return
 
-        registry = ContractRegistry.get_instance()
+        registry = self.contract_registry
         contract = BuildInterfaceContract(
             artifact_name=artifact_name,
             provider_artifact=provider_artifact,

@@ -27,6 +27,7 @@ class GlobalContractLinker:
         cls,
         graph_manager: GraphManager,
         config: ContractMatchConfig | None = None,
+        contract_registry: ContractRegistry | None = None,
     ) -> None:
         """Apply contract-based linking on the current graph.
 
@@ -37,7 +38,12 @@ class GlobalContractLinker:
         4. Optionally creates file-level IMPLEMENTS edges between impl and
            interface files declared in the contract.
         """
-        registry = ContractRegistry()
+        if contract_registry:
+            registry = contract_registry
+        else:
+            # Fallback to global singleton (legacy behavior)
+            registry = ContractRegistry.get_instance()
+
         stats = registry.get_statistics()
         logger.info("GlobalContractLinker: contract registry stats: %s", stats)
 

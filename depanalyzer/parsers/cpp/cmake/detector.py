@@ -32,42 +32,35 @@ class CMakeDetector(BaseDetector):
         ignore_build_dirs = bool(getattr(cfg, "ignore_build_dirs", False)) if cfg else False
         ignore_third_party_dirs = bool(getattr(cfg, "ignore_third_party_dirs", False)) if cfg else False
 
-        for pattern in self.TARGET_PATTERNS:
-            files: List[Path] = []
-            for file_path in self.workspace_root.rglob(pattern):
-                parts = set(file_path.parts)
-                if ignore_build_dirs and "build" in parts:
-                    continue
-                if ignore_third_party_dirs and (
-                    "third_party" in parts or "3rdparty" in parts or "third-party" in parts
-                ):
-                    continue
-                files.append(file_path)
+        extra_ignores = []
+        if ignore_build_dirs:
+            extra_ignores.append("build")
+        if ignore_third_party_dirs:
+            extra_ignores.extend(["third_party", "3rdparty", "third-party"])
 
-            detected.extend(files)
+        detected = self.scan_workspace(self.TARGET_PATTERNS, ignore_patterns=extra_ignores)
 
-            # Publish detection events for each found file
-            for file_path in files:
-                # Classify as either root CMakeLists.txt or auxiliary cmake file
-                target_type = (
-                    "cmake_root"
-                    if file_path.name == "CMakeLists.txt"
-                    else "cmake_module"
-                )
+        # Publish detection events for each found file
+        for file_path in detected:
+            # Classify as either root CMakeLists.txt or auxiliary cmake file
+            target_type = (
+                "cmake_root"
+                if file_path.name == "CMakeLists.txt"
+                else "cmake_module"
+            )
 
-                event = Event(
-                    event_type=EventType.TARGET_DETECTED,
-                    source=self.NAME,
-                    data={
-                        "target_path": str(file_path),
-                        "target_type": target_type,
-                        "file_name": file_path.name,
-                        "parser_name": self.NAME,
-                    },
-                )
-                self.publish_detection_event(event)
-
-                logger.debug("Detected %s: %s", target_type, file_path)
+            event = Event(
+                event_type=EventType.TARGET_DETECTED,
+                source=self.NAME,
+                data={
+                    "target_path": str(file_path),
+                    "target_type": target_type,
+                    "file_name": file_path.name,
+                    "parser_name": self.NAME,
+                },
+            )
+            self.publish_detection_event(event)
+            logger.debug("Detected %s: %s", target_type, file_path)
 
         logger.info("CMakeDetector found %d CMake files", len(detected))
         return detected

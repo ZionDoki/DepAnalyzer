@@ -135,13 +135,6 @@ class PhaseOrchestrator:
             self.state.source,
         )
 
-        ContractRegistry.get_instance().reset()
-        logger.debug(
-            "[PID %d] Reset contract registry for transaction %s",
-            os.getpid(),
-            self.state.transaction_id,
-        )
-
         # Start progress manager
         if self.state.progress_manager:
             self.state.progress_manager.start_transaction(
@@ -205,6 +198,11 @@ class PhaseOrchestrator:
             self.state.dependency_collector = DependencyCollector(self.state.eventbus)
             logger.debug("DependencyCollector initialized")
 
+        # Initialize ContractRegistry (scoped to transaction)
+        if self.state.contract_registry is None:
+            self.state.contract_registry = ContractRegistry()
+            logger.debug("ContractRegistry initialized")
+
     def _create_context_for_phase(
         self, phase: LifecyclePhase
     ) -> TransactionContext:
@@ -233,7 +231,7 @@ class PhaseOrchestrator:
             graph=self.state.graph_manager,
             graph_build_config=self.state.graph_build_config,
             eventbus=self.state.eventbus,
-            contract_registry=ContractRegistry.get_instance(),
+            contract_registry=self.state.contract_registry,
             progress_manager=self.state.progress_manager,
             enable_dependency_resolution=self.state.enable_dependency_resolution,
             max_dependency_depth=self.state.max_dependency_depth,

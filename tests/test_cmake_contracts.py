@@ -14,8 +14,7 @@ from depanalyzer.runtime.transaction import Transaction
 
 def test_cmake_graph_builder_registers_provider_contract(tmp_path: Path) -> None:
     """CMakeGraphBuilder should publish provider-side contracts for shared libraries."""
-    registry = ContractRegistry.get_instance()
-    registry.reset()
+    registry = ContractRegistry()  # Use local registry
 
     cmake_dir = tmp_path / "native"
     cmake_dir.mkdir()
@@ -23,7 +22,8 @@ def test_cmake_graph_builder_registers_provider_contract(tmp_path: Path) -> None
     cmake_file.write_text("", encoding="utf-8")
 
     graph_manager = GraphManager(graph_id="g", root_path=tmp_path)
-    builder = CMakeGraphBuilder(graph_manager, EventBus())
+    # Inject registry
+    builder = CMakeGraphBuilder(graph_manager, EventBus(), contract_registry=registry)
 
     event = Event(
         event_type=EventType.CMAKE_TARGET_CREATED,
@@ -44,7 +44,6 @@ def test_cmake_graph_builder_registers_provider_contract(tmp_path: Path) -> None
     builder._handle_target_created(event)
 
     providers = registry.get_providers("libmynative.so")
-    registry.reset()
 
     assert providers, "Expected provider contract for shared_library target"
     provider = providers[0]
@@ -55,8 +54,7 @@ def test_cmake_graph_builder_registers_provider_contract(tmp_path: Path) -> None
 
 def test_cmake_graph_builder_registers_provider_contract_for_static_library(tmp_path: Path) -> None:
     """Static libraries should also publish provider contracts (bridged as .so)."""
-    registry = ContractRegistry.get_instance()
-    registry.reset()
+    registry = ContractRegistry()
 
     cmake_dir = tmp_path / "native"
     cmake_dir.mkdir()
@@ -64,7 +62,8 @@ def test_cmake_graph_builder_registers_provider_contract_for_static_library(tmp_
     cmake_file.write_text("", encoding="utf-8")
 
     graph_manager = GraphManager(graph_id="g", root_path=tmp_path)
-    builder = CMakeGraphBuilder(graph_manager, EventBus())
+    # Inject registry
+    builder = CMakeGraphBuilder(graph_manager, EventBus(), contract_registry=registry)
 
     event = Event(
         event_type=EventType.CMAKE_TARGET_CREATED,
@@ -85,7 +84,6 @@ def test_cmake_graph_builder_registers_provider_contract_for_static_library(tmp_
     builder._handle_target_created(event)
 
     providers = registry.get_providers("libstaticlib.so")
-    registry.reset()
 
     assert providers, "Expected provider contract for static_library target"
     provider = providers[0]
@@ -93,8 +91,8 @@ def test_cmake_graph_builder_registers_provider_contract_for_static_library(tmp_
     assert provider.metadata.get("native_dir") == str(cmake_dir.resolve())
 
 
-def test_transaction_resets_contract_registry(tmp_path: Path) -> None:
-    """Each transaction should start with a clean contract registry."""
+def test_transaction_isolation_from_global_registry(tmp_path: Path) -> None:
+    """Transaction should not affect the global contract registry (isolation)."""
     registry = ContractRegistry.get_instance()
     registry.reset()
     registry.register(
@@ -116,4 +114,5 @@ def test_transaction_resets_contract_registry(tmp_path: Path) -> None:
 
     stats = registry.get_statistics()
     registry.reset()
-    assert stats["total"] == 0
+    # Should remain 1 because Transaction uses its own scoped registry now
+    assert stats["total"] == 1

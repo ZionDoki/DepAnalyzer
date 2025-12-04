@@ -17,33 +17,100 @@ import urllib.request
 import zipfile
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from depanalyzer.graph import GraphManager
 from depanalyzer.runtime.context import TransactionContext
 from depanalyzer.runtime.eventbus import Event, EventBus
 from depanalyzer.runtime.policies import CodeDependencyContext, CodeDependencyMapper
 
+if TYPE_CHECKING:
+    from depanalyzer.graph.contract_registry import ContractRegistry
+
 logger = logging.getLogger("depanalyzer.parsers.base")
 
-# Common exceptions that parsers should handle gracefully
-_SAFE_EXCEPTIONS = (
-    RuntimeError,
-    ValueError,
-    TypeError,
-    AttributeError,
-    KeyError,
-    IndexError,
-    OSError,
-    IOError,
-    ImportError,
-    LookupError,
+
+# =============================================================================
+# Custom Exception Hierarchy
+# =============================================================================
+
+class RecoverableError(Exception):
+    """Base class for recoverable business errors.
+
+    These errors indicate expected failure conditions that can be handled
+    gracefully by skipping the current item and continuing processing.
+    """
+    pass
+
+
+class ConfigurationError(RecoverableError):
+    """Configuration file error - can skip current target and continue.
+
+    Raised when a configuration file (e.g., pom.xml, CMakeLists.txt) is
+    malformed or contains invalid data.
+    """
+    pass
+
+
+class ParseError(RecoverableError):
+    """Source code parsing error - can skip current file and continue.
+
+    Raised when a source code file cannot be parsed due to syntax errors
+    or unsupported constructs.
+    """
+    pass
+
+
+class FetchError(RecoverableError):
+    """Dependency fetching error - can skip current dependency and continue.
+
+    Raised when a dependency cannot be downloaded or cloned.
+    """
+    pass
+
+
+class DetectionError(RecoverableError):
+    """Target detection error - can skip current directory and continue.
+
+    Raised when target detection fails for a specific location.
+    """
+    pass
+
+
+# =============================================================================
+# Exception Categories for Graceful Handling
+# =============================================================================
+
+# External system errors (network, subprocess, archive) - recoverable
+_EXTERNAL_ERRORS = (
     subprocess.CalledProcessError,
     subprocess.TimeoutExpired,
     urllib.error.URLError,
     urllib.error.HTTPError,
     zipfile.BadZipFile,
     tarfile.TarError,
+)
+
+# Data/lookup errors - recoverable when caused by malformed input
+_DATA_ERRORS = (
+    KeyError,
+    IndexError,
+)
+
+# I/O errors - recoverable (file not found, permission denied, etc.)
+_IO_ERRORS = (
+    OSError,
+    IOError,
+)
+
+# Combined safe exceptions for backward compatibility
+# NOTE: Removed TypeError, AttributeError, RuntimeError, ImportError as these
+# typically indicate programming errors that should propagate.
+_SAFE_EXCEPTIONS = (
+    _EXTERNAL_ERRORS
+    + _DATA_ERRORS
+    + _IO_ERRORS
+    + (RecoverableError, ValueError, UnicodeDecodeError)
 )
 
 
@@ -85,6 +152,39 @@ class BaseDetector(ABC):
         """
         raise NotImplementedError
 
+    def scan_workspace(
+        self,
+        patterns: List[str],
+        ignore_patterns: Optional[List[str]] = None,
+        recursive: bool = True,
+    ) -> List[Path]:
+        """Scan workspace for files matching patterns.
+
+        This helper uses the optimized scanner that respects .gitignore.
+
+        Args:
+            patterns: List of glob patterns to match.
+            ignore_patterns: Optional list of extra ignore patterns.
+            recursive: Whether to scan recursively.
+
+        Returns:
+            List[Path]: List of matching file paths.
+        """
+        from depanalyzer.utils.scanner import load_gitignore_patterns, scan_files
+
+        root_ignores = load_gitignore_patterns(self.workspace_root)
+        if ignore_patterns:
+            root_ignores.extend(ignore_patterns)
+
+        return list(
+            scan_files(
+                self.workspace_root,
+                patterns,
+                ignore_patterns=root_ignores,
+                recursive=recursive,
+            )
+        )
+
     def publish_detection_event(self, event: Event) -> None:
         """Publish detection event to event bus.
 
@@ -110,6 +210,7 @@ class BaseParser(ABC):
         graph_manager: GraphManager,
         eventbus: EventBus,
         config: Optional[Any] = None,
+        contract_registry: Optional["ContractRegistry"] = None,
     ) -> None:
         """Initialize parser.
 
@@ -117,6 +218,8 @@ class BaseParser(ABC):
             workspace_root: Workspace root path.
             graph_manager: Transaction graph manager.
             eventbus: Event bus for publishing parse events.
+            config: Optional parser configuration.
+            contract_registry: Contract registry for cross-language linking.
         """
         self.workspace_root = workspace_root
         self.graph_manager = graph_manager
@@ -124,6 +227,13 @@ class BaseParser(ABC):
         # Optional per‑ecosystem configuration slice, provided by the
         # transaction's GraphBuildConfig.parser.for_ecosystem().
         self.config = config
+        # Use provided registry or fallback to legacy global singleton
+        if contract_registry:
+            self.contract_registry = contract_registry
+        else:
+            from depanalyzer.graph.contract_registry import ContractRegistry
+            self.contract_registry = ContractRegistry.get_instance()
+            
         logger.debug("Parser %s (%s) initialized", self.NAME, self.ECOSYSTEM)
 
     @abstractmethod
@@ -192,16 +302,27 @@ class BaseLinker(ABC):
     ECOSYSTEM: str = "base"
 
     def __init__(
-        self, graph_manager: GraphManager, config: Optional[Any] = None
+        self,
+        graph_manager: GraphManager,
+        config: Optional[Any] = None,
+        contract_registry: Optional["ContractRegistry"] = None,
     ) -> None:
         """Initialize linker with graph manager.
 
         Args:
             graph_manager: Transaction graph manager.
+            config: Optional linker configuration.
+            contract_registry: Contract registry for cross-language linking.
         """
         self.graph_manager = graph_manager
         # Optional per‑ecosystem configuration slice for linkers.
         self.config = config
+        # Use provided registry or fallback to legacy global singleton
+        if contract_registry:
+            self.contract_registry = contract_registry
+        else:
+            from depanalyzer.graph.contract_registry import ContractRegistry
+            self.contract_registry = ContractRegistry.get_instance()
 
     @abstractmethod
     def link(self) -> None:

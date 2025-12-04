@@ -5,18 +5,16 @@ rate limiting, and failure handling. All phases use the queue for
 execution, avoiding recursion.
 """
 
-# Worker catches unexpected task failures to prevent the coordinator from crashing.
-
-
 import logging
 import os
 import threading
 import time
 from collections import deque
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Callable, Dict, Optional, Set
+from queue import PriorityQueue
+from typing import Any, Callable, Dict, Optional, Set, Tuple
 
 logger = logging.getLogger("depanalyzer.worker")
 
@@ -30,6 +28,29 @@ class TaskPriority(Enum):
 
 
 @dataclass
+class RetryConfig:
+    """Configuration for task retry behavior.
+
+    Attributes:
+        max_retries: Maximum number of retry attempts (0 = no retries).
+        base_delay: Initial delay between retries in seconds.
+        max_delay: Maximum delay between retries in seconds.
+        exponential_base: Base for exponential backoff calculation.
+        retryable_exceptions: Tuple of exception types that should trigger retry.
+    """
+
+    max_retries: int = 3
+    base_delay: float = 1.0
+    max_delay: float = 30.0
+    exponential_base: float = 2.0
+    retryable_exceptions: tuple = (OSError, TimeoutError, ConnectionError)
+
+
+# Default retry config for tasks that don't specify one
+DEFAULT_RETRY_CONFIG = RetryConfig(max_retries=0)  # No retries by default
+
+
+@dataclass
 class Task:
     """Task representation for worker queue.
 
@@ -38,12 +59,14 @@ class Task:
         func: Callable to execute.
         priority: Task priority level.
         metadata: Optional task metadata.
+        retry_config: Optional retry configuration.
     """
 
     task_id: str
     func: Callable[[], Any]
     priority: TaskPriority = TaskPriority.NORMAL
     metadata: Dict[str, Any] = field(default_factory=dict)
+    retry_config: Optional[RetryConfig] = None
 
     def __hash__(self) -> int:
         """Hash based on task_id for deduplication.
@@ -86,12 +109,32 @@ class TaskResult:
     execution_time: float = 0.0
 
 
+@dataclass(order=True)
+class PrioritizedTask:
+    """Wrapper for tasks with priority ordering.
+
+    Used with PriorityQueue to ensure proper ordering.
+    Lower priority values are processed first.
+    """
+
+    priority: int
+    sequence: int  # Tie-breaker for FIFO within same priority
+    task: Task = field(compare=False)
+
+
 class Worker:
-    """Concurrent task executor with BFS queue-based scheduling.
+    """Concurrent task executor with priority queue-based scheduling.
 
     Worker manages a task queue with fingerprint-based deduplication,
-    priority-based scheduling, and configurable parallelism.
+    priority-based scheduling using PriorityQueue, and configurable parallelism.
     """
+
+    # Priority mapping: lower values = higher priority
+    _PRIORITY_MAP = {
+        TaskPriority.HIGH: 0,
+        TaskPriority.NORMAL: 1,
+        TaskPriority.LOW: 2,
+    }
 
     def __init__(self, max_workers: int = 8) -> None:
         """Initialize worker with thread pool.
@@ -100,15 +143,25 @@ class Worker:
             max_workers: Maximum concurrent threads.
         """
         self.max_workers = max_workers
-        self._queue: deque[Task] = deque()
+        self._queue: PriorityQueue[PrioritizedTask] = PriorityQueue()
         self._seen_tasks: Set[str] = set()
+        self._seen_lock = threading.Lock()  # Separate lock for seen_tasks
         self._results: Dict[str, TaskResult] = {}
-        self._lock = threading.RLock()
+        self._results_lock = threading.Lock()  # Separate lock for results
         self._executor: Optional[ThreadPoolExecutor] = None
+        self._sequence = 0  # Monotonic counter for FIFO ordering
+        self._sequence_lock = threading.Lock()
 
         logger.info(
             "[PID %d] Worker initialized with %d max workers", os.getpid(), max_workers
         )
+
+    def _next_sequence(self) -> int:
+        """Get next sequence number for FIFO ordering."""
+        with self._sequence_lock:
+            seq = self._sequence
+            self._sequence += 1
+            return seq
 
     def enqueue(self, task: Task) -> bool:
         """Add task to queue if not already seen.
@@ -119,27 +172,30 @@ class Worker:
         Returns:
             bool: True if task was added, False if duplicate.
         """
-        with self._lock:
+        with self._seen_lock:
             if task.task_id in self._seen_tasks:
                 logger.debug("Task %s already seen, skipping", task.task_id)
                 return False
-
             self._seen_tasks.add(task.task_id)
-            # Insert based on priority
-            if task.priority == TaskPriority.HIGH:
-                self._queue.appendleft(task)
-            else:
-                self._queue.append(task)
 
-            logger.debug(
-                "Enqueued task %s (priority=%s)", task.task_id, task.priority.name
-            )
-            return True
+        # Get priority value and sequence for ordering
+        priority = self._PRIORITY_MAP.get(task.priority, 1)
+        sequence = self._next_sequence()
+
+        # PriorityQueue.put is thread-safe, no lock needed
+        self._queue.put(PrioritizedTask(priority=priority, sequence=sequence, task=task))
+
+        logger.debug(
+            "Enqueued task %s (priority=%s, seq=%d)",
+            task.task_id,
+            task.priority.name,
+            sequence,
+        )
+        return True
 
     def queued_task_count(self) -> int:
         """Return the number of queued tasks (best-effort)."""
-        with self._lock:
-            return len(self._queue)
+        return self._queue.qsize()
 
     def enqueue_many(self, tasks: list[Task]) -> int:
         """Enqueue multiple tasks.
@@ -157,7 +213,7 @@ class Worker:
         return count
 
     def _execute_task(self, task: Task) -> TaskResult:
-        """Execute a single task and return result.
+        """Execute a single task with retry support.
 
         Args:
             task: Task to execute.
@@ -165,60 +221,95 @@ class Worker:
         Returns:
             TaskResult: Execution result.
         """
+        config = task.retry_config or DEFAULT_RETRY_CONFIG
         start_time = time.time()
+        last_error: Optional[Exception] = None
+        attempt = 0
+
         logger.info("[PID %d] Executing task: %s", os.getpid(), task.task_id)
 
-        try:
-            result = task.func()
-            execution_time = time.time() - start_time
-            logger.info(
-                "[PID %d] Task %s completed in %.2fs",
-                os.getpid(),
-                task.task_id,
-                execution_time,
-            )
-            return TaskResult(
-                task_id=task.task_id,
-                success=True,
-                result=result,
-                execution_time=execution_time,
-            )
-        except (RuntimeError, ValueError) as e:
-            execution_time = time.time() - start_time
-            logger.error("[PID %d] Task %s failed: %s", os.getpid(), task.task_id, e)
-            return TaskResult(
-                task_id=task.task_id,
-                success=False,
-                error=e,
-                execution_time=execution_time,
-            )
-        except (
-            TypeError,
-            AttributeError,
-            KeyError,
-            IndexError,
-            OSError,
-            ImportError,
-            LookupError,
-            ArithmeticError,
-            MemoryError,
-        ) as e:
-            execution_time = time.time() - start_time
-            logger.error(
-                "[PID %d] Task %s failed with unexpected error: %s",
-                os.getpid(),
-                task.task_id,
-                e,
-            )
-            return TaskResult(
-                task_id=task.task_id,
-                success=False,
-                error=e,
-                execution_time=execution_time,
-            )
+        while attempt <= config.max_retries:
+            try:
+                result = task.func()
+                execution_time = time.time() - start_time
+                if attempt > 0:
+                    logger.info(
+                        "[PID %d] Task %s succeeded on attempt %d in %.2fs",
+                        os.getpid(),
+                        task.task_id,
+                        attempt + 1,
+                        execution_time,
+                    )
+                else:
+                    logger.info(
+                        "[PID %d] Task %s completed in %.2fs",
+                        os.getpid(),
+                        task.task_id,
+                        execution_time,
+                    )
+                return TaskResult(
+                    task_id=task.task_id,
+                    success=True,
+                    result=result,
+                    execution_time=execution_time,
+                )
+
+            except config.retryable_exceptions as e:
+                last_error = e
+                attempt += 1
+
+                if attempt <= config.max_retries:
+                    # Calculate delay with exponential backoff
+                    delay = min(
+                        config.base_delay * (config.exponential_base ** (attempt - 1)),
+                        config.max_delay,
+                    )
+                    logger.warning(
+                        "[PID %d] Task %s failed (attempt %d/%d), retrying in %.1fs: %s",
+                        os.getpid(),
+                        task.task_id,
+                        attempt,
+                        config.max_retries + 1,
+                        delay,
+                        e,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        "[PID %d] Task %s failed after %d attempts: %s",
+                        os.getpid(),
+                        task.task_id,
+                        attempt,
+                        e,
+                    )
+
+            except Exception as e:
+                # Non-retryable exception - fail immediately
+                execution_time = time.time() - start_time
+                logger.error(
+                    "[PID %d] Task %s failed with non-retryable error: %s",
+                    os.getpid(),
+                    task.task_id,
+                    e,
+                )
+                return TaskResult(
+                    task_id=task.task_id,
+                    success=False,
+                    error=e,
+                    execution_time=execution_time,
+                )
+
+        # All retries exhausted
+        execution_time = time.time() - start_time
+        return TaskResult(
+            task_id=task.task_id,
+            success=False,
+            error=last_error,
+            execution_time=execution_time,
+        )
 
     def run_all(self) -> Dict[str, TaskResult]:
-        """Execute all queued tasks with BFS scheduling.
+        """Execute all queued tasks with priority-based scheduling.
 
         Returns:
             Dict[str, TaskResult]: Results for all executed tasks.
@@ -226,20 +317,21 @@ class Worker:
         logger.info(
             "[PID %d] Starting task execution with %d tasks",
             os.getpid(),
-            len(self._queue),
+            self._queue.qsize(),
         )
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             self._executor = executor
             futures: Dict[Future, str] = {}
 
-            while self._queue or futures:
+            while not self._queue.empty() or futures:
                 # Submit new tasks up to max_workers limit
-                while self._queue and len(futures) < self.max_workers:
-                    with self._lock:
-                        if not self._queue:
-                            break
-                        task = self._queue.popleft()
+                while not self._queue.empty() and len(futures) < self.max_workers:
+                    try:
+                        prioritized_task = self._queue.get_nowait()
+                        task = prioritized_task.task
+                    except Exception:
+                        break
 
                     future = executor.submit(self._execute_task, task)
                     futures[future] = task.task_id
@@ -249,67 +341,26 @@ class Worker:
                         task.task_id,
                     )
 
-                # Wait for at least one task to complete
+                # Wait for at least one task to complete if there are running tasks
                 if futures:
-                    try:
-                        completed = []
-                        for future in as_completed(futures, timeout=5.0):
-                            completed.append(future)
+                    done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
 
-                        for future in completed:
-                            task_id = futures.pop(future)
+                    for future in done:
+                        task_id = futures.pop(future)
+                        try:
                             result = future.result()
-                            with self._lock:
+                            with self._results_lock:
                                 self._results[task_id] = result
-                    except TimeoutError:
-                        # Check for completed futures manually
-                        completed = [f for f in futures if f.done()]
-                        for future in completed:
-                            task_id = futures.pop(future)
-                            try:
-                                result = future.result()
-                                with self._lock:
-                                    self._results[task_id] = result
-                            except (RuntimeError, ValueError) as e:
-                                logger.error(
-                                    "[PID %d] Task %s failed: %s",
-                                    os.getpid(),
-                                    task_id,
-                                    e,
+                        except Exception as e:
+                            # Should be caught by _execute_task, but just in case
+                            logger.error("Task %s failed unexpectedly: %s", task_id, e)
+                            with self._results_lock:
+                                self._results[task_id] = TaskResult(
+                                    task_id=task_id,
+                                    success=False,
+                                    error=e,
+                                    execution_time=0.0,
                                 )
-                                with self._lock:
-                                    self._results[task_id] = TaskResult(
-                                        task_id=task_id,
-                                        success=False,
-                                        error=e,
-                                        execution_time=0.0,
-                                    )
-                            except (
-                                TypeError,
-                                AttributeError,
-                                KeyError,
-                                IndexError,
-                                OSError,
-                                ImportError,
-                                LookupError,
-                                ArithmeticError,
-                                MemoryError,
-                            ) as e:
-                                logger.error(
-                                    "[PID %d] Task %s failed with unexpected error: %s",
-                                    os.getpid(),
-                                    task_id,
-                                    e,
-                                )
-                                with self._lock:
-                                    self._results[task_id] = TaskResult(
-                                        task_id=task_id,
-                                        success=False,
-                                        error=e,
-                                        execution_time=0.0,
-                                    )
-                else:
-                    time.sleep(0.01)
 
             self._executor = None
 
@@ -330,13 +381,17 @@ class Worker:
         Returns:
             Dict[str, TaskResult]: Task results.
         """
-        with self._lock:
+        with self._results_lock:
             return dict(self._results)
 
     def clear(self) -> None:
         """Clear queue and results."""
-        with self._lock:
-            self._queue.clear()
+        # PriorityQueue doesn't have clear(), create a new empty queue
+        self._queue = PriorityQueue()
+        with self._seen_lock:
             self._seen_tasks.clear()
+        with self._results_lock:
             self._results.clear()
-            logger.debug("Worker state cleared")
+        with self._sequence_lock:
+            self._sequence = 0
+        logger.debug("Worker state cleared")

@@ -45,6 +45,7 @@ class HvigorParser(BaseParser):
         graph_manager: GraphManager,
         eventbus,
         config: Any | None = None,
+        contract_registry: Any | None = None,
     ) -> None:
         """Initialize Hvigor configuration parser.
 
@@ -52,10 +53,11 @@ class HvigorParser(BaseParser):
             workspace_root: Workspace root path.
             graph_manager: Transaction graph manager.
             eventbus: Event bus for publishing parse events.
+            contract_registry: Contract registry.
             Returns:
             None.
         """
-        super().__init__(workspace_root, graph_manager, eventbus, config=config)
+        super().__init__(workspace_root, graph_manager, eventbus, config=config, contract_registry=contract_registry)
         self._last_config_result: Dict[str, Any] = {}
         self._known_modules: set[str] = set()
         self._pending_root_packages: list[tuple[Dict[str, Any], str]] = []
@@ -1138,7 +1140,7 @@ class HvigorParser(BaseParser):
                 # library nodes under the owning module. Hvigor always links
                 # native dependencies as shared libraries.
                 try:
-                    registry = ContractRegistry()
+                    registry = self.contract_registry
 
                     # Typically in module/libs/{abi}/libname.so. Use multiple
                     # ABI options for broader matching.

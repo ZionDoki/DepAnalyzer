@@ -32,6 +32,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from depanalyzer.runtime.worker import Worker
     from depanalyzer.runtime.workspace import Workspace
     from depanalyzer.graph import GraphManager
+    from depanalyzer.graph.contract_registry import ContractRegistry
 
 logger = logging.getLogger("depanalyzer.transaction.state")
 
@@ -133,6 +134,7 @@ class TransactionState:
     graph_manager: Optional["GraphManager"] = None
     dependency_collector: Optional["DependencyCollector"] = None
     progress_manager: Optional["ProgressManager"] = None
+    contract_registry: Optional["ContractRegistry"] = None
 
     # ===== Phase Results =====
     detected_targets: Dict[str, List[Path]] = field(default_factory=dict)

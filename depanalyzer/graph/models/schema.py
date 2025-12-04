@@ -20,45 +20,180 @@ from depanalyzer.utils.path_utils import normalize_node_id as _normalize_path_id
 logger = logging.getLogger("depanalyzer.graph.models.schema")
 
 
-class NodeType(str, Enum):
-    """Node type constants for the unified graph schema."""
+# =============================================================================
+# Domain-Specific Node Type Enums
+# =============================================================================
+# These enums categorize node types by their domain/ecosystem.
+# The unified NodeType enum below aggregates all types for backward compatibility.
 
-    # Core semantic types
+
+class CoreNodeType(str, Enum):
+    """Core node types shared across all ecosystems.
+
+    These are fundamental building blocks that appear in any dependency graph
+    regardless of the specific build system or language.
+    """
+
     CODE = "code"
-    SYSTEM_HEADER = "system_header"
-    PROJECT_HEADER = "project_header"
-
     CONFIG = "config"
     MODULE = "module"
-    EXTERNAL_LIBRARY = "external_library"
-    EXTERNAL_DEP = "external_dep"
-    PROCESS = "process"
-    TARGET = "target"
     ARTIFACT = "artifact"
-    BUILD_CONFIG = "build_config"
+    EXTERNAL_DEP = "external_dep"
+    EXTERNAL_LIBRARY = "external_library"
+    LICENSE = "license"
+    PROXY = "proxy"
+    UNKNOWN = "unknown"
+
+
+class CppNodeType(str, Enum):
+    """C/C++ and CMake specific node types.
+
+    These types are used when parsing CMake projects, Makefiles,
+    or other C/C++ build systems.
+    """
+
+    SYSTEM_HEADER = "system_header"
+    PROJECT_HEADER = "project_header"
+    HEADER = "header"  # Legacy, prefer SYSTEM_HEADER or PROJECT_HEADER
+    TARGET = "target"
     SUBDIRECTORY = "subdirectory"
     TOOLCHAIN = "toolchain"
-    PROXY = "proxy"
-    LICENSE = "license"
-
-    # Legacy / transitional types kept for compatibility
-    HEADER = "header"
+    BUILD_CONFIG = "build_config"
     SHARED_LIBRARY = "shared_library"
     STATIC_LIBRARY = "static_library"
     EXECUTABLE = "executable"
+
+
+class HvigorNodeType(str, Enum):
+    """HVigor (OpenHarmony/HarmonyOS) specific node types.
+
+    These types are used when parsing HVigor build configurations
+    for OpenHarmony applications.
+    """
+
+    HAP = "hap"  # Harmony Ability Package
+    HAR = "har"  # Harmony Archive (library)
+    HSP = "hsp"  # Harmony Shared Package
+
+
+class AnalysisNodeType(str, Enum):
+    """Analysis-derived node types.
+
+    These types are created during graph analysis phases,
+    not during initial parsing.
+    """
+
+    SCC_CLUSTER = "scc_cluster"
+    CODE_SCC_CLUSTER = "code_scc_cluster"
+
+
+class MiscNodeType(str, Enum):
+    """Miscellaneous node types.
+
+    Types that don't fit neatly into other categories.
+    """
+
+    PROCESS = "process"
     ASSET = "asset"
 
-    # OpenHarmony packaging types
+
+# =============================================================================
+# Unified NodeType Enum (Backward Compatible)
+# =============================================================================
+
+
+class NodeType(str, Enum):
+    """Node type constants for the unified graph schema.
+
+    This enum aggregates all domain-specific node types into a single
+    namespace for backward compatibility. New code should consider using
+    the domain-specific enums (CoreNodeType, CppNodeType, etc.) for
+    better type safety and documentation.
+
+    Node types are organized into categories:
+    - Core: Fundamental types shared across ecosystems
+    - C++/CMake: Types specific to C/C++ build systems
+    - HVigor: Types specific to OpenHarmony/HarmonyOS
+    - Analysis: Types created during graph analysis
+    - Misc: Other types
+    """
+
+    # --- Core types (from CoreNodeType) ---
+    CODE = "code"
+    CONFIG = "config"
+    MODULE = "module"
+    ARTIFACT = "artifact"
+    EXTERNAL_DEP = "external_dep"
+    EXTERNAL_LIBRARY = "external_library"
+    LICENSE = "license"
+    PROXY = "proxy"
+    UNKNOWN = "unknown"
+
+    # --- C++/CMake types (from CppNodeType) ---
+    SYSTEM_HEADER = "system_header"
+    PROJECT_HEADER = "project_header"
+    HEADER = "header"
+    TARGET = "target"
+    SUBDIRECTORY = "subdirectory"
+    TOOLCHAIN = "toolchain"
+    BUILD_CONFIG = "build_config"
+    SHARED_LIBRARY = "shared_library"
+    STATIC_LIBRARY = "static_library"
+    EXECUTABLE = "executable"
+
+    # --- HVigor types (from HvigorNodeType) ---
     HAP = "hap"
     HAR = "har"
     HSP = "hsp"
 
-    # Derived / analysis-only nodes
+    # --- Analysis types (from AnalysisNodeType) ---
     SCC_CLUSTER = "scc_cluster"
     CODE_SCC_CLUSTER = "code_scc_cluster"
 
-    # Fallback for places that still don't set a concrete type.
-    UNKNOWN = "unknown"
+    # --- Misc types (from MiscNodeType) ---
+    PROCESS = "process"
+    ASSET = "asset"
+
+    @classmethod
+    def is_core_type(cls, node_type: "NodeType") -> bool:
+        """Check if a node type is a core type."""
+        core_values = {t.value for t in CoreNodeType}
+        return node_type.value in core_values
+
+    @classmethod
+    def is_cpp_type(cls, node_type: "NodeType") -> bool:
+        """Check if a node type is a C++/CMake type."""
+        cpp_values = {t.value for t in CppNodeType}
+        return node_type.value in cpp_values
+
+    @classmethod
+    def is_hvigor_type(cls, node_type: "NodeType") -> bool:
+        """Check if a node type is a HVigor type."""
+        hvigor_values = {t.value for t in HvigorNodeType}
+        return node_type.value in hvigor_values
+
+    @classmethod
+    def is_analysis_type(cls, node_type: "NodeType") -> bool:
+        """Check if a node type is an analysis-derived type."""
+        analysis_values = {t.value for t in AnalysisNodeType}
+        return node_type.value in analysis_values
+
+    @classmethod
+    def get_category(cls, node_type: "NodeType") -> str:
+        """Get the category name for a node type.
+
+        Returns:
+            One of: 'core', 'cpp', 'hvigor', 'analysis', 'misc'
+        """
+        if cls.is_core_type(node_type):
+            return "core"
+        if cls.is_cpp_type(node_type):
+            return "cpp"
+        if cls.is_hvigor_type(node_type):
+            return "hvigor"
+        if cls.is_analysis_type(node_type):
+            return "analysis"
+        return "misc"
 
 
 class EdgeKind(str, Enum):
@@ -127,6 +262,13 @@ class NodeSpec(BaseModel):
         Field(
             default=None,
             description="Name of parser / hook that produced this node",
+        ),
+    ]
+    external_graph_id: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="ID of an external graph that this node references (Graph-of-Graphs)",
         ),
     ]
     confidence: Annotated[
@@ -211,6 +353,8 @@ class NodeSpec(BaseModel):
             payload["name"] = self.name
         if self.parser_name:
             payload["parser_name"] = self.parser_name
+        if self.external_graph_id:
+            payload["external_graph_id"] = self.external_graph_id
         if self.provisional:
             payload["provisional"] = True
 

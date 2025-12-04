@@ -64,7 +64,11 @@ class JoinPhase(BasePhase):
             try:
                 logger.info("Running linker for ecosystem: %s", eco)
                 linker_cfg = self.state.graph_build_config.get_linker_config(eco)
-                linker = linker_cls(self.state.graph_manager, config=linker_cfg)
+                linker = linker_cls(
+                    self.state.graph_manager,
+                    config=linker_cfg,
+                    contract_registry=self.state.contract_registry,
+                )
                 linker.link()
             except _SAFE_EXCEPTIONS as e:
                 logger.error("Linker for %s failed: %s", eco, e, exc_info=True)
@@ -75,7 +79,8 @@ class JoinPhase(BasePhase):
             logger.info("Running GlobalContractLinker")
             GlobalContractLinker.link(
                 self.state.graph_manager,
-                config=self.state.graph_build_config.contract_match
+                config=self.state.graph_build_config.contract_match,
+                contract_registry=self.state.contract_registry,
             )
         except _SAFE_EXCEPTIONS as e:
             logger.error("GlobalContractLinker failed: %s", e, exc_info=True)
@@ -94,7 +99,7 @@ class JoinPhase(BasePhase):
             graph=self.state.graph_manager,
             graph_build_config=self.state.graph_build_config,
             eventbus=self.state.eventbus,
-            contract_registry=ContractRegistry.get_instance(),
+            contract_registry=self.state.contract_registry,
             progress_manager=self.state.progress_manager,
             enable_dependency_resolution=self.state.enable_dependency_resolution,
             max_dependency_depth=self.state.max_dependency_depth,

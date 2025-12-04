@@ -1,6 +1,6 @@
 """Global registry for build interface contracts.
 
-This module provides a singleton registry for managing cross-language build
+This module provides a registry for managing cross-language build
 contracts throughout the analysis lifecycle. Parsers register contracts during
 parsing, and hooks match them during the JOIN phase.
 """
@@ -15,7 +15,7 @@ from .contract import BuildInterfaceContract, ContractType
 
 class ContractRegistry:
     """
-    Global singleton registry for build interface contracts.
+    Registry for build interface contracts.
 
     This registry stores all cross-language contracts discovered during parsing.
     It supports:
@@ -23,58 +23,34 @@ class ContractRegistry:
     - Matching contracts using multiple strategies (Contract/Artifact/Path)
     - Fusion of matched contracts with confidence scoring
     - Thread-safe operations for concurrent parsing
-
-    Usage:
-        # During parsing (any parser)
-        registry = ContractRegistry()
-        registry.register(BuildInterfaceContract(...))
-
-        # During JOIN phase (ContractMatcher hook)
-        matched = registry.match_contracts()
-        for contract in matched:
-            graph.add_edge(contract.consumer_artifact, contract.provider_artifact, ...)
     """
 
     _instance: Optional["ContractRegistry"] = None
     _lock = threading.Lock()
-    _initialized: bool = False
-
-    def __new__(cls) -> "ContractRegistry":
-        """Ensure singleton instance."""
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
 
     @classmethod
     def get_instance(cls) -> "ContractRegistry":
-        """Return the singleton ContractRegistry instance.
+        """Return the singleton ContractRegistry instance (Legacy).
 
-        This helper mirrors the pattern used by other global registries
-        (for example GraphRegistry) and makes it easier to depend on the
-        registry from context construction code.
-
-        Returns:
-            ContractRegistry: Global registry instance.
+        Deprecated: Prefer passing the registry instance via TransactionContext.
         """
-        return cls()
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance
 
     def __init__(self):
-        """Initialize registry (only once)."""
-        if self._initialized:
-            return
-
+        """Initialize registry."""
         self._contracts: List[BuildInterfaceContract] = []
         self._provider_map: Dict[str, List[BuildInterfaceContract]] = defaultdict(list)
         self._consumer_map: Dict[str, List[BuildInterfaceContract]] = defaultdict(list)
         self._artifact_name_providers: Dict[str, List[BuildInterfaceContract]] = defaultdict(list)
         self._artifact_name_consumers: Dict[str, List[BuildInterfaceContract]] = defaultdict(list)
-        self._initialized = True
+        self._lock = threading.Lock()
 
     def reset(self):
-        """Reset the registry (for testing or multi-project analysis)."""
+        """Reset the registry."""
         with self._lock:
             self._contracts.clear()
             self._provider_map.clear()
@@ -111,9 +87,10 @@ class ContractRegistry:
         Returns:
             List of provider contracts
         """
-        if artifact_name:
-            return self._artifact_name_providers.get(artifact_name, [])
-        return [c for c in self._contracts if c.provider_artifact]
+        with self._lock:
+            if artifact_name:
+                return self._artifact_name_providers.get(artifact_name, [])[:]
+            return [c for c in self._contracts if c.provider_artifact]
 
     def get_consumers(self, artifact_name: Optional[str] = None) -> List[BuildInterfaceContract]:
         """
@@ -125,13 +102,15 @@ class ContractRegistry:
         Returns:
             List of consumer contracts
         """
-        if artifact_name:
-            return self._artifact_name_consumers.get(artifact_name, [])
-        return [c for c in self._contracts if c.consumer_artifact]
+        with self._lock:
+            if artifact_name:
+                return self._artifact_name_consumers.get(artifact_name, [])[:]
+            return [c for c in self._contracts if c.consumer_artifact]
 
     def get_all_contracts(self) -> List[BuildInterfaceContract]:
         """Get all registered contracts."""
-        return self._contracts.copy()
+        with self._lock:
+            return self._contracts.copy()
 
     def match_contracts(
         self,
@@ -153,37 +132,40 @@ class ContractRegistry:
         # Decide which matching strategies are enabled.
         cfg = config or ContractMatchConfig()
 
-        # Collect all incomplete contracts
-        consumers = [c for c in self._contracts if c.is_consumer_only]
+        with self._lock:
+            # Collect all incomplete contracts
+            consumers = [c for c in self._contracts if c.is_consumer_only]
+            # Already complete contracts (registered as complete)
+            matched.extend([c for c in self._contracts if c.is_complete])
+            
+            # Snapshot maps for matching to avoid lock issues if needed
+            # (Current logic holds lock for whole duration which is fine for now)
+            
+            # Try to match incomplete contracts
+            used_providers = set()
+            used_consumers = set()
 
-        # Already complete contracts (registered as complete)
-        matched.extend([c for c in self._contracts if c.is_complete])
-
-        # Try to match incomplete contracts
-        used_providers = set()
-        used_consumers = set()
-
-        # Strategy 1: Artifact name matching
-        if cfg.enable_artifact_name:
-            for consumer in consumers:
-                if id(consumer) in used_consumers:
-                    continue
-
-                for provider in self._artifact_name_providers.get(consumer.artifact_name, []):
-                    if id(provider) in used_providers:
-                        continue
-                    if not provider.is_provider_only:
+            # Strategy 1: Artifact name matching
+            if cfg.enable_artifact_name:
+                for consumer in consumers:
+                    if id(consumer) in used_consumers:
                         continue
 
-                    # Found a match by artifact name
-                    try:
-                        merged = consumer.merge_with(provider)
-                        matched.append(merged)
-                        used_providers.add(id(provider))
-                        used_consumers.add(id(consumer))
-                        break
-                    except ValueError:
-                        continue
+                    for provider in self._artifact_name_providers.get(consumer.artifact_name, []):
+                        if id(provider) in used_providers:
+                            continue
+                        if not provider.is_provider_only:
+                            continue
+
+                        # Found a match by artifact name
+                        try:
+                            merged = consumer.merge_with(provider)
+                            matched.append(merged)
+                            used_providers.add(id(provider))
+                            used_consumers.add(id(consumer))
+                            break
+                        except ValueError:
+                            continue
 
         # Sort by confidence (descending)
         matched.sort(key=lambda c: c.confidence, reverse=True)
@@ -199,8 +181,9 @@ class ContractRegistry:
         Returns:
             Provider contract or None
         """
-        contracts = self._provider_map.get(artifact_id, [])
-        return contracts[0] if contracts else None
+        with self._lock:
+            contracts = self._provider_map.get(artifact_id, [])
+            return contracts[0] if contracts else None
 
     def find_consumer_by_artifact_id(self, artifact_id: str) -> Optional[BuildInterfaceContract]:
         """
@@ -212,8 +195,9 @@ class ContractRegistry:
         Returns:
             Consumer contract or None
         """
-        contracts = self._consumer_map.get(artifact_id, [])
-        return contracts[0] if contracts else None
+        with self._lock:
+            contracts = self._consumer_map.get(artifact_id, [])
+            return contracts[0] if contracts else None
 
     def get_statistics(self) -> Dict[str, int]:
         """
@@ -222,16 +206,17 @@ class ContractRegistry:
         Returns:
             Dictionary with counts of different contract types
         """
-        return {
-            "total": len(self._contracts),
-            "complete": sum(1 for c in self._contracts if c.is_complete),
-            "provider_only": sum(1 for c in self._contracts if c.is_provider_only),
-            "consumer_only": sum(1 for c in self._contracts if c.is_consumer_only),
-            "by_type": {
-                ct.value: sum(1 for c in self._contracts if c.contract_type == ct)
-                for ct in ContractType
+        with self._lock:
+            return {
+                "total": len(self._contracts),
+                "complete": sum(1 for c in self._contracts if c.is_complete),
+                "provider_only": sum(1 for c in self._contracts if c.is_provider_only),
+                "consumer_only": sum(1 for c in self._contracts if c.is_consumer_only),
+                "by_type": {
+                    ct.value: sum(1 for c in self._contracts if c.contract_type == ct)
+                    for ct in ContractType
+                }
             }
-        }
 
     def __repr__(self) -> str:
         """Human-readable representation."""

@@ -52,6 +52,7 @@ class CMakeParser(BaseParser):
         graph_manager: GraphManager,
         eventbus,
         config: Any | None = None,
+        contract_registry: Any | None = None,
     ) -> None:
         """Initialize the CMake config parser with command handlers and graph builder hook.
 
@@ -59,12 +60,13 @@ class CMakeParser(BaseParser):
             workspace_root: Workspace root directory path.
             graph_manager: Transaction graph manager.
             eventbus: Event bus for publishing parse events.
+            contract_registry: Contract registry for cross-language linking.
         """
-        super().__init__(workspace_root, graph_manager, eventbus, config=config)
+        super().__init__(workspace_root, graph_manager, eventbus, config=config, contract_registry=contract_registry)
 
         # Initialize the CMakeGraphBuilder hook that consumes CMake events
         # and performs graph operations
-        self.cmake_graph_builder = CMakeGraphBuilder(graph_manager, eventbus)
+        self.cmake_graph_builder = CMakeGraphBuilder(graph_manager, eventbus, contract_registry=self.contract_registry)
         log.info("CMakeGraphBuilder hook initialized")
 
         self._init_command_handlers()
