@@ -6,6 +6,7 @@ managing all nodes, edges, and metadata for that analysis session.
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 
@@ -65,6 +66,10 @@ class GraphManager:
         # This avoids repeated has_node() calls to the backend
         self._node_cache: Set[str] = set()
 
+        # Thread safety: RLock for concurrent access from multiple threads
+        # (e.g., Worker ThreadPoolExecutor + ParsePhase consumer thread)
+        self._lock = threading.RLock()
+
         logger.info("GraphManager initialized with ID: %s", self.graph_id)
         if self.root_path:
             logger.info("Root path set to: %s", self.root_path)
@@ -81,12 +86,13 @@ class GraphManager:
 
     def register_external_graph(self, graph_id: str, path: Path) -> None:
         """Register an external graph for potential lazy loading.
-        
+
         Args:
             graph_id: Unique identifier of the external graph.
             path: File path to the graph file.
         """
-        self._external_graph_registry[graph_id] = path
+        with self._lock:
+            self._external_graph_registry[graph_id] = path
         logger.debug("Registered external graph %s at %s", graph_id, path)
 
     def mount_external_node(self, node_id: str, external_graph_id: str, **attributes) -> None:
@@ -207,13 +213,14 @@ class GraphManager:
 
         This is the preferred entry point for new code constructing nodes.
         """
-        if self._has_node_cached(spec.id):
-            logger.debug("Node %s already exists, skipping", spec.id)
-            return
+        with self._lock:
+            if self._has_node_cached(spec.id):
+                logger.debug("Node %s already exists, skipping", spec.id)
+                return
 
-        validate_node(spec, self.root_path)
-        self._backend.add_node(spec.id, **spec.to_backend_attrs())
-        self._node_cache.add(spec.id)
+            validate_node(spec, self.root_path)
+            self._backend.add_node(spec.id, **spec.to_backend_attrs())
+            self._node_cache.add(spec.id)
         logger.debug("Added node: %s (type=%s)", spec.id, spec.type.value)
 
     def add_edge(
@@ -288,15 +295,16 @@ class GraphManager:
 
         This is the preferred entry point for new code constructing edges.
         """
-        self._ensure_node_exists(spec.source)
-        self._ensure_node_exists(spec.target)
+        with self._lock:
+            self._ensure_node_exists(spec.source)
+            self._ensure_node_exists(spec.target)
 
-        validate_edge(spec)
-        key = self._backend.add_edge(
-            spec.source,
-            spec.target,
-            **spec.to_backend_attrs(),
-        )
+            validate_edge(spec)
+            key = self._backend.add_edge(
+                spec.source,
+                spec.target,
+                **spec.to_backend_attrs(),
+            )
         logger.debug(
             "Added edge: %s -> %s (kind=%s, key=%d)",
             spec.source,
@@ -323,36 +331,37 @@ class GraphManager:
         if not specs:
             return []
 
-        # Collect all unique node IDs needed
-        needed_nodes: Set[str] = set()
-        for spec in specs:
-            needed_nodes.add(spec.source)
-            needed_nodes.add(spec.target)
+        with self._lock:
+            # Collect all unique node IDs needed
+            needed_nodes: Set[str] = set()
+            for spec in specs:
+                needed_nodes.add(spec.source)
+                needed_nodes.add(spec.target)
 
-        # Find nodes that need to be created
-        missing_nodes = needed_nodes - self._node_cache
-        for node_id in missing_nodes:
-            if not self._backend.has_node(node_id):
-                provisional_node = NodeSpec(
-                    id=node_id,
-                    type=NodeType.UNKNOWN,
-                    provisional=True,
-                    attrs={},
+            # Find nodes that need to be created
+            missing_nodes = needed_nodes - self._node_cache
+            for node_id in missing_nodes:
+                if not self._backend.has_node(node_id):
+                    provisional_node = NodeSpec(
+                        id=node_id,
+                        type=NodeType.UNKNOWN,
+                        provisional=True,
+                        attrs={},
+                    )
+                    validate_node(provisional_node, self.root_path)
+                    self._backend.add_node(node_id, **provisional_node.to_backend_attrs())
+                self._node_cache.add(node_id)
+
+            # Add all edges
+            keys: List[int] = []
+            for spec in specs:
+                validate_edge(spec)
+                key = self._backend.add_edge(
+                    spec.source,
+                    spec.target,
+                    **spec.to_backend_attrs(),
                 )
-                validate_node(provisional_node, self.root_path)
-                self._backend.add_node(node_id, **provisional_node.to_backend_attrs())
-            self._node_cache.add(node_id)
-
-        # Add all edges
-        keys: List[int] = []
-        for spec in specs:
-            validate_edge(spec)
-            key = self._backend.add_edge(
-                spec.source,
-                spec.target,
-                **spec.to_backend_attrs(),
-            )
-            keys.append(key)
+                keys.append(key)
 
         logger.debug("Added %d edges in batch", len(specs))
         return keys
@@ -502,9 +511,10 @@ class GraphManager:
         Raises:
             ValueError: If node does not exist.
         """
-        if not self.has_node(node_id):
-            raise ValueError(f"Node {node_id} does not exist")
-        self._backend.native_graph.nodes[node_id][key] = value
+        with self._lock:
+            if not self.has_node(node_id):
+                raise ValueError(f"Node {node_id} does not exist")
+            self._backend.native_graph.nodes[node_id][key] = value
         logger.debug("Updated node %s attribute: %s", node_id, key)
 
     def nodes(
@@ -583,7 +593,8 @@ class GraphManager:
             key: Metadata key.
             value: Metadata value.
         """
-        self._metadata[key] = value
+        with self._lock:
+            self._metadata[key] = value
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Get graph metadata.
@@ -673,7 +684,8 @@ class GraphManager:
             target: Target node ID.
             key: Edge key.
         """
-        self._backend.native_graph.remove_edge(source, target, key)
+        with self._lock:
+            self._backend.native_graph.remove_edge(source, target, key)
         logger.debug("Removed edge: %s -> %s (key=%d)", source, target, key)
 
     def derive_asset_artifact_projection(

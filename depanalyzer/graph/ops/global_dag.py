@@ -13,6 +13,7 @@ The implementation is explicitly hardened for multi-process usage:
 # File I/O paths deliberately catch Exception to keep cache handling resilient.
 
 
+import ctypes
 import json
 import logging
 import os
@@ -43,6 +44,14 @@ try:
 except ImportError:
     fcntl = None
     _HAS_FCNTL = False
+
+try:
+    import msvcrt
+
+    _HAS_MSVCRT = True
+except ImportError:
+    msvcrt = None
+    _HAS_MSVCRT = False
 
 
 class GlobalDAG:
@@ -143,20 +152,39 @@ class GlobalDAG:
         return instance
 
     @staticmethod
-    def _lock_owner_alive(pid: int) -> bool:
-        """Best-effort check whether a PID is still alive."""
+    def _pid_is_running(pid: int) -> bool:
+        """Return True if the provided PID appears to be alive.
+
+        Uses Windows-native API on Windows for reliable detection.
+        """
         if pid <= 0:
             return False
-
+        if os.name == "nt":
+            if ctypes is None:
+                return True
+            kernel32 = ctypes.windll.kernel32
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+            )
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            return False
         try:
-            # os.kill(pid, 0) is a cross-platform liveness probe
             os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
             return True
-        except OSError as exc:  # pragma: no cover - platform dependent
-            if getattr(exc, "errno", None) == errno.ESRCH:
-                return False
-            # Access denied or other errors are treated as "probably alive"
+        except OSError:
             return True
+        return True
+
+    @staticmethod
+    def _lock_owner_alive(pid: int) -> bool:
+        """Best-effort check whether a PID is still alive."""
+        return GlobalDAG._pid_is_running(pid)
 
     def _lock_path(self) -> Path:
         """Return path to the lock file used for cross-process coordination."""
@@ -168,8 +196,8 @@ class GlobalDAG:
         """Acquire an exclusive file lock for DAG operations.
 
         On POSIX platforms this uses fcntl.flock for robustness. On
-        platforms without fcntl (e.g. Windows), it falls back to a
-        best-effort lock file based on O_CREAT | O_EXCL.
+        Windows, it uses msvcrt.locking for native file locking.
+        Falls back to O_CREAT | O_EXCL when neither is available.
 
         Args:
             timeout: Maximum time in seconds to wait for the lock when
@@ -192,7 +220,48 @@ class GlobalDAG:
                     fcntl.flock(fd, fcntl.LOCK_UN)
                 finally:
                     os.close(fd)
-        else:  # Fallback for non-posix platforms
+        elif _HAS_MSVCRT:  # Windows-native locking
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
+            start = time.time()
+            locked = False
+            try:
+                # Ensure file has content for locking
+                end_offset = os.lseek(fd, 0, os.SEEK_END)
+                if end_offset == 0:
+                    os.write(fd, b"\0")
+                os.lseek(fd, 0, os.SEEK_SET)
+                while True:
+                    try:
+                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                        locked = True
+                        break
+                    except OSError as lock_err:
+                        if time.time() - start > timeout:
+                            logger.error(
+                                "Timeout acquiring GlobalDAG lock via msvcrt: %s",
+                                lock_path,
+                            )
+                            raise TimeoutError(
+                                f"Timeout acquiring GlobalDAG lock: {lock_path}"
+                            ) from lock_err
+                        time.sleep(poll_interval)
+                try:
+                    yield
+                finally:
+                    if locked:
+                        try:
+                            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                        except OSError as unlock_err:
+                            logger.debug(
+                                "Failed to unlock GlobalDAG via msvcrt: %s",
+                                unlock_err,
+                            )
+            finally:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        else:  # Fallback when neither fcntl nor msvcrt is available
             start = time.time()
             fd: Optional[int] = None
             while True:

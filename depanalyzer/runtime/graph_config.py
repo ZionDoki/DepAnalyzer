@@ -42,6 +42,14 @@ class CMakeDetectConfig:
 
 
 @dataclass
+class NpmDetectConfig:
+    """Detection options for the npm ecosystem."""
+
+    ignore_node_modules: bool = True
+    detect_workspaces: bool = True
+
+
+@dataclass
 class DetectConfig:
     """Top‑level detection configuration.
 
@@ -51,6 +59,7 @@ class DetectConfig:
 
     hvigor: HvigorDetectConfig = field(default_factory=HvigorDetectConfig)
     cpp: CMakeDetectConfig = field(default_factory=CMakeDetectConfig)
+    npm: NpmDetectConfig = field(default_factory=NpmDetectConfig)
 
     def for_ecosystem(self, ecosystem: str) -> Optional[Any]:
         """Return config slice for a given ecosystem, if available."""
@@ -58,6 +67,8 @@ class DetectConfig:
             return self.hvigor
         if ecosystem == "cpp":
             return self.cpp
+        if ecosystem == "npm":
+            return self.npm
         return None
 
 
@@ -83,11 +94,21 @@ class CMakeParserConfig:
 
 
 @dataclass
+class NpmParserConfig:
+    """Config options for npm package.json parser."""
+
+    include_dev_dependencies: bool = False
+    include_peer_dependencies: bool = False
+    parse_lock_file: bool = True
+
+
+@dataclass
 class ParserConfig:
     """Top‑level config for configuration parsers."""
 
     hvigor: HvigorParserConfig = field(default_factory=HvigorParserConfig)
     cpp: CMakeParserConfig = field(default_factory=CMakeParserConfig)
+    npm: NpmParserConfig = field(default_factory=NpmParserConfig)
 
     def for_ecosystem(self, ecosystem: str) -> Optional[Any]:
         """Return parser config slice for a given ecosystem."""
@@ -95,6 +116,8 @@ class ParserConfig:
             return self.hvigor
         if ecosystem == "cpp":
             return self.cpp
+        if ecosystem == "npm":
+            return self.npm
         return None
 
 
@@ -121,11 +144,20 @@ class CppCodeParserConfig:
 
 
 @dataclass
+class NpmCodeParserConfig:
+    """Config for JavaScript/TypeScript code parser."""
+
+    parse_typescript: bool = True
+    max_import_ancestor_levels: int = 8
+
+
+@dataclass
 class CodeParserConfig:
     """Top‑level configuration for process‑pool code parsers."""
 
     hvigor: HvigorCodeParserConfig = field(default_factory=HvigorCodeParserConfig)
     cpp: CppCodeParserConfig = field(default_factory=CppCodeParserConfig)
+    npm: NpmCodeParserConfig = field(default_factory=NpmCodeParserConfig)
 
     def for_ecosystem(self, ecosystem: str) -> Optional[Any]:
         """Return code‑parser config slice for a given ecosystem."""
@@ -133,6 +165,8 @@ class CodeParserConfig:
             return self.hvigor
         if ecosystem == "cpp":
             return self.cpp
+        if ecosystem == "npm":
+            return self.npm
         return None
 
 
@@ -159,11 +193,21 @@ class CppLinkerConfig:
 
 
 @dataclass
+class NpmLinkerConfig:
+    """Config for npm linker behavior."""
+
+    link_workspace_packages: bool = True
+    infer_entry_from_main: bool = True
+    enable_native_addon_link: bool = True
+
+
+@dataclass
 class LinkerConfig:
     """Top‑level configuration for per‑ecosystem linkers."""
 
     hvigor: HvigorLinkerConfig = field(default_factory=HvigorLinkerConfig)
     cpp: CppLinkerConfig = field(default_factory=CppLinkerConfig)
+    npm: NpmLinkerConfig = field(default_factory=NpmLinkerConfig)
 
     def for_ecosystem(self, ecosystem: str) -> Optional[Any]:
         """Return linker config slice for a given ecosystem."""
@@ -171,6 +215,8 @@ class LinkerConfig:
             return self.hvigor
         if ecosystem == "cpp":
             return self.cpp
+        if ecosystem == "npm":
+            return self.npm
         return None
 
 
@@ -492,10 +538,14 @@ __all__ = [
     "LicenseLinkConfig",
     "HvigorDetectConfig",
     "CMakeDetectConfig",
+    "NpmDetectConfig",
     "HvigorParserConfig",
     "CMakeParserConfig",
+    "NpmParserConfig",
     "HvigorCodeParserConfig",
     "CppCodeParserConfig",
+    "NpmCodeParserConfig",
     "HvigorLinkerConfig",
     "CppLinkerConfig",
+    "NpmLinkerConfig",
 ]

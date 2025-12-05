@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Sequence
 from depanalyzer.parsers.cpp.code_dependency_mapper import CppCodeDependencyMapper
 from depanalyzer.parsers.hvigor.code_dependency_mapper import HvigorCodeDependencyMapper
 from depanalyzer.parsers.maven.code_dependency_mapper import MavenCodeDependencyMapper
+from depanalyzer.parsers.npm.code_dependency_mapper import NpmCodeDependencyMapper
 from depanalyzer.runtime.coordinator import TransactionResult
 from depanalyzer.runtime.graph_config import GraphBuildConfig
 from depanalyzer.runtime.orchestrator import PhaseOrchestrator
@@ -118,6 +119,7 @@ class Transaction:
             _code_dependency_mappers.setdefault("cpp", CppCodeDependencyMapper())
             _code_dependency_mappers.setdefault("hvigor", HvigorCodeDependencyMapper())
             _code_dependency_mappers.setdefault("maven", MavenCodeDependencyMapper())
+            _code_dependency_mappers.setdefault("npm", NpmCodeDependencyMapper())
 
         # Join policies (append fallback when enabled)
         _join_policies = list(join_policies or join_strategies or [])

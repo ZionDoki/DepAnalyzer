@@ -26,7 +26,7 @@ class ContractRegistry:
     """
 
     _instance: Optional["ContractRegistry"] = None
-    _lock = threading.Lock()
+    _instance_lock = threading.Lock()  # Class-level lock for singleton creation
 
     @classmethod
     def get_instance(cls) -> "ContractRegistry":
@@ -35,7 +35,7 @@ class ContractRegistry:
         Deprecated: Prefer passing the registry instance via TransactionContext.
         """
         if cls._instance is None:
-            with cls._lock:
+            with cls._instance_lock:
                 if cls._instance is None:
                     cls._instance = cls()
         return cls._instance

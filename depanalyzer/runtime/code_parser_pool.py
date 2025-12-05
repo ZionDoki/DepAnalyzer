@@ -248,6 +248,7 @@ class CodeParserPool:
         if CodeParserPool._initialized:
             return
 
+        self._owner_pid = os.getpid()
         self.max_workers = max_workers or os.cpu_count() or 4
         self._executor: Optional[ProcessPoolExecutor] = None
 
@@ -270,6 +271,22 @@ class CodeParserPool:
             return cls._instance
 
         instance: "CodeParserPool" = cls._instance
+
+        # Detect fork: if current PID differs from owner PID, reset singleton
+        current_pid = os.getpid()
+        owner_pid = getattr(instance, "_owner_pid", current_pid)
+        if owner_pid != current_pid:
+            logger.debug(
+                "Resetting CodeParserPool singleton after fork "
+                "(owner_pid=%s, current_pid=%s)",
+                owner_pid,
+                current_pid,
+            )
+            cls._instance = None
+            cls._initialized = False
+            cls._instance = cls(max_workers)
+            return cls._instance
+
         if max_workers is not None:
             requested = max_workers or os.cpu_count() or 4
             if instance._executor is None and requested != instance.max_workers:

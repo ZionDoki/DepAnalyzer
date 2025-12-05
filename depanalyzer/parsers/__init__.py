@@ -70,6 +70,25 @@ except ImportError as e:
     _HVIGOR_AVAILABLE = False
     _failed_ecosystems.append(("hvigor", str(e)))
 
+# Import NPM ecosystem components
+try:
+    from depanalyzer.parsers.npm.detector import NpmDetector
+    from depanalyzer.parsers.npm.config_parser import NpmParser
+    from depanalyzer.parsers.npm.dep_fetcher import NpmDepFetcher
+    from depanalyzer.parsers.npm.code_parser import NpmCodeParser
+    from depanalyzer.parsers.npm.linker import NpmLinker
+
+    _NPM_AVAILABLE = True
+    logger.debug("✓ NPM ecosystem components imported successfully")
+except ImportError as e:
+    logger.error("❌ NPM ecosystem imports failed: %s", e, exc_info=True)
+    logger.error(
+        "NPM ecosystem will not be available. "
+        "Please ensure all dependencies are installed (tree-sitter-javascript, requests, etc.)"
+    )
+    _NPM_AVAILABLE = False
+    _failed_ecosystems.append(("npm", str(e)))
+
 
 # Register CPP ecosystem (CMake-based)
 if _CPP_AVAILABLE:
@@ -139,6 +158,28 @@ if _MAVEN_AVAILABLE:
     except Exception as e:
         logger.error("Failed to register Maven ecosystem: %s", e, exc_info=True)
         _failed_ecosystems.append(("maven", f"Registration failed: {e}"))
+
+# Register NPM ecosystem (Node.js)
+if _NPM_AVAILABLE:
+    try:
+        from depanalyzer.parsers.npm.config_model import NpmEcosystemConfig
+
+        register_ecosystem(
+            ecosystem="npm",
+            detector_class=NpmDetector,
+            parser_class=NpmParser,
+            fetcher_class=NpmDepFetcher,
+            code_parser_class=NpmCodeParser,
+            linker_class=NpmLinker,
+        )
+        EcosystemConfigRegistry.register_config_factory(
+            "npm", NpmEcosystemConfig.from_dict
+        )
+        logger.info("✓ Successfully registered NPM ecosystem (Node.js)")
+        _registered_ecosystems.append("npm")
+    except Exception as e:
+        logger.error("Failed to register NPM ecosystem: %s", e, exc_info=True)
+        _failed_ecosystems.append(("npm", f"Registration failed: {e}"))
 
 # Summary logging
 if _registered_ecosystems:
@@ -214,5 +255,16 @@ if _MAVEN_AVAILABLE:
             "MavenDepFetcher",
             "MavenCodeParser",
             "MavenLinker",
+        ]
+    )
+
+if _NPM_AVAILABLE:
+    __all__.extend(
+        [
+            "NpmDetector",
+            "NpmParser",
+            "NpmDepFetcher",
+            "NpmCodeParser",
+            "NpmLinker",
         ]
     )
