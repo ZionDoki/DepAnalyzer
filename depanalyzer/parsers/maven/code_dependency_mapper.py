@@ -76,7 +76,6 @@ def _normalize_code_node(
                 id=node_id,
                 type=NodeType.CODE,
                 src_path=str(file_path.resolve()),
-                path=str(file_path),
                 name=file_path.name,
                 parser_name=parse_result.get("parser_name") or "maven_code",
             )

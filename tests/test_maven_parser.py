@@ -65,7 +65,7 @@ def test_maven_parser_creates_module_and_dependency(tmp_path: Path) -> None:
     assert graph.has_node(module_id)
     assert graph.has_node(dep_id)
     assert graph.has_node(artifact_id)
-    edge = graph.backend.native_graph.get_edge_data(module_id, dep_id)
+    edge = graph.backend.get_edge_data(module_id, dep_id)
     assert edge is not None
 
 
@@ -133,4 +133,4 @@ public class App {
         current_phase=LifecyclePhase.PARSE,
     )
     mapper.map(CodeDependencyContext(tx_ctx, java_file, result))
-    assert graph.backend.native_graph.number_of_edges() >= 1
+    assert graph.edge_count() >= 1

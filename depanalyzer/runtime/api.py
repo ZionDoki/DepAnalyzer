@@ -26,9 +26,6 @@ def create_transaction(
     graph_build_config: Optional[GraphBuildConfig] = None,
     lifecycle_hooks: Optional[Sequence[LifecycleHook]] = None,
     code_dependency_mappers: Optional[Mapping[str, CodeDependencyMapper]] = None,
-    asset_projection_strategy: Optional[AssetProjectionPolicy] = None,
-    join_strategies: Optional[Sequence[JoinPolicy]] = None,
-    analyze_strategies: Optional[Sequence[AnalyzePolicy]] = None,
     asset_projection_policy: Optional[AssetProjectionPolicy] = None,
     join_policies: Optional[Sequence[JoinPolicy]] = None,
     analyze_policies: Optional[Sequence[AnalyzePolicy]] = None,
@@ -43,11 +40,6 @@ def create_transaction(
         lifecycle_hooks: Optional sequence of lifecycle hooks.
         code_dependency_mappers: Optional mapping from ecosystem name
             to CodeDependencyMapper implementation.
-        asset_projection_strategy: Optional AssetProjectionPolicy used during ANALYZE
-            (deprecated alias).
-        join_strategies: Optional sequence of JoinPolicy instances (deprecated alias).
-        analyze_strategies: Optional sequence of AnalyzePolicy instances
-            (deprecated alias).
         asset_projection_policy: Optional AssetProjectionPolicy used during ANALYZE.
         join_policies: Optional sequence of JoinPolicy instances.
         analyze_policies: Optional sequence of AnalyzePolicy instances.
@@ -57,18 +49,14 @@ def create_transaction(
     Returns:
         Configured Transaction instance.
     """
-    asset_policy = asset_projection_policy or asset_projection_strategy
-    join_policy_seq = join_policies or join_strategies
-    analyze_policy_seq = analyze_policies or analyze_strategies
-
     return Transaction(
         source=source,
         graph_build_config=graph_build_config or GraphBuildConfig.default(),
         lifecycle_hooks=lifecycle_hooks,
         code_dependency_mappers=code_dependency_mappers,
-        asset_projection_policy=asset_policy,
-        join_policies=join_policy_seq,
-        analyze_policies=analyze_policy_seq,
+        asset_projection_policy=asset_projection_policy,
+        join_policies=join_policies,
+        analyze_policies=analyze_policies,
         **kwargs,
     )
 

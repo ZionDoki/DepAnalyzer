@@ -60,10 +60,9 @@ def test_license_policy_attaches_to_root_nodes(tmp_path: Path) -> None:
     policy.join(ctx)
 
     license_id = graph.normalize_path(license_file)
-    backend = graph.backend.native_graph
     assert graph.get_node(license_id)["type"] == NodeType.LICENSE.value
-    assert backend.has_edge(root_id, license_id)
-    assert not backend.has_edge(isolated_id, license_id)
+    assert graph.backend.has_edge(root_id, license_id)
+    assert not graph.backend.has_edge(isolated_id, license_id)
 
 
 def test_license_policy_retypes_existing_node(tmp_path: Path) -> None:
@@ -88,4 +87,4 @@ def test_license_policy_retypes_existing_node(tmp_path: Path) -> None:
 
     attrs = graph.get_node(node_id)
     assert attrs["type"] == NodeType.LICENSE.value
-    assert graph.backend.native_graph.has_edge(root_id, node_id)
+    assert graph.backend.has_edge(root_id, node_id)

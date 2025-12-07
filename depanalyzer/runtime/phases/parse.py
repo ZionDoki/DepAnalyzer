@@ -3,7 +3,7 @@ PARSE phase implementation.
 
 Two-stage parsing with pipeline parallelism:
 1. Config parsing (package.json, pom.xml, etc.) via Worker thread pool
-2. Code parsing (source files) via CodeParserPool process pool
+2. Code parsing (source files) via GlobalTaskPool process pool
 
 The two stages run in parallel using a producer-consumer pattern:
 - Config parsing produces code files as they are discovered
@@ -19,13 +19,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from depanalyzer.graph import GraphManager
 from depanalyzer.graph.contract_registry import ContractRegistry
 from depanalyzer.parsers.registry import EcosystemRegistry
-from depanalyzer.runtime.code_parser_pool import CodeParserPool
 from depanalyzer.runtime.dependency_collector import DependencyCollector
 from depanalyzer.runtime.lifecycle import LifecyclePhase
 from depanalyzer.runtime.phases.base import BasePhase
 from depanalyzer.runtime.context import TransactionContext
 from depanalyzer.runtime.policies import CodeDependencyContext, CodeDependencyMapper
 from depanalyzer.runtime.worker import Task, TaskPriority
+from depanalyzer.runtime.task_pool import GlobalTaskPool
+from depanalyzer.runtime.task_types import Task as PoolTask, TaskType, create_task
 
 logger = logging.getLogger("depanalyzer.transaction.phase.parse")
 
@@ -265,8 +266,9 @@ class ParsePhase(BasePhase):
             config_complete: Event signaling config parsing is done.
             error_list: List to store any exceptions for the main thread.
         """
-        code_pool = CodeParserPool.get_instance(self.state.max_workers)
-        all_futures: List[Tuple[Path, Any]] = []
+        # Use GlobalTaskPool instead of CodeParserPool
+        task_pool = GlobalTaskPool.get_instance(self.state.max_workers)
+        task_futures: Dict[str, Tuple[Path, Any]] = {}  # task_id -> (file_path, future)
         successful, skipped, failed = 0, 0, 0
 
         try:
@@ -287,12 +289,19 @@ class ParsePhase(BasePhase):
                             len(file_paths), ecosystem
                         )
                         code_cfg = self.state.graph_build_config.get_code_parser_config(ecosystem)
-                        batch_futures = code_pool.submit_batch(
-                            file_paths,
-                            ecosystem,
-                            config=code_cfg,
-                        )
-                        all_futures.extend(batch_futures)
+
+                        # Submit each file as a PARSE_CODE task
+                        for file_path in file_paths:
+                            task = create_task(
+                                TaskType.PARSE_CODE,
+                                payload={
+                                    "file_path": str(file_path),
+                                    "ecosystem": ecosystem,
+                                    "config": code_cfg,
+                                },
+                            )
+                            future = task_pool.submit(task)
+                            task_futures[task.task_id] = (file_path, future)
 
                 except queue.Empty:
                     # Check if config parsing is done and queue is empty
@@ -301,19 +310,29 @@ class ParsePhase(BasePhase):
                     continue
 
             # Wait for all code parsing to complete
-            if all_futures:
-                logger.info("Waiting for %d code files to be parsed", len(all_futures))
-                code_results = code_pool.wait_for_completion(all_futures, timeout=300)
+            if task_futures:
+                logger.info("Waiting for %d code files to be parsed", len(task_futures))
 
-                # Process results
-                for file_path, parse_result in code_results.items():
-                    if parse_result.get("skipped"):
-                        skipped += 1
-                    elif parse_result.get("error"):
+                # Collect results from futures
+                for task_id, (file_path, future) in task_futures.items():
+                    try:
+                        result_wrapper = future.result(timeout=60.0)
+                        parse_result = result_wrapper.get("result", {}) if result_wrapper.get("success") else {}
+
+                        if not result_wrapper.get("success"):
+                            failed += 1
+                            logger.debug("Parse task failed for %s: %s", file_path, result_wrapper.get("error"))
+                        elif parse_result.get("skipped"):
+                            skipped += 1
+                        elif parse_result.get("error"):
+                            failed += 1
+                        else:
+                            self._process_code_parse_result(file_path, parse_result)
+                            successful += 1
+
+                    except Exception as e:
                         failed += 1
-                    else:
-                        self._process_code_parse_result(file_path, parse_result)
-                        successful += 1
+                        logger.debug("Failed to get result for %s: %s", file_path, e)
 
             logger.info(
                 "Code parsing completed: %d ok, %d skipped, %d failed",
@@ -323,12 +342,6 @@ class ParsePhase(BasePhase):
         except Exception as e:
             logger.exception("Code parser consumer failed")
             error_list.append(e)
-
-        finally:
-            try:
-                code_pool.shutdown(wait=True)
-            except (RuntimeError, ValueError, OSError) as e:
-                logger.debug("Failed to shut down code parser pool cleanly: %s", e)
 
     def _parse_configs(
         self,
@@ -398,28 +411,40 @@ class ParsePhase(BasePhase):
         return code_files_to_parse
 
     def _parse_code_files(self, code_files_to_parse: Dict[str, List[Path]]) -> None:
-        """Stage 2: Parse code files via CodeParserPool."""
-        code_pool = CodeParserPool.get_instance(self.state.max_workers)
-        futures_list = []
+        """Stage 2: Parse code files via GlobalTaskPool."""
+        task_pool = GlobalTaskPool.get_instance(self.state.max_workers)
+        task_futures: Dict[str, Tuple[Path, Any]] = {}  # task_id -> (file_path, future)
 
-        try:
-            for ecosystem, file_paths in code_files_to_parse.items():
-                logger.info("Submitting %d code files for %s", len(file_paths), ecosystem)
-                code_cfg = self.state.graph_build_config.get_code_parser_config(ecosystem)
-                batch_futures = code_pool.submit_batch(
-                    file_paths,
-                    ecosystem,
-                    config=code_cfg,
+        for ecosystem, file_paths in code_files_to_parse.items():
+            logger.info("Submitting %d code files for %s", len(file_paths), ecosystem)
+            code_cfg = self.state.graph_build_config.get_code_parser_config(ecosystem)
+
+            # Submit each file as a PARSE_CODE task
+            for file_path in file_paths:
+                task = create_task(
+                    TaskType.PARSE_CODE,
+                    payload={
+                        "file_path": str(file_path),
+                        "ecosystem": ecosystem,
+                        "config": code_cfg,
+                    },
                 )
-                futures_list.extend(batch_futures)
+                future = task_pool.submit(task)
+                task_futures[task.task_id] = (file_path, future)
 
-            logger.info("Waiting for %d code files to be parsed", len(futures_list))
-            code_results = code_pool.wait_for_completion(futures_list, timeout=300)
+        logger.info("Waiting for %d code files to be parsed", len(task_futures))
 
-            # Process results
-            successful, skipped, failed = 0, 0, 0
-            for file_path, parse_result in code_results.items():
-                if parse_result.get("skipped"):
+        # Process results
+        successful, skipped, failed = 0, 0, 0
+        for task_id, (file_path, future) in task_futures.items():
+            try:
+                result_wrapper = future.result(timeout=60.0)
+                parse_result = result_wrapper.get("result", {}) if result_wrapper.get("success") else {}
+
+                if not result_wrapper.get("success"):
+                    failed += 1
+                    logger.debug("Parse task failed for %s: %s", file_path, result_wrapper.get("error"))
+                elif parse_result.get("skipped"):
                     skipped += 1
                 elif parse_result.get("error"):
                     failed += 1
@@ -427,17 +452,16 @@ class ParsePhase(BasePhase):
                     self._process_code_parse_result(file_path, parse_result)
                     successful += 1
 
-            logger.info(
-                "Stage 2 completed: %d ok, %d skipped, %d failed",
-                successful,
-                skipped,
-                failed,
-            )
-        finally:
-            try:
-                code_pool.shutdown(wait=True)
-            except (RuntimeError, ValueError, OSError) as e:
-                logger.debug("Failed to shut down code parser pool cleanly: %s", e)
+            except Exception as e:
+                failed += 1
+                logger.debug("Failed to get result for %s: %s", file_path, e)
+
+        logger.info(
+            "Stage 2 completed: %d ok, %d skipped, %d failed",
+            successful,
+            skipped,
+            failed,
+        )
 
     def _process_code_parse_result(self, file_path: Path, parse_result: Dict[str, Any]) -> None:
         """Process code parse result via CodeDependencyMapper."""

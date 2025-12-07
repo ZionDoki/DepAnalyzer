@@ -79,7 +79,7 @@ class MavenLinker(BaseLinker):
             parser_name = str(attrs.get("parser_name") or "")
             if "maven" not in parser_name and "java" not in parser_name:
                 continue
-            src_path = attrs.get("src_path") or attrs.get("path")
+            src_path = attrs.get("src_path")
             if not src_path:
                 continue
             try:

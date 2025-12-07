@@ -59,8 +59,7 @@ def test_fallback_attaches_untracked_files(tmp_path: Path) -> None:
     assert graph.has_node(cfg.fallback.root_id)
     # known file already tracked; untracked should be added and connected
     assert any("untracked" in n for n, _ in graph.nodes())
-    backend = graph.backend.native_graph
-    assert backend.has_edge(cfg.fallback.root_id, graph.normalize_path(untracked))
+    assert graph.backend.has_edge(cfg.fallback.root_id, graph.normalize_path(untracked))
 
 
 def test_fallback_connects_isolated_nodes(tmp_path: Path) -> None:
@@ -74,5 +73,4 @@ def test_fallback_connects_isolated_nodes(tmp_path: Path) -> None:
     ctx = _make_join_context(tmp_path, graph, cfg)
     strategy.join(ctx)
 
-    backend = graph.backend.native_graph
-    assert backend.has_edge(cfg.fallback.root_id, "lonely")
+    assert graph.backend.has_edge(cfg.fallback.root_id, "lonely")

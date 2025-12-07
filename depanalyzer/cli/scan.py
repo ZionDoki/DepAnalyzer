@@ -16,7 +16,7 @@ from typing import Optional
 
 from depanalyzer.graph import GlobalDAG, GraphRegistry, merge_graph_with_dependencies
 from depanalyzer.runtime.config_loader import load_graph_build_config
-from depanalyzer.runtime.coordinator import TransactionCoordinator
+from depanalyzer.runtime.task_pool import GlobalTaskPool, shutdown_pool
 from depanalyzer.runtime.transaction import Transaction
 
 logger = logging.getLogger("depanalyzer.cli.scan")
@@ -121,14 +121,11 @@ def _scan_command_impl(args) -> int:
         if getattr(args, "fallback_tree", False):
             graph_build_config.fallback.enabled = True
 
-        # Create coordinator with process pool
-        logger.info("Creating TransactionCoordinator...")
-        coordinator = TransactionCoordinator.get_instance(
-            max_processes=args.workers
-        )
-        logger.info("TransactionCoordinator created successfully")
+        # GlobalTaskPool will be initialized lazily when first task is submitted
+        # No need to pre-initialize here
+        logger.info("Workers: %d (GlobalTaskPool will initialize on first use)", args.workers)
 
-        # Create and submit transaction to process pool
+        # Create transaction (runs in main process, tasks are parallelized)
         logger.info("Creating transaction...")
         transaction = Transaction(
             source=args.source,
@@ -143,26 +140,15 @@ def _scan_command_impl(args) -> int:
         )
         logger.info("Transaction created: %s", transaction.transaction_id)
 
-        logger.info(
-            "Submitting transaction %s to process pool", transaction.transaction_id
-        )
+        # Run transaction directly (parallelism happens at task level via GlobalTaskPool)
+        logger.info("Running transaction %s...", transaction.transaction_id)
         try:
-            future = coordinator.submit(transaction)
-            logger.info("Transaction submitted successfully")
-        except (PickleError, RuntimeError, OSError, ValueError) as e:
-            logger.error("Failed to submit transaction: %s", e, exc_info=True)
-            return 1
-
-        # Wait for transaction to complete (with timeout)
-        logger.info("Waiting for transaction to complete...")
-        try:
-            result = future.result(timeout=wait_timeout)
+            result = transaction.run()
             logger.info("Transaction completed, processing result...")
-        except TimeoutError:
-            logger.error("Transaction timed out after %d seconds", wait_timeout)
-            logger.error("This usually indicates the subprocess is stuck or crashed")
-            logger.error("Check the logs above for any error messages")
-            return 1
+        except KeyboardInterrupt:
+            logger.warning("Transaction interrupted by user (Ctrl+C)")
+            shutdown_pool(wait=False, force=True)
+            return 130  # Standard exit code for SIGINT
         except (CancelledError, OSError, RuntimeError, ValueError) as e:
             logger.error("Transaction failed with exception: %s", e, exc_info=True)
             return 1
@@ -328,8 +314,8 @@ def _scan_command_impl(args) -> int:
             logger.warning("Graph not found in registry: %s", result.graph_id)
             return 1
 
-        # Shutdown coordinator
-        coordinator.shutdown()
+        # Shutdown task pool - use wait=False on Windows to avoid hangs
+        shutdown_pool(wait=False, force=True)
 
         return 0
 
@@ -337,9 +323,9 @@ def _scan_command_impl(args) -> int:
         logger.error("Scan failed: %s", e, exc_info=True)
         return 1
     finally:
-        # Ensure cleanup of coordinator
+        # Ensure cleanup of GlobalTaskPool
         try:
-            TransactionCoordinator.get_instance().shutdown(wait=False)
+            shutdown_pool(wait=False, force=True)
         except (OSError, RuntimeError):
             pass
 

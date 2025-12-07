@@ -100,7 +100,7 @@ class NpmLinker(BaseLinker):
             if "npm" not in parser_name and ecosystem != "npm":
                 continue
 
-            src_path = attrs.get("src_path") or attrs.get("path")
+            src_path = attrs.get("src_path")
             if not src_path:
                 continue
 
@@ -195,7 +195,7 @@ class NpmLinker(BaseLinker):
         for node_id, attrs in graph_manager.nodes():
             if attrs.get("type") != NodeType.CODE.value:
                 continue
-            node_path = attrs.get("src_path") or attrs.get("path")
+            node_path = attrs.get("src_path")
             if node_path:
                 try:
                     if Path(node_path).resolve() == entry_path.resolve():
@@ -375,7 +375,7 @@ class NpmLinker(BaseLinker):
             ]:
                 continue
 
-            src_path = attrs.get("src_path") or attrs.get("path")
+            src_path = attrs.get("src_path")
             if src_path:
                 cmake_targets[node_id] = src_path
 

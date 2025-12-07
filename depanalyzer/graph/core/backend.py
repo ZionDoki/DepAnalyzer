@@ -107,6 +107,40 @@ class GraphBackend(ABC):
         """Clear all nodes and edges."""
         pass
 
+    @abstractmethod
+    def out_edges(
+        self, node_id: str, data: bool = False, keys: bool = False
+    ) -> Iterable:
+        """Get outgoing edges of a node."""
+        pass
+
+    @abstractmethod
+    def in_edges(
+        self, node_id: str, data: bool = False, keys: bool = False
+    ) -> Iterable:
+        """Get incoming edges of a node."""
+        pass
+
+    @abstractmethod
+    def remove_edge(self, source: str, target: str, key: Optional[int] = None) -> None:
+        """Remove an edge from the graph."""
+        pass
+
+    @abstractmethod
+    def remove_node(self, node_id: str) -> None:
+        """Remove a node from the graph."""
+        pass
+
+    @abstractmethod
+    def update_node(self, node_id: str, **attributes: Any) -> None:
+        """Update node attributes."""
+        pass
+
+    @abstractmethod
+    def subgraph(self, nodes: Iterable[str]) -> Any:
+        """Return a subgraph view containing only the specified nodes."""
+        pass
+
 
 class NetworkXBackend(GraphBackend):
     """NetworkX-based in-memory graph backend.
@@ -178,3 +212,28 @@ class NetworkXBackend(GraphBackend):
     def clear(self) -> None:
         self._graph.clear()
         logger.debug("Graph backend cleared")
+
+    def out_edges(
+        self, node_id: str, data: bool = False, keys: bool = False
+    ) -> Iterable:
+        return self._graph.out_edges(node_id, data=data, keys=keys)
+
+    def in_edges(
+        self, node_id: str, data: bool = False, keys: bool = False
+    ) -> Iterable:
+        return self._graph.in_edges(node_id, data=data, keys=keys)
+
+    def remove_edge(self, source: str, target: str, key: Optional[int] = None) -> None:
+        if key is None:
+            self._graph.remove_edge(source, target)
+        else:
+            self._graph.remove_edge(source, target, key)
+
+    def remove_node(self, node_id: str) -> None:
+        self._graph.remove_node(node_id)
+
+    def update_node(self, node_id: str, **attributes: Any) -> None:
+        self._graph.nodes[node_id].update(attributes)
+
+    def subgraph(self, nodes: Iterable[str]) -> nx.MultiDiGraph:
+        return self._graph.subgraph(nodes)

@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import List, Set
+from typing import List
 
 from depanalyzer.parsers.base import BaseDetector
 from depanalyzer.runtime.eventbus import Event, EventType
@@ -16,22 +16,29 @@ class MavenDetector(BaseDetector):
     NAME = "maven"
     ECOSYSTEM = "maven"
     TARGET_NAME = "pom.xml"
+    DEFAULT_IGNORE_PATTERNS = ["**/target/**"]
 
     def detect(self) -> List[Path]:
         """Detect pom.xml files under the workspace."""
-        detected: List[Path] = []
-        ignore_dirs: Set[str] = {"target"}
+        # Build ignore patterns
+        ignore_patterns = list(self.DEFAULT_IGNORE_PATTERNS)
 
         cfg = getattr(self, "config", None)
         custom_ignore = getattr(cfg, "ignore_dirs", None)
         if isinstance(custom_ignore, list):
-            ignore_dirs.update({d for d in custom_ignore if isinstance(d, str)})
+            ignore_patterns.extend(
+                f"**/{d}/**" for d in custom_ignore if isinstance(d, str)
+            )
 
-        for path in self.workspace_root.rglob(self.TARGET_NAME):
-            if any(part in ignore_dirs for part in path.parts):
-                continue
+        # Use scan_workspace which respects .gitignore
+        detected = self.scan_workspace(
+            patterns=[f"**/{self.TARGET_NAME}"],
+            ignore_patterns=ignore_patterns,
+            recursive=True,
+        )
 
-            detected.append(path)
+        # Publish detection events
+        for path in detected:
             event = Event(
                 event_type=EventType.TARGET_DETECTED,
                 source=self.NAME,

@@ -100,7 +100,7 @@ class ExportPhase(BasePhase):
         Build canonicalized graph data for export.
         """
         try:
-            native_graph = self.state.graph_manager.backend.native_graph
+            gm = self.state.graph_manager
 
             # Canonicalize nodes and edges
             export_graph = MultiDiGraph()
@@ -115,7 +115,7 @@ class ExportPhase(BasePhase):
                 workspace_root = None
 
             # Canonicalize nodes
-            for raw_id, attrs in native_graph.nodes(data=True):
+            for raw_id, attrs in gm.nodes():
                 canonical_id, canonical_attrs = canonicalize_node(
                     raw_id,
                     attrs,
@@ -125,7 +125,7 @@ class ExportPhase(BasePhase):
                 export_graph.add_node(canonical_id, **canonical_attrs)
 
             # Canonicalize edges
-            for u, v, _key, attrs in native_graph.edges(data=True, keys=True):
+            for u, v, _key, attrs in gm.edges():
                 source_id = node_id_map.get(str(u), str(u))
                 target_id = node_id_map.get(str(v), str(v))
                 canonical_attrs = canonicalize_edge(attrs or {})

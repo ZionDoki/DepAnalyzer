@@ -55,7 +55,19 @@ class NpmDepFetcher(BaseDepFetcher):
     REGISTRY_BASE = "https://registry.npmjs.org"
 
     # Cache for failed fetches to avoid repeated attempts
+    _FAILURE_CACHE_MAX_SIZE = 1000
     _failure_cache: Dict[Tuple[str, str], str] = {}
+
+    @classmethod
+    def _add_to_failure_cache(cls, key: Tuple[str, str], reason: str) -> None:
+        """Add failure record to cache with size limit (FIFO eviction)."""
+        if len(cls._failure_cache) >= cls._FAILURE_CACHE_MAX_SIZE:
+            try:
+                oldest_key = next(iter(cls._failure_cache))
+                del cls._failure_cache[oldest_key]
+            except (StopIteration, KeyError):
+                pass
+        cls._failure_cache[key] = reason
 
     def can_handle(self, dep_spec: DependencySpec) -> bool:
         """Check if this fetcher can handle the dependency.
@@ -105,7 +117,7 @@ class NpmDepFetcher(BaseDepFetcher):
         try:
             return self._fetch_from_registry(dep_spec)
         except Exception as exc:
-            self._failure_cache[fail_key] = str(exc)
+            self._add_to_failure_cache(fail_key, str(exc))
             logger.error("Failed to fetch npm dependency %s: %s", dep_spec.name, exc)
             return None
 
@@ -148,6 +160,17 @@ class NpmDepFetcher(BaseDepFetcher):
 
         try:
             resolved = path.resolve()
+            # Validate path is within workspace to prevent path traversal attacks
+            if workspace_root:
+                workspace_resolved = Path(workspace_root).resolve()
+                if not resolved.is_relative_to(workspace_resolved):
+                    logger.warning(
+                        "Path traversal attempt blocked for %s: %s escapes workspace %s",
+                        dep_spec.name,
+                        local_path,
+                        workspace_root,
+                    )
+                    return None
             if resolved.exists():
                 logger.info("Using local npm dependency %s at %s", dep_spec.name, resolved)
                 return resolved
@@ -338,7 +361,7 @@ class NpmDepFetcher(BaseDepFetcher):
         return cache_dir
 
     def _fetch_registry_metadata(
-        self, pkg_name: str, max_retries: int = 3
+        self, pkg_name: str, max_retries: int = 2
     ) -> Optional[Dict[str, Any]]:
         """Fetch package metadata from npm registry with retry support.
 
@@ -360,7 +383,7 @@ class NpmDepFetcher(BaseDepFetcher):
         last_error = None
         for attempt in range(max_retries):
             try:
-                response = requests.get(url, timeout=30)
+                response = requests.get(url, timeout=(5, 15))
                 response.raise_for_status()
                 return response.json()
             except requests.RequestException as e:
@@ -628,7 +651,7 @@ class NpmDepFetcher(BaseDepFetcher):
 
             try:
                 # Download tarball
-                with requests.get(tarball_url, stream=True, timeout=60) as resp:
+                with requests.get(tarball_url, stream=True, timeout=(5, 30)) as resp:
                     resp.raise_for_status()
                     with tmp_tar.open("wb") as f:
                         for chunk in resp.iter_content(chunk_size=8192):
@@ -639,16 +662,16 @@ class NpmDepFetcher(BaseDepFetcher):
                 return None
 
             try:
-                # Extract tarball
-                with tarfile.open(tmp_tar, "r:*") as tf:
-                    # Security check
-                    for member in tf.getmembers():
-                        if ".." in member.name or member.name.startswith("/"):
-                            logger.warning(
-                                "Skipping unsafe tarball member: %s", member.name
-                            )
-                            return None
-                    tf.extractall(target_dir)
+                # Extract tarball using safe extraction to prevent path traversal
+                from depanalyzer.utils.archive_utils import (
+                    ArchiveSecurityError,
+                    safe_extract_tar,
+                )
+
+                safe_extract_tar(tmp_tar, target_dir)
+            except ArchiveSecurityError as e:
+                logger.warning("Unsafe tarball detected: %s", e)
+                return None
             except Exception as e:
                 logger.error("Failed to extract tarball: %s", e)
                 return None

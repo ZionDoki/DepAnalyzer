@@ -14,7 +14,7 @@ from depanalyzer.parsers.cpp.code_dependency_mapper import CppCodeDependencyMapp
 from depanalyzer.parsers.hvigor.code_dependency_mapper import HvigorCodeDependencyMapper
 from depanalyzer.parsers.maven.code_dependency_mapper import MavenCodeDependencyMapper
 from depanalyzer.parsers.npm.code_dependency_mapper import NpmCodeDependencyMapper
-from depanalyzer.runtime.coordinator import TransactionResult
+from depanalyzer.runtime.task_types import TransactionResult
 from depanalyzer.runtime.graph_config import GraphBuildConfig
 from depanalyzer.runtime.orchestrator import PhaseOrchestrator
 from depanalyzer.runtime.policies import (
@@ -74,9 +74,6 @@ class Transaction:
         graph_build_config: Optional[GraphBuildConfig] = None,
         lifecycle_hooks: Optional[Sequence[LifecycleHook]] = None,
         code_dependency_mappers: Optional[Mapping[str, CodeDependencyMapper]] = None,
-        asset_projection_strategy: Optional[AssetProjectionPolicy] = None,
-        join_strategies: Optional[Sequence[JoinPolicy]] = None,
-        analyze_strategies: Optional[Sequence[AnalyzePolicy]] = None,
         asset_projection_policy: Optional[AssetProjectionPolicy] = None,
         join_policies: Optional[Sequence[JoinPolicy]] = None,
         analyze_policies: Optional[Sequence[AnalyzePolicy]] = None,
@@ -101,16 +98,13 @@ class Transaction:
             graph_build_config: Configuration for graph building
             lifecycle_hooks: Lifecycle hooks for before/after phase callbacks
             code_dependency_mappers: Ecosystem-specific code dependency mappers
-            asset_projection_strategy: Strategy for asset projection (deprecated alias)
-            join_strategies: Strategies for JOIN phase (deprecated alias)
-            analyze_strategies: Strategies for ANALYZE phase (deprecated alias)
             asset_projection_policy: Policy for asset projection
             join_policies: Policies for JOIN phase
             analyze_policies: Policies for ANALYZE phase
         """
         # Prepare graph build config and code dependency mappers
         _graph_build_config = graph_build_config or GraphBuildConfig.default()
-        _explicit_join_supplied = (join_policies is not None) or (join_strategies is not None)
+        _explicit_join_supplied = join_policies is not None
 
         _code_dependency_mappers: Dict[str, CodeDependencyMapper] = {}
         if code_dependency_mappers is not None:
@@ -122,7 +116,7 @@ class Transaction:
             _code_dependency_mappers.setdefault("npm", NpmCodeDependencyMapper())
 
         # Join policies (append fallback when enabled)
-        _join_policies = list(join_policies or join_strategies or [])
+        _join_policies = list(join_policies or [])
         try:
             if _graph_build_config.license_link.enabled:
                 already_present = any(
@@ -141,9 +135,7 @@ class Transaction:
         except AttributeError:
             pass
 
-        asset_policy = asset_projection_policy or asset_projection_strategy
-        if asset_policy is None:
-            asset_policy = DefaultAssetProjectionPolicy()
+        asset_policy = asset_projection_policy or DefaultAssetProjectionPolicy()
 
         # Create TransactionState
         self._state = TransactionState(
@@ -167,7 +159,7 @@ class Transaction:
             default_code_dependency_mapper=DefaultCodeDependencyMapper(),
             asset_projection_policy=asset_policy,
             join_policies=_join_policies,
-            analyze_policies=list(analyze_policies or analyze_strategies or []),
+            analyze_policies=list(analyze_policies or []),
             # Initialize workspace
             workspace=Workspace(source, cache_root=workspace_cache_root),
             # Progress manager

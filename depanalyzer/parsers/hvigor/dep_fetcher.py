@@ -63,7 +63,19 @@ class HvigorDepFetcher(BaseDepFetcher):
     ECOSYSTEM = "hvigor"
     REGISTRY_BASE = "https://ohpm.openharmony.cn/ohpm"
     # Negative cache to avoid repeated registry/clone attempts for failures
+    _FAILURE_CACHE_MAX_SIZE = 1000
     _failure_cache: Dict[Tuple[str, str, str], str] = {}
+
+    @classmethod
+    def _add_to_failure_cache(cls, key: Tuple[str, str, str], reason: str) -> None:
+        """Add failure record to cache with size limit (FIFO eviction)."""
+        if len(cls._failure_cache) >= cls._FAILURE_CACHE_MAX_SIZE:
+            try:
+                oldest_key = next(iter(cls._failure_cache))
+                del cls._failure_cache[oldest_key]
+            except (StopIteration, KeyError):
+                pass
+        cls._failure_cache[key] = reason
 
     def can_handle(self, dep_spec: DependencySpec) -> bool:
         """Check if this fetcher can handle the dependency.
@@ -148,7 +160,7 @@ class HvigorDepFetcher(BaseDepFetcher):
                     dep_spec, cache_dir, sparse_paths=[path_hint] if path_hint else None
                 )
             except Exception as exc:  # noqa: BLE001
-                self._failure_cache[fail_key] = str(exc)
+                self._add_to_failure_cache(fail_key, str(exc))
                 logger.error("Failed to fetch Git dependency %s: %s", dep_spec.name, exc)
                 return None
 
@@ -159,7 +171,7 @@ class HvigorDepFetcher(BaseDepFetcher):
         try:
             return self._fetch_from_ohpm(dep_spec, path_hint=path_hint)
         except Exception as exc:  # noqa: BLE001
-            self._failure_cache[fail_key] = str(exc)
+            self._add_to_failure_cache(fail_key, str(exc))
             logger.error("Failed to fetch Hvigor dependency %s: %s", dep_spec.name, exc)
             return None
 
@@ -274,9 +286,10 @@ class HvigorDepFetcher(BaseDepFetcher):
 
         logger.info("Fetching Hvigor dependency from Git: %s", url)
 
-        # Determine branch/tag
-        branch = dep_spec.metadata.get("branch")
-        tag = dep_spec.metadata.get("tag") or dep_spec.version
+        # Determine branch/tag (defensive check for None metadata)
+        metadata = dep_spec.metadata or {}
+        branch = metadata.get("branch")
+        tag = metadata.get("tag") or dep_spec.version
 
         # Clone repository
         success = self.git_clone(
@@ -325,11 +338,21 @@ class HvigorDepFetcher(BaseDepFetcher):
 
         # Fetch metadata from registry
         meta = self._fetch_ohpm_metadata(dep_spec.name)
+        if not meta:
+            logger.error("Could not fetch OHPM metadata for %s", dep_spec.name)
+            return None
 
         # Resolve version (may be a semver range or tag). The resolved version
         # is used as the canonical cache key so that multiple range expressions
         # resolving to the same concrete version share a single checkout.
         resolved_version = self._resolve_version(meta, dep_spec.version)
+        if not resolved_version:
+            logger.error(
+                "Could not resolve version %s for %s",
+                dep_spec.version,
+                dep_spec.name,
+            )
+            return None
 
         logger.info("Resolved version: %s -> %s", dep_spec.version, resolved_version)
 
@@ -479,18 +502,18 @@ class HvigorDepFetcher(BaseDepFetcher):
                 return None
 
             try:
-                with tarfile.open(tmp_tar, "r:*") as tf:
-                    members = tf.getmembers()
-                    for member in members:
-                        member_path = Path(member.name)
-                        if ".." in member_path.parts:
-                            logger.warning(
-                                "Skipping unsafe tarball member %s from %s",
-                                member.name,
-                                tarball_url,
-                            )
-                            return None
-                    tf.extractall(target_dir)
+                # Extract tarball using safe extraction to prevent path traversal
+                from depanalyzer.utils.archive_utils import (
+                    ArchiveSecurityError,
+                    safe_extract_tar,
+                )
+
+                safe_extract_tar(tmp_tar, target_dir)
+            except ArchiveSecurityError as exc:
+                logger.warning(
+                    "Unsafe tarball detected from %s: %s", tarball_url, exc
+                )
+                return None
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Extracting tarball %s failed: %s", tarball_url, exc)
                 return None

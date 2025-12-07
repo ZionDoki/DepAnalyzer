@@ -22,12 +22,11 @@ def test_root_level_dependencies_linked_to_all_modules(tmp_path: Path) -> None:
     parser.parse(package_cfg)
 
     expected_lib = "ext_lib:ohos_smart_dialog@1.3.6"
-    graph = gm.backend.native_graph
 
     for module_name in ("entry", "core"):
         module_id = f"module:{module_name}"
-        assert graph.has_edge(module_id, expected_lib)
-        edge_data = graph.get_edge_data(module_id, expected_lib)
+        assert gm.backend.has_edge(module_id, expected_lib)
+        edge_data = gm.backend.get_edge_data(module_id, expected_lib)
         assert any(
             (attrs or {}).get("kind") == EdgeKind.DEPENDS_ON.value
             for attrs in edge_data.values()
@@ -60,11 +59,10 @@ def test_root_level_dependencies_apply_to_modules_discovered_late(tmp_path: Path
     parser.parse(mod_b / "module.json5")
 
     expected_lib = "ext_lib:late_mod@0.1.0"
-    graph = gm.backend.native_graph
     for module_name in ("alpha", "zeta"):
         module_id = f"module:{module_name}"
-        assert graph.has_edge(module_id, expected_lib)
-        edge_data = graph.get_edge_data(module_id, expected_lib)
+        assert gm.backend.has_edge(module_id, expected_lib)
+        edge_data = gm.backend.get_edge_data(module_id, expected_lib)
         assert any(
             (attrs or {}).get("kind") == EdgeKind.DEPENDS_ON.value
             for attrs in edge_data.values()
@@ -94,9 +92,8 @@ def test_root_lock_applies_to_modules_discovered_late(tmp_path: Path) -> None:
     parser.parse(module_json)
 
     lib_id = "ext_lib:libfoo@1.2.3"
-    graph = gm.backend.native_graph
-    assert graph.has_edge("module:only", lib_id)
-    edge_data = graph.get_edge_data("module:only", lib_id)
+    assert gm.backend.has_edge("module:only", lib_id)
+    edge_data = gm.backend.get_edge_data("module:only", lib_id)
     assert any(
         (attrs or {}).get("kind") == EdgeKind.DEPENDS_ON.value
         for attrs in edge_data.values()
@@ -191,7 +188,6 @@ def test_root_package_infers_module_when_missing_build_profile(tmp_path: Path) -
 
     parser.parse(package_cfg)
 
-    graph = gm.backend.native_graph
     module_ids = [
         nid for nid, attrs in gm.nodes() if attrs.get("type") == NodeType.MODULE.value
     ]
@@ -200,9 +196,9 @@ def test_root_package_infers_module_when_missing_build_profile(tmp_path: Path) -
     assert module_id == "module:demo.app"
 
     ext_lib_id = "ext_lib:hv-lib@1.0.0"
-    assert graph.has_edge(module_id, ext_lib_id)
+    assert gm.backend.has_edge(module_id, ext_lib_id)
     # Ensure config file is not reused as a package surrogate.
-    assert not graph.has_edge(str(package_cfg.relative_to(tmp_path)), ext_lib_id)
+    assert not gm.backend.has_edge(str(package_cfg.relative_to(tmp_path)), ext_lib_id)
 
 
 def test_inferred_root_package_not_replayed_on_flush(tmp_path: Path) -> None:
@@ -219,16 +215,15 @@ def test_inferred_root_package_not_replayed_on_flush(tmp_path: Path) -> None:
     parser.parse(package_cfg)  # creates inferred module:demo.app
     build_profile = tmp_path / "build-profile.json5"
     build_profile.write_text('{"modules": ["entry"]}', encoding="utf-8")
-    graph = gm.backend.native_graph
-    fallback_edges = graph.get_edge_data("module:demo.app", "ext_lib:hv-lib@1.0.0") or {}
+    fallback_edges = gm.backend.get_edge_data("module:demo.app", "ext_lib:hv-lib@1.0.0") or {}
     assert len(fallback_edges) == 1
 
     parser.parse(build_profile)  # flushes pending deps to entry
 
     # Entry module should get the dependency
-    assert graph.has_edge("module:entry", "ext_lib:hv-lib@1.0.0")
+    assert gm.backend.has_edge("module:entry", "ext_lib:hv-lib@1.0.0")
     # Fallback module edge count should remain single (no duplicate)
-    fallback_edges_after = graph.get_edge_data("module:demo.app", "ext_lib:hv-lib@1.0.0") or {}
+    fallback_edges_after = gm.backend.get_edge_data("module:demo.app", "ext_lib:hv-lib@1.0.0") or {}
     assert len(fallback_edges_after) == 1
 
 
@@ -246,19 +241,18 @@ def test_inferred_root_lock_not_replayed_on_flush(tmp_path: Path) -> None:
     parser.parse(lock_cfg)  # creates inferred module based on workspace
     build_profile = tmp_path / "build-profile.json5"
     build_profile.write_text('{"modules": ["entry"]}', encoding="utf-8")
-    graph = gm.backend.native_graph
     module_ids = [
         nid for nid, attrs in gm.nodes() if attrs.get("type") == NodeType.MODULE.value
     ]
     assert len(module_ids) == 1
     fallback_module = module_ids[0]
-    fallback_edges = graph.get_edge_data(fallback_module, "ext_lib:libfoo@1.2.3") or {}
+    fallback_edges = gm.backend.get_edge_data(fallback_module, "ext_lib:libfoo@1.2.3") or {}
     assert len(fallback_edges) == 1
 
     parser.parse(build_profile)
 
-    assert graph.has_edge("module:entry", "ext_lib:libfoo@1.2.3")
-    fallback_edges_after = graph.get_edge_data(
+    assert gm.backend.has_edge("module:entry", "ext_lib:libfoo@1.2.3")
+    fallback_edges_after = gm.backend.get_edge_data(
         fallback_module, "ext_lib:libfoo@1.2.3"
     ) or {}
     assert len(fallback_edges_after) == 1

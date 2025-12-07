@@ -43,11 +43,10 @@ class CppLinker(BaseLinker):
     def _enrich_linkage_edges(self) -> None:
         """Infer linkage_type for CMake link edges and tag them as build_config."""
         graph_manager: GraphManager = self.graph_manager
-        backend = graph_manager.backend.native_graph 
 
         enriched_count = 0
 
-        for _source, target, _key, attrs in backend.edges(data=True, keys=True):
+        for _source, target, _key, attrs in graph_manager.edges():
             edge_kind = attrs.get("kind") or attrs.get("label") or attrs.get("type")
 
             if edge_kind not in (

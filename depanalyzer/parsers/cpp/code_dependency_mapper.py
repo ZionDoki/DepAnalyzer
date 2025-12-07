@@ -84,10 +84,9 @@ class CppCodeDependencyMapper(BaseCodeDependencyMapper):
         # Discover owning targets and their include_dirs from the skeleton graph.
         owning_targets: list[str] = []
         include_dirs_for_targets: dict[str, list[str]] = {}
-        native_graph = graph.backend.native_graph 
-        nodes_data = dict(native_graph.nodes(data=True))
+        nodes_data = dict(graph.nodes())
 
-        for u, _, ed in native_graph.in_edges(file_node_id, data=True):
+        for u, _, ed in graph.in_edges(file_node_id, data=True):
             kind = ed.get("kind") or ed.get("label") or ed.get("type")
             if kind == EdgeKind.SOURCES.value or kind == "sources":
                 owning_targets.append(u)

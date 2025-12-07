@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 
 import networkx as nx
@@ -124,8 +124,6 @@ def derive_asset_artifact_projection(
         else base_cfg.fallback_disable_nearest_dir
     )
 
-    graph = manager.backend.native_graph
-
     subdirs = {}
     artifact_types = {
         "shared_library",
@@ -137,36 +135,42 @@ def derive_asset_artifact_projection(
         "object",
     }
 
-    for node, nd in graph.nodes(data=True):
-        if nd.get("type") == "subdirectory":
+    # Access the underlying graph for edge/node iteration
+    graph = manager._backend.native_graph
+
+    # Collect subdirs and artifacts in a single pass over nodes
+    artifacts_to_process = []
+    for node, nd in manager.nodes():
+        ntype = nd.get("type")
+        if ntype == "subdirectory":
             src_path = nd.get("src_path")
             if src_path:
                 subdirs[node] = src_path.replace("\\", "/")
-
-    for node, nd in graph.nodes(data=True):
-        if nd.get("type") in artifact_types:
+        elif ntype in artifact_types:
             target_src_path = nd.get("src_path")
-            if not target_src_path:
-                continue
-            target_src_path = target_src_path.replace("\\", "/")
+            if target_src_path:
+                artifacts_to_process.append((node, target_src_path.replace("\\", "/")))
 
-            best_subdir = None
-            best_subdir_len = -1
-            for subdir_id, subdir_path in subdirs.items():
-                if target_src_path.startswith(subdir_path + "/"):
-                    if len(subdir_path) > best_subdir_len:
-                        best_subdir = subdir_id
-                        best_subdir_len = len(subdir_path)
+    # Pre-sort subdirs by path length descending for early exit optimization
+    sorted_subdirs = sorted(subdirs.items(), key=lambda x: len(x[1]), reverse=True)
 
-            if best_subdir:
-                manager.add_edge(
-                    best_subdir,
-                    node,
-                    edge_kind="contains",
-                    parser_name="projection",
-                    derived_from="subdirectory_inference",
-                    confidence=1.0,
-                )
+    for node, target_src_path in artifacts_to_process:
+        best_subdir = None
+        # Since sorted by length descending, first match is the longest
+        for subdir_id, subdir_path in sorted_subdirs:
+            if target_src_path.startswith(subdir_path + "/"):
+                best_subdir = subdir_id
+                break  # Early exit - first match is longest due to sorting
+
+        if best_subdir:
+            manager.add_edge(
+                best_subdir,
+                node,
+                edge_kind="contains",
+                parser_name="projection",
+                derived_from="subdirectory_inference",
+                confidence=1.0,
+            )
 
     part_of_added = set()
     for u, v, data in graph.edges(data=True):
@@ -230,10 +234,10 @@ def derive_asset_artifact_projection(
 
         for code, bases in list(code_to_artifacts.items()):
             for base in list(bases):
-                frontier = [(base, 0)]
+                frontier = deque([(base, 0)])
                 seen = {base}
                 while frontier:
-                    cur, d = frontier.pop(0)
+                    cur, d = frontier.popleft()
                     if d >= eff_link_closure_max_hops:
                         continue
                     for nxt in rev_adj.get(cur, set()):
@@ -270,10 +274,10 @@ def derive_asset_artifact_projection(
             st_type = (nodes_data_all.get(start, {}) or {}).get("type")
             if st_type == "system_header" or str(start).startswith("//system:"):
                 continue
-            frontier = [(start, 0)]
+            frontier = deque([(start, 0)])
             visited = {start}
             while frontier:
-                cur, d = frontier.pop(0)
+                cur, d = frontier.popleft()
                 if d >= eff_max_header_hops:
                     continue
                 for nxt in inc_adj.get(cur, set()):
@@ -367,6 +371,14 @@ def derive_asset_artifact_projection(
                         else path_part
                     )
 
+    # Pre-sort artifact_dirs by directory length descending for early exit optimization
+    # Also pre-normalize the directory paths to avoid repeated string operations
+    sorted_artifact_dirs = sorted(
+        [(tgt, tdir.replace("\\", "/").lstrip("/")) for tgt, tdir in artifact_dirs.items() if tdir],
+        key=lambda x: len(x[1]),
+        reverse=True,
+    )
+
     def has_part_of(n: str) -> bool:
         for _, _, ed in graph.out_edges(n, data=True):
             if _edge_kind(ed) == "part_of":
@@ -427,14 +439,11 @@ def derive_asset_artifact_projection(
             node_dir = node_dir.split(":")[0]
         if "/" in node_dir:
             node_dir = node_dir.rsplit("/", 1)[0]
-        best = None
-        best_len = -1
-        for tgt, tdir in artifact_dirs.items():
-            if not tdir:
-                continue
-            nd = node_dir.replace("\\", "/")
-            td = tdir.replace("\\", "/").lstrip("/")
-            if nd.startswith(td) and len(td) > best_len:
+        nd = node_dir.replace("\\", "/")
+
+        # Use pre-sorted list (by length descending) for early exit
+        for tgt, td in sorted_artifact_dirs:
+            if nd.startswith(td):
                 if eff_nearest_dir_min_evidence > 0:
                     has_evidence = False
                     for code_node, arts in code_to_artifacts.items():
@@ -447,9 +456,8 @@ def derive_asset_artifact_projection(
                                 break
                     if not has_evidence:
                         continue
-                best = tgt
-                best_len = len(td)
-        return best
+                return tgt  # Early exit - first match is longest due to sorting
+        return None
 
     if not eff_fallback_disable_nearest_dir:
         for node, nd in list(graph.nodes(data=True)):
@@ -492,12 +500,11 @@ def fuse_projection_evidence(
     if kinds is None:
         kinds = {"part_of", "affects"}
 
-    graph = manager.backend.native_graph
     groups: Dict[tuple[str, str, str], List[tuple[str, str, int, Dict[str, Any]]]] = (
         defaultdict(list)
     )
 
-    for u, v, key, data in graph.edges(data=True, keys=True):
+    for u, v, key, data in manager.edges():
         if not isinstance(data, dict):
             continue
         if data.get("parser_name") != "projection":

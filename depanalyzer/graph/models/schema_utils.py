@@ -69,7 +69,7 @@ def _derive_normalized_path(
     Returns:
         Optional[str]: Normalized ID (//...) or None if it cannot be derived.
     """
-    src_path = attrs.get("src_path") or attrs.get("path")
+    src_path = attrs.get("src_path")
     if isinstance(src_path, str) and src_path:
         try:
             return normalize_node_id(Path(src_path), root_path)
@@ -112,10 +112,6 @@ def canonicalize_node(
     new_attrs.setdefault("over_approx", False)
     new_attrs.setdefault("uncertainty_category", "definite")
     new_attrs.setdefault("uncertainty_reasons", [])
-
-    # Normalize path fields: prefer src_path, mirror legacy 'path' into src_path
-    if "src_path" not in new_attrs and isinstance(new_attrs.get("path"), str):
-        new_attrs["src_path"] = new_attrs["path"]
 
     # Derive canonical identifier.
     #
@@ -163,7 +159,7 @@ def canonicalize_node(
 
     # Best-effort name default for file-like nodes
     if "name" not in new_attrs or not new_attrs["name"]:
-        src = new_attrs.get("src_path") or new_attrs.get("path")
+        src = new_attrs.get("src_path")
         if isinstance(src, str) and src:
             new_attrs["name"] = Path(src).name
 

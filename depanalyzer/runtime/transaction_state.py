@@ -143,33 +143,6 @@ class TransactionState:
     graph_cache_path: Optional[Path] = None  # Set by ExportPhase
     graph_metadata: Dict[str, Any] = field(default_factory=dict)
 
-    @property
-    def asset_projection_strategy(self) -> Optional[AssetProjectionPolicy]:
-        """Compatibility alias for the configured asset projection policy."""
-        return self.asset_projection_policy
-
-    @asset_projection_strategy.setter
-    def asset_projection_strategy(self, policy: Optional[AssetProjectionPolicy]) -> None:
-        self.asset_projection_policy = policy
-
-    @property
-    def join_strategies(self) -> List[JoinPolicy]:
-        """Compatibility alias for configured join policies."""
-        return self.join_policies
-
-    @join_strategies.setter
-    def join_strategies(self, policies: List[JoinPolicy]) -> None:
-        self.join_policies = policies
-
-    @property
-    def analyze_strategies(self) -> List[AnalyzePolicy]:
-        """Compatibility alias for configured analyze policies."""
-        return self.analyze_policies
-
-    @analyze_strategies.setter
-    def analyze_strategies(self, policies: List[AnalyzePolicy]) -> None:
-        self.analyze_policies = policies
-
     def update_phase_result(
         self,
         phase: LifecyclePhase,

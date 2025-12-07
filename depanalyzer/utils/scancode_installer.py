@@ -109,21 +109,27 @@ def _build_download_url(version: str, py_tag: str, platform_tag: str) -> str:
 def _extract_archive(archive_path: Path, dest_dir: Path) -> None:
     """Extract an archive (.tar.* or .zip) into dest_dir.
 
+    Uses safe extraction functions to prevent path traversal attacks (Zip Slip).
+
     Args:
         archive_path: Local path to downloaded archive.
         dest_dir: Destination directory for extraction.
 
     Returns:
         None
+
+    Raises:
+        ArchiveSecurityError: If archive contains path traversal attempts.
+        RuntimeError: If archive format is unsupported.
     """
+    from depanalyzer.utils.archive_utils import safe_extract_tar, safe_extract_zip
+
     if tarfile.is_tarfile(archive_path):
-        with tarfile.open(archive_path, "r:*") as tar:
-            tar.extractall(dest_dir)
+        safe_extract_tar(archive_path, dest_dir)
         return
 
     if zipfile.is_zipfile(archive_path):
-        with zipfile.ZipFile(archive_path, "r") as zipf:
-            zipf.extractall(dest_dir)
+        safe_extract_zip(archive_path, dest_dir)
         return
 
     raise RuntimeError(f"Unsupported archive format for ScanCode: {archive_path}")

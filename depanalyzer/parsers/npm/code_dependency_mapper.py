@@ -98,7 +98,7 @@ class NpmCodeDependencyMapper(BaseCodeDependencyMapper):
             return
 
         # Get or create source code node
-        workspace_root = transaction_ctx.workspace_root
+        workspace_root = transaction_ctx.workspace.root_path
         source_id = normalize_node_id(file_path, workspace_root)
 
         if not graph.has_node(source_id):

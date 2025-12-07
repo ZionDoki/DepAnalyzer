@@ -48,11 +48,10 @@ class LicenseAttachmentPolicy(JoinPolicy):
             return
 
         edges_added = 0
-        backend = graph.backend.native_graph
 
         for license_id in license_nodes:
             for root_id in root_nodes:
-                if backend.has_edge(root_id, license_id):
+                if graph.backend.has_edge(root_id, license_id):
                     continue
                 graph.add_edge_spec(
                     EdgeSpec(
@@ -130,10 +129,9 @@ class LicenseAttachmentPolicy(JoinPolicy):
         return node_ids
 
     def _find_root_nodes(self, graph: GraphManager) -> list[str]:
-        backend = graph.backend.native_graph
         roots: list[str] = []
-        for node_id in backend.nodes():
-            if backend.in_degree(node_id) == 0 and backend.out_degree(node_id) > 0:
+        for node_id, _ in graph.nodes():
+            if graph.in_degree(node_id) == 0 and graph.out_degree(node_id) > 0:
                 roots.append(str(node_id))
         return roots
 

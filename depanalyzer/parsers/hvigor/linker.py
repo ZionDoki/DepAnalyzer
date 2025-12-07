@@ -108,7 +108,7 @@ class HvigorLinker(BaseLinker):
             if "hvigor" not in parser_name and "arkts" not in parser_name.lower():
                 continue
 
-            src_path = attrs.get("src_path") or attrs.get("path")
+            src_path = attrs.get("src_path")
             if not src_path:
                 continue
 
@@ -279,7 +279,7 @@ class HvigorLinker(BaseLinker):
             ]:
                 continue
 
-            src_path = attrs.get("src_path") or attrs.get("path")
+            src_path = attrs.get("src_path")
             if not src_path:
                 continue
 
@@ -482,8 +482,7 @@ def _collect_cpp_code_under_target(
     target_id: str,
 ) -> Set[str]:
     """Collect C++ code node IDs reachable from a CMake target."""
-    backend = graph_manager.backend.native_graph 
-    if target_id not in backend:
+    if not graph_manager.has_node(target_id):
         logger.debug("HvigorLinker: target %s not present in graph", target_id)
         return set()
 
@@ -497,14 +496,14 @@ def _collect_cpp_code_under_target(
             continue
         visited.add(current)
 
-        attrs = backend.nodes.get(current, {}) or {}
+        attrs = graph_manager.get_node(current) or {}
         node_type = attrs.get("type")
         parser_name = str(attrs.get("parser_name") or "")
 
         if node_type == NodeType.CODE.value and "cpp" in parser_name:
             cpp_nodes.add(current)
 
-        for succ in backend.successors(current):
+        for succ in graph_manager.successors(current):
             if succ not in visited:
                 queue.append(succ)
 
@@ -521,13 +520,12 @@ def _find_code_roots(
     code_nodes: Iterable[str],
 ) -> Set[str]:
     """Find root code nodes in a subgraph (no code predecessors)."""
-    backend = graph_manager.backend.native_graph 
     code_set: Set[str] = set(code_nodes)
     root_nodes: Set[str] = set()
 
     for node_id in code_set:
         has_code_predecessor = False
-        for pred in backend.predecessors(node_id):
+        for pred in graph_manager.predecessors(node_id):
             if pred in code_set:
                 has_code_predecessor = True
                 break
@@ -552,7 +550,6 @@ def _filter_isolated_roots(
     if include_isolated:
         return root_set
 
-    backend = graph_manager.backend.native_graph 
     code_set: Set[str] = set(code_nodes)
     result: Set[str] = set()
 
@@ -566,10 +563,10 @@ def _filter_isolated_roots(
                 continue
             component.add(current)
 
-            for neighbor in backend.successors(current):
+            for neighbor in graph_manager.successors(current):
                 if neighbor in code_set and neighbor not in component:
                     queue.append(neighbor)
-            for neighbor in backend.predecessors(current):
+            for neighbor in graph_manager.predecessors(current):
                 if neighbor in code_set and neighbor not in component:
                     queue.append(neighbor)
 

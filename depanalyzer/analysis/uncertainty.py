@@ -52,18 +52,17 @@ class UncertaintyAnalyzer:
             logger.info("Uncertainty analysis disabled by config, skipping")
             return
 
-        native_graph = self._gm.backend.native_graph
         logger.info(
             "Starting uncertainty analysis on graph (%d nodes, %d edges)",
-            native_graph.number_of_nodes(),
-            native_graph.number_of_edges(),
+            self._gm.node_count(),
+            self._gm.edge_count(),
         )
 
         # First derive default categories from confidence scores.
-        self._apply_confidence_defaults(native_graph)
+        self._apply_confidence_defaults()
 
         # Then apply structural rules that override defaults for known patterns.
-        self._apply_structural_rules(native_graph)
+        self._apply_structural_rules()
 
         logger.info("Uncertainty analysis completed")
 
@@ -71,14 +70,14 @@ class UncertaintyAnalyzer:
     # Confidence-based defaults
     # ------------------------------------------------------------------
 
-    def _apply_confidence_defaults(self, graph: Any) -> None:
+    def _apply_confidence_defaults(self) -> None:
         """Assign default uncertainty categories based on confidence."""
         cfg = self._config
 
-        for _, attrs in graph.nodes(data=True):
+        for _, attrs in self._gm.nodes():
             self._set_default_category(attrs, cfg)
 
-        for _, _, _, attrs in graph.edges(data=True, keys=True):
+        for _, _, _, attrs in self._gm.edges():
             self._set_default_category(attrs, cfg)
 
     def _set_default_category(
@@ -115,20 +114,20 @@ class UncertaintyAnalyzer:
     # Structural rules for well-known over-approximation patterns
     # ------------------------------------------------------------------
 
-    def _apply_structural_rules(self, graph: Any) -> None:
+    def _apply_structural_rules(self) -> None:
         """Apply structural rules for obviously uncertain patterns."""
         cfg = self._config
 
         # Proxy nodes represent references into external graphs and are
         # over-approximations by design.
         if cfg.mark_proxy_nodes_as_conditional:
-            for _, attrs in graph.nodes(data=True):
+            for _, attrs in self._gm.nodes():
                 if attrs.get("type") == "proxy" or attrs.get("child_graph_id"):
                     self._mark_conditional(attrs, reason="proxy_reference")
 
         # Unresolved external_dep nodes (no resolved_path) are conditional.
         if cfg.mark_unresolved_external_as_conditional:
-            for _, attrs in graph.nodes(data=True):
+            for _, attrs in self._gm.nodes():
                 if attrs.get("type") == "external_dep" and not attrs.get(
                     "resolved_path"
                 ):
@@ -137,7 +136,7 @@ class UncertaintyAnalyzer:
         # Edges produced by the projection phase are typically derived from
         # heuristics (e.g. include+part_of) and should be treated as probable.
         if cfg.mark_projection_edges_as_probable:
-            for _, _, _, attrs in graph.edges(data=True, keys=True):
+            for _, _, _, attrs in self._gm.edges():
                 if attrs.get("parser_name") == "projection":
                     self._mark_probable(attrs, reason="projection_fallback")
 
@@ -146,7 +145,7 @@ class UncertaintyAnalyzer:
         # probable rather than definite, since they rely on naming and
         # path conventions across ecosystems.
         if cfg.mark_contract_edges_as_probable:
-            for _, _, _, attrs in graph.edges(data=True, keys=True):
+            for _, _, _, attrs in self._gm.edges():
                 derived_from = attrs.get("derived_from") or ""
                 parser_name = attrs.get("parser_name") or ""
 

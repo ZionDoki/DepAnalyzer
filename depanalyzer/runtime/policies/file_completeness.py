@@ -120,21 +120,64 @@ def _collect_known_paths(graph: GraphManager) -> Set[Path]:
     return paths
 
 
+# Directories to skip during fallback file scanning
+_IGNORED_DIRS = frozenset({
+    ".git", ".svn", ".hg",
+    "node_modules", ".pnpm",
+    "target", "build", "dist", "out",
+    ".gradle", ".hvigor",
+    "__pycache__", ".pytest_cache", ".mypy_cache",
+    ".venv", "venv", "env",
+    ".idea", ".vscode",
+})
+
+
 def _find_untracked_files(root: Path, known_paths: Set[Path]) -> Set[Path]:
+    """Find files not already tracked in the graph.
+
+    Uses manual traversal to skip ignored directories and avoid symlink loops.
+    """
     files: Set[Path] = set()
-    try:
-        for path in root.rglob("*"):
-            if not path.is_file():
-                continue
+    seen_dirs: Set[Path] = set()  # Track resolved dirs to detect symlink loops
+
+    def _walk(directory: Path) -> None:
+        try:
+            resolved_dir = directory.resolve()
+        except (OSError, ValueError):
+            return
+
+        # Symlink loop detection
+        if resolved_dir in seen_dirs:
+            return
+        seen_dirs.add(resolved_dir)
+
+        try:
+            entries = list(directory.iterdir())
+        except (OSError, PermissionError):
+            return
+
+        for entry in entries:
             try:
-                resolved = path.resolve()
+                if entry.is_dir():
+                    # Skip ignored directories
+                    if entry.name in _IGNORED_DIRS:
+                        continue
+                    _walk(entry)
+                elif entry.is_file():
+                    try:
+                        resolved = entry.resolve()
+                    except (OSError, ValueError):
+                        continue
+                    if resolved not in known_paths:
+                        files.add(resolved)
             except (OSError, ValueError):
                 continue
-            if resolved in known_paths:
-                continue
-            files.add(resolved)
+
+    try:
+        _walk(root)
     except (OSError, ValueError) as exc:
         logger.warning("FileCompletenessJoinPolicy: failed scanning workspace: %s", exc)
+
     return files
 
 
@@ -148,11 +191,10 @@ def _normalize_path(graph: GraphManager, path: Path) -> str:
 
 
 def _connect_isolated_nodes(graph: GraphManager, root_id: str) -> None:
-    backend = graph.backend.native_graph
-    for node_id in list(backend.nodes()):
+    for node_id, _ in graph.nodes():
         if node_id == root_id:
             continue
-        if backend.in_degree(node_id) == 0 and backend.out_degree(node_id) == 0:
+        if graph.in_degree(node_id) == 0 and graph.out_degree(node_id) == 0:
             graph.add_edge(
                 root_id,
                 node_id,

@@ -23,6 +23,11 @@ class HvigorDetector(BaseDetector):
         "**/oh-package-lock.json5",
         "**/hvigor-config.json5",
     ]
+    DEFAULT_IGNORE_PATTERNS = [
+        "**/node_modules/**",
+        "**/build/**",
+        "**/.hvigor/**",
+    ]
 
     def detect(self) -> List[Path]:
         """Detect all Hvigor configuration files in the workspace.
@@ -30,57 +35,42 @@ class HvigorDetector(BaseDetector):
         Returns:
             List of detected configuration file paths.
         """
-        detected: List[Path] = []
-
-        # Allow configuration to override or refine search behaviour.
-        patterns = list(self.TARGET_PATTERNS)
-        ignore_node_modules = False
-        include_root_dirs: List[Path] = []
+        # Build ignore patterns
+        ignore_patterns = list(self.DEFAULT_IGNORE_PATTERNS)
 
         cfg = getattr(self, "config", None)
         if cfg is not None:
-            # Optional: restrict search to a subset of root‑level directories.
-            root_dirs = getattr(cfg, "include_root_dirs", None)
-            if isinstance(root_dirs, list):
-                include_root_dirs = [
-                    (self.workspace_root / d) for d in root_dirs
+            # Add node_modules ignore if configured
+            if not bool(getattr(cfg, "ignore_node_modules", True)):
+                # Remove node_modules from ignore if explicitly disabled
+                ignore_patterns = [
+                    p for p in ignore_patterns if "node_modules" not in p
                 ]
-            ignore_node_modules = bool(getattr(cfg, "ignore_node_modules", False))
 
-        search_roots: List[Path]
-        if include_root_dirs:
-            search_roots = [p for p in include_root_dirs if p.exists()]
-        else:
-            search_roots = [self.workspace_root]
+        # Use scan_workspace which respects .gitignore
+        detected = self.scan_workspace(
+            patterns=self.TARGET_PATTERNS,
+            ignore_patterns=ignore_patterns,
+            recursive=True,
+        )
 
-        for pattern in patterns:
-            files: List[Path] = []
-            for root in search_roots:
-                for file_path in root.rglob(pattern):
-                    if ignore_node_modules and "node_modules" in file_path.parts:
-                        continue
-                    files.append(file_path)
+        # Publish detection events for each found file
+        for file_path in detected:
+            target_type = self._classify_file_type(file_path.name)
 
-            detected.extend(files)
+            event = Event(
+                event_type=EventType.TARGET_DETECTED,
+                source=self.NAME,
+                data={
+                    "target_path": str(file_path),
+                    "target_type": target_type,
+                    "file_name": file_path.name,
+                    "parser_name": self.NAME,
+                },
+            )
+            self.publish_detection_event(event)
 
-            # Publish detection events for each found file
-            for file_path in files:
-                # Determine target type based on file name
-                target_type = self._classify_file_type(file_path.name)
-
-                event = Event(
-                    event_type=EventType.TARGET_DETECTED,
-                    source=self.NAME,
-                    data={
-                        "target_path": str(file_path),
-                        "target_type": target_type,
-                        "file_name": file_path.name,
-                        "parser_name": self.NAME,
-                    },
-                )
-                self.publish_detection_event(event)
-
-                logger.debug("Detected %s: %s", target_type, file_path)
+            logger.debug("Detected %s: %s", target_type, file_path)
 
         logger.info("HvigorDetector found %d configuration files", len(detected))
         return detected

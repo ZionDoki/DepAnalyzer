@@ -6,7 +6,6 @@ transactions in parallel to analyze third-party dependencies.
 """
 
 import logging
-import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -14,7 +13,6 @@ from networkx.exception import NetworkXNoCycle
 
 from depanalyzer.graph import GlobalDAG, NodeType
 from depanalyzer.parsers.base import DependencySpec
-from depanalyzer.runtime.coordinator import TransactionCoordinator
 from depanalyzer.runtime.dependency_resolver import resolve_dependencies
 from depanalyzer.runtime.phases.base import BasePhase
 from depanalyzer.runtime.context import TransactionContext
@@ -138,6 +136,9 @@ class ResolveDepsPhase(BasePhase):
                     NodeType.EXTERNAL_DEP.value,
                     NodeType.EXTERNAL_LIBRARY.value,
                 ):
+                    # Skip built-in modules (Node.js fs, path, etc.)
+                    if node_attrs.get("is_builtin"):
+                        continue
                     ecosystem = node_attrs.get("ecosystem")
                     name = node_attrs.get("name")
                     version = node_attrs.get("version")
@@ -198,16 +199,13 @@ class ResolveDepsPhase(BasePhase):
     def _process_child_transactions(
         self, successful_deps: List[Dict[str, Any]]
     ) -> List[str]:
-        """Create child transactions and collect their graph IDs."""
-        # Use nested process pools only on Python >= 3.13 to avoid 3.12
-        # shutdown hangs when a worker process creates another pool.
-        use_process_pool = sys.version_info >= (3, 13)
+        """Create child transactions and collect their graph IDs.
 
-        coordinator = None
-        if use_process_pool:
-            coordinator = TransactionCoordinator.get_instance(
-                max_processes=self.state.max_workers
-            )
+        Child transactions are executed inline (sequentially) to avoid nested
+        process pools which cause deadlocks on Windows. The GlobalTaskPool
+        architecture ensures all parallelism happens at the task level, not
+        at the transaction level.
+        """
         factory = self.state.child_transaction_factory
 
         if not factory:
@@ -216,10 +214,9 @@ class ResolveDepsPhase(BasePhase):
             )
             return []
 
-        # Submit child transactions
-        futures = []
         child_graph_ids: List[str] = []
         completed, failed = 0, 0
+
         for dep in successful_deps:
             logger.info("Creating child transaction for: %s", dep["name"])
 
@@ -254,89 +251,41 @@ class ResolveDepsPhase(BasePhase):
                 graph_metadata=graph_metadata,
             )
 
-            if use_process_pool and coordinator is not None:
-                future = coordinator.submit(child_tx)
-                futures.append((dep, future, child_tx.transaction_id))
-            else:
-                # Inline execution fallback for Python 3.12
-                try:
-                    result = child_tx.run()
-                    if result.success:
-                        completed += 1
-                        logger.info(
-                            "Child %s completed inline: %s (%d nodes, %d edges)",
-                            child_tx.transaction_id,
-                            dep["name"],
-                            result.node_count,
-                            result.edge_count,
-                        )
-                        self._link_dependency_graph(result.graph_id, dep)
-                        if result.graph_id:
-                            child_graph_ids.append(result.graph_id)
-                    else:
-                        failed += 1
-                        logger.error(
-                            "Child %s failed inline: %s",
-                            child_tx.transaction_id,
-                            result.error,
-                        )
-                except Exception as exc:  # pragma: no cover - defensive
+            # Execute child transaction inline to avoid nested process pools
+            try:
+                result = child_tx.run()
+                if result.success:
+                    completed += 1
+                    logger.info(
+                        "Child %s completed: %s (%d nodes, %d edges)",
+                        child_tx.transaction_id,
+                        dep["name"],
+                        result.node_count,
+                        result.edge_count,
+                    )
+                    self._link_dependency_graph(result.graph_id, dep)
+                    if result.graph_id:
+                        child_graph_ids.append(result.graph_id)
+                else:
                     failed += 1
                     logger.error(
-                        "Inline child %s failed with exception: %s",
+                        "Child %s failed: %s",
                         child_tx.transaction_id,
-                        exc,
+                        result.error,
                     )
-
-        # Wait for completion
-        if not use_process_pool:
-            logger.info(
-                "Resolution completed inline: %d succeeded, %d failed",
-                completed,
-                failed,
-            )
-            return child_graph_ids
-
-        logger.info("Waiting for %d child transactions", len(futures))
-
-        try:
-            for dep, future, child_tx_id in futures:
-                try:
-                    result = future.result(timeout=600)
-
-                    if result.success:
-                        completed += 1
-                        logger.info(
-                            "Child %s completed: %s (%d nodes, %d edges)",
-                            child_tx_id,
-                            dep["name"],
-                            result.node_count,
-                            result.edge_count,
-                        )
-
-                        # Link child graph
-                        self._link_dependency_graph(result.graph_id, dep)
-                        if result.graph_id:
-                            child_graph_ids.append(result.graph_id)
-                    else:
-                        failed += 1
-                        logger.error("Child %s failed: %s", child_tx_id, result.error)
-
-                except _SAFE_EXCEPTIONS as e:
-                    failed += 1
-                    logger.error("Failed to get result for child %s: %s", child_tx_id, e)
-
-            logger.info(
-                "Resolution completed: %d succeeded, %d failed", completed, failed
-            )
-        finally:
-            try:
-                coordinator.shutdown()
-            except (OSError, RuntimeError, ValueError) as exc:
-                logger.debug(
-                    "Failed to shut down child transaction coordinator cleanly: %s",
+            except Exception as exc:  # pragma: no cover - defensive
+                failed += 1
+                logger.error(
+                    "Child %s failed with exception: %s",
+                    child_tx.transaction_id,
                     exc,
                 )
+
+        logger.info(
+            "Resolution completed: %d succeeded, %d failed",
+            completed,
+            failed,
+        )
         return child_graph_ids
 
     def _attach_dependency_metadata(self, dep_info: Dict[str, Any]) -> None:

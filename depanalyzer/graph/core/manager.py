@@ -110,23 +110,35 @@ class GraphManager:
             **attributes
         )
         
-    def lazy_load_subgraph(self, graph_id: str) -> Optional["GraphManager"]:
+    def lazy_load_subgraph(
+        self, graph_id: str, _depth: int = 0, max_depth: int = 10
+    ) -> Optional["GraphManager"]:
         """Load a referenced external graph.
-        
+
         This is a placeholder for the "Graph of Graphs" logic.
         In a full implementation, this would load the graph from disk (or cache)
         and potentially merge relevant parts or return it for query.
-        
+
         Args:
             graph_id: ID of the graph to load.
-            
+            _depth: Current recursion depth (internal use).
+            max_depth: Maximum recursion depth to prevent stack overflow.
+
         Returns:
             GraphManager containing the loaded graph, or None if not found.
         """
+        if _depth >= max_depth:
+            logger.warning(
+                "Max recursion depth (%d) reached loading graph: %s",
+                max_depth,
+                graph_id,
+            )
+            return None
+
         if graph_id not in self._external_graph_registry:
             logger.warning("Attempted to load unknown external graph: %s", graph_id)
             return None
-            
+
         path = self._external_graph_registry[graph_id]
         try:
             # Recursively load the external graph
@@ -147,6 +159,9 @@ class GraphManager:
     ) -> None:
         """Add node to graph.
 
+        This method is thread-safe. The existence check and node addition
+        are performed atomically under a lock to prevent TOCTOU race conditions.
+
         Args:
             node_id: Unique node identifier.
             node_type: Node type (see NodeType constants).
@@ -155,9 +170,8 @@ class GraphManager:
             evidence: List of evidence sources.
             **attributes: Additional node attributes.
         """
-        if self._backend.has_node(node_id):
-            logger.debug("Node %s already exists, skipping", node_id)
-            return
+        # Note: We skip the lock-free cache check here to avoid TOCTOU race conditions.
+        # The add_node_spec method performs the authoritative check under lock.
 
         try:
             ntype = NodeType(node_type)
@@ -170,7 +184,7 @@ class GraphManager:
         attrs = dict(attributes)
         if evidence:
             attrs.setdefault("evidence", evidence)
-            
+
         # Extract explicit schema fields that might be in attributes
         external_graph_id = attrs.pop("external_graph_id", None)
 
@@ -180,8 +194,7 @@ class GraphManager:
             confidence=confidence,
             over_approx=over_approx,
             label=attrs.pop("label", None),
-            src_path=attrs.get("src_path") or attrs.get("path"),
-            path=attrs.get("path"),
+            src_path=attrs.get("src_path"),
             name=attrs.get("name"),
             parser_name=attrs.get("parser_name"),
             external_graph_id=external_graph_id,
@@ -514,7 +527,7 @@ class GraphManager:
         with self._lock:
             if not self.has_node(node_id):
                 raise ValueError(f"Node {node_id} does not exist")
-            self._backend.native_graph.nodes[node_id][key] = value
+            self._backend.update_node(node_id, **{key: value})
         logger.debug("Updated node %s attribute: %s", node_id, key)
 
     def nodes(
@@ -652,41 +665,76 @@ class GraphManager:
         """
         return self._backend.successors(node_id)
 
-    def out_edges(self, node_id: str, data: bool = False):
+    def in_degree(self, node_id: str) -> int:
+        """Get in-degree of a node.
+
+        Args:
+            node_id: Node identifier.
+
+        Returns:
+            int: Number of incoming edges.
+        """
+        return self._backend.in_degree(node_id)
+
+    def out_degree(self, node_id: str) -> int:
+        """Get out-degree of a node.
+
+        Args:
+            node_id: Node identifier.
+
+        Returns:
+            int: Number of outgoing edges.
+        """
+        return self._backend.out_degree(node_id)
+
+    def remove_node(self, node_id: str) -> None:
+        """Remove a node from the graph.
+
+        Args:
+            node_id: Node identifier.
+        """
+        with self._lock:
+            self._backend.remove_node(node_id)
+            self._node_cache.discard(node_id)
+        logger.debug("Removed node: %s", node_id)
+
+    def out_edges(self, node_id: str, data: bool = False, keys: bool = False):
         """Get outgoing edges of a node.
 
         Args:
             node_id: Node identifier.
             data: If True, include edge attributes.
+            keys: If True, include edge keys.
 
         Returns:
             Iterable: Edge iterator.
         """
-        return self._backend.native_graph.out_edges(node_id, data=data)
+        return self._backend.out_edges(node_id, data=data, keys=keys)
 
-    def in_edges(self, node_id: str, data: bool = False):
+    def in_edges(self, node_id: str, data: bool = False, keys: bool = False):
         """Get incoming edges of a node.
 
         Args:
             node_id: Node identifier.
             data: If True, include edge attributes.
+            keys: If True, include edge keys.
 
         Returns:
             Iterable: Edge iterator.
         """
-        return self._backend.native_graph.in_edges(node_id, data=data)
+        return self._backend.in_edges(node_id, data=data, keys=keys)
 
-    def remove_edge(self, source: str, target: str, key: int) -> None:
+    def remove_edge(self, source: str, target: str, key: Optional[int] = None) -> None:
         """Remove an edge from the graph.
 
         Args:
             source: Source node ID.
             target: Target node ID.
-            key: Edge key.
+            key: Edge key (optional for MultiDiGraph).
         """
         with self._lock:
-            self._backend.native_graph.remove_edge(source, target, key)
-        logger.debug("Removed edge: %s -> %s (key=%d)", source, target, key)
+            self._backend.remove_edge(source, target, key)
+        logger.debug("Removed edge: %s -> %s (key=%s)", source, target, key)
 
     def derive_asset_artifact_projection(
         self,

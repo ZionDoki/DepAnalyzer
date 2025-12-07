@@ -95,12 +95,8 @@ def test_create_transaction_accepts_custom_components(tmp_path: Path) -> None:
     assert state.lifecycle_hooks == [hook]
     assert state.code_dependency_mappers["custom"] is mapper
     assert state.asset_projection_policy is projection
-    assert state.asset_projection_strategy is projection
     assert state.join_policies[0] is join_policy
     assert any(policy.__class__.__name__ == "LicenseAttachmentPolicy" for policy in state.join_policies)
-    assert state.join_strategies[0] is join_policy
-    assert any(policy.__class__.__name__ == "LicenseAttachmentPolicy" for policy in state.join_strategies)
     assert state.analyze_policies == [analyze_policy]
-    assert state.analyze_strategies == [analyze_policy]
     assert state.max_workers == 2
     assert tx.graph_id == "graph-x"

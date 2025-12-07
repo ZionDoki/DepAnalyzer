@@ -240,14 +240,7 @@ class NodeSpec(BaseModel):
         Optional[str],
         Field(
             default=None,
-            description="Absolute source path (preferred for path-based nodes)",
-        ),
-    ]
-    path: Annotated[
-        Optional[str],
-        Field(
-            default=None,
-            description="Legacy path attribute; mirrored into src_path when present",
+            description="Absolute source path for path-based nodes",
         ),
     ]
     name: Annotated[
@@ -347,8 +340,6 @@ class NodeSpec(BaseModel):
             payload["label"] = self.label
         if self.src_path:
             payload["src_path"] = self.src_path
-        if self.path:
-            payload["path"] = self.path
         if self.name:
             payload["name"] = self.name
         if self.parser_name:
@@ -505,30 +496,3 @@ def validate_edge(spec: EdgeSpec) -> None:
         )
 
 
-def edge_attrs(kind: EdgeKind | str, parser_name: str, **extras: Any) -> Dict[str, Any]:
-    """Helper to build standardized edge attribute dicts.
-
-    This is a compatibility wrapper for legacy code that still expects a
-    plain mapping instead of EdgeSpec. New code should prefer EdgeSpec
-    directly, but this helper keeps simple cases concise.
-    """
-    kind_value = kind.value if isinstance(kind, EdgeKind) else str(kind)
-    payload: Dict[str, Any] = {
-        "kind": kind_value,
-        "label": kind_value,
-        "parser_name": parser_name,
-    }
-    payload.update({k: v for k, v in extras.items() if v is not None})
-    return payload
-
-
-def node_attrs(node_type: NodeType | str, parser_name: str, **extras: Any) -> Dict[str, Any]:
-    """Helper to build standardized node attribute dicts.
-
-    This mirrors the legacy core.schema.node_attrs helper while using the
-    unified NodeType enum as the source of truth.
-    """
-    ntype_value = node_type.value if isinstance(node_type, NodeType) else str(node_type)
-    payload: Dict[str, Any] = {"type": ntype_value, "parser_name": parser_name}
-    payload.update({k: v for k, v in extras.items() if v is not None})
-    return payload

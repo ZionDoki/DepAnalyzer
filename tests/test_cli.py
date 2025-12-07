@@ -107,7 +107,7 @@ def test_export_command_combines_main_and_dependencies(
     graphs_root = cache_dir / "graphs"
     graphs_root.mkdir(parents=True, exist_ok=True)
 
-    (graphs_root / "global_dag.json").write_text(
+    (graphs_root / "global_dag.db").write_text(
         json.dumps({"id": "dag"}, indent=2), encoding="utf-8"
     )
 

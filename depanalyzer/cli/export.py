@@ -96,7 +96,7 @@ def export_command(args) -> int:
                 logger.warning("Failed to get dependency graphs: %s", err)
 
         # Determine path to GlobalDAG (if present)
-        global_dag_path = graphs_root / "global_dag.json"
+        global_dag_path = graphs_root / "global_dag.db"
 
         # Load and combine graphs
         if export_format == "json":
@@ -173,7 +173,7 @@ def _export_asset_artifact_mapping(graphs: List[dict], output_path: Path) -> boo
                             "id": node_id,
                             "type": node_type,
                             "name": attrs.get("name", node_id),
-                            "path": attrs.get("path") or attrs.get("src_path"),
+                            "path": attrs.get("src_path"),
                         }
                     )
 

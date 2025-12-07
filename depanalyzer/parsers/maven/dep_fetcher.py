@@ -96,11 +96,24 @@ def _split_name(name: str, metadata: dict) -> tuple[str, str]:
 
 
 def _safe_extract(archive_path: Path, target_dir: Path) -> None:
+    """Safely extract archive with path traversal protection.
+
+    Args:
+        archive_path: Path to archive file.
+        target_dir: Target extraction directory.
+    """
     if not archive_path.exists():
         return
+
+    from depanalyzer.utils.archive_utils import (
+        ArchiveSecurityError,
+        safe_extract_zip,
+    )
+
     try:
-        with zipfile.ZipFile(archive_path, "r") as zip_ref:
-            zip_ref.extractall(target_dir)
+        safe_extract_zip(archive_path, target_dir)
+    except ArchiveSecurityError as exc:
+        logger.error("Security error extracting %s: %s", archive_path, exc)
     except (zipfile.BadZipFile, OSError) as exc:
         logger.warning("Failed to extract %s: %s", archive_path, exc)
 

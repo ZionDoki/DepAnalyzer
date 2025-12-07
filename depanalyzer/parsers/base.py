@@ -654,6 +654,9 @@ class BaseDepFetcher(ABC):
 
         Supports: .zip, .tar.gz, .tar.bz2, .tar.xz
 
+        This method uses safe extraction to prevent path traversal attacks
+        (Zip Slip, Tar Slip).
+
         Args:
             archive_path: Path to archive file.
             target_dir: Target directory for extraction.
@@ -661,30 +664,23 @@ class BaseDepFetcher(ABC):
         Returns:
             bool: True if extraction succeeded, False otherwise.
         """
+        from depanalyzer.utils.archive_utils import (
+            ArchiveSecurityError,
+            safe_extract,
+        )
+
         try:
-            target_dir.mkdir(parents=True, exist_ok=True)
-
             logger.info("Extracting archive: %s", archive_path)
-
-            if archive_path.suffix == ".zip":
-                with zipfile.ZipFile(archive_path, "r") as zip_ref:
-                    zip_ref.extractall(target_dir)
-            elif archive_path.name.endswith((".tar.gz", ".tgz")):
-                with tarfile.open(archive_path, "r:gz") as tar_ref:
-                    tar_ref.extractall(target_dir)
-            elif archive_path.name.endswith(".tar.bz2"):
-                with tarfile.open(archive_path, "r:bz2") as tar_ref:
-                    tar_ref.extractall(target_dir)
-            elif archive_path.name.endswith(".tar.xz"):
-                with tarfile.open(archive_path, "r:xz") as tar_ref:
-                    tar_ref.extractall(target_dir)
-            else:
-                logger.error("Unsupported archive format: %s", archive_path.suffix)
-                return False
-
+            safe_extract(archive_path, target_dir)
             logger.info("Extracted to: %s", target_dir)
             return True
 
+        except ArchiveSecurityError as e:
+            logger.error("Security error extracting archive %s: %s", archive_path, e)
+            return False
+        except ValueError as e:
+            logger.error("Unsupported archive format %s: %s", archive_path, e)
+            return False
         except _SAFE_EXCEPTIONS as e:
             logger.error("Failed to extract archive %s: %s", archive_path, e)
             return False

@@ -49,20 +49,40 @@ def normalize_node_id(
             parent_rel = path.relative_to(root_path.parent)
             return "//../" + str(parent_rel).replace("\\", "/")
         except ValueError:
-            # Path is completely external, use absolute path with marker
-            return "//external/" + path.name
+            # Path is completely external, use path hash + filename to avoid collisions
+            # Different files with same name in different directories will have unique IDs
+            import hashlib
+            path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:8]
+            return f"//external/{path_hash}/{path.name}"
 
 
-def denormalize_node_id(node_id: str, root_path: Path) -> Path:
+class PathTraversalError(ValueError):
+    """Raised when a path traversal attack is detected."""
+
+    pass
+
+
+def denormalize_node_id(
+    node_id: str,
+    root_path: Path,
+    validate_boundary: bool = True,
+) -> Path:
     """
     Convert normalized node ID back to absolute path.
 
     Args:
         node_id: Normalized node ID (//... or //../...)
         root_path: Root path of the analysis target
+        validate_boundary: If True, validate that the result path stays within
+            expected boundaries to prevent path traversal attacks.
 
     Returns:
         Absolute path
+
+    Raises:
+        PathTraversalError: If path traversal is detected and validate_boundary is True.
+        ValueError: If node_id format is invalid or //external/ paths are used
+            with validate_boundary=True.
 
     Examples:
         >>> root = Path("/workspace/project")
@@ -74,17 +94,58 @@ def denormalize_node_id(node_id: str, root_path: Path) -> Path:
     root_path = Path(root_path).resolve()
 
     if node_id.startswith("//../"):
-        # External path
+        # External path - relative to parent of root
         rel_path = node_id[len("//../"):]
-        return root_path.parent / rel_path
+
+        # Check for path traversal attempts in the relative path
+        if ".." in Path(rel_path).parts:
+            raise PathTraversalError(
+                f"Path traversal detected in node ID: {node_id}"
+            )
+
+        result = (root_path.parent / rel_path).resolve()
+
+        # Validate the result stays within parent directory
+        if validate_boundary:
+            if not result.is_relative_to(root_path.parent):
+                raise PathTraversalError(
+                    f"Path escapes allowed boundary: {node_id} -> {result}"
+                )
+
+        return result
+
     elif node_id.startswith("//external/"):
-        # Fallback for completely external paths
-        # This is a lossy conversion, but preserves the filename
+        # Completely external paths are inherently unsafe for denormalization
+        # because we don't know the original absolute path
+        if validate_boundary:
+            raise ValueError(
+                f"Cannot safely denormalize external node ID: {node_id}. "
+                "Use validate_boundary=False if you understand the risks."
+            )
+        # Fallback for completely external paths (lossy conversion)
         return Path(node_id[len("//external/"):])
+
     elif node_id.startswith("//"):
-        # Internal path
+        # Internal path - relative to root
         rel_path = node_id[len("//"):]
-        return root_path / rel_path
+
+        # Check for path traversal attempts in the relative path
+        if ".." in Path(rel_path).parts:
+            raise PathTraversalError(
+                f"Path traversal detected in node ID: {node_id}"
+            )
+
+        result = (root_path / rel_path).resolve()
+
+        # Validate the result stays within root directory
+        if validate_boundary:
+            if not result.is_relative_to(root_path):
+                raise PathTraversalError(
+                    f"Path escapes root boundary: {node_id} -> {result}"
+                )
+
+        return result
+
     else:
         raise ValueError(f"Invalid node ID format: {node_id}")
 

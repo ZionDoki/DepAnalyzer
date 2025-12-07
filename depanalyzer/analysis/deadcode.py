@@ -72,7 +72,7 @@ class DeadcodeAnalyzer:
             Set[str]: Set of reachable node IDs.
         """
         reachable = set()
-        graph = self.graph_manager.backend.native_graph
+        gm = self.graph_manager
         stack = list(roots)
 
         while stack:
@@ -83,17 +83,17 @@ class DeadcodeAnalyzer:
             reachable.add(current)
 
             # Traverse forward along all outgoing edges (consumer -> dependency).
-            for succ in graph.successors(current):
+            for succ in gm.successors(current):
                 if succ not in reachable:
                     stack.append(succ)
 
             # Allow reachability to flow from members to their SCC/cluster
             # containers via `contains` edges (container -> member).
-            for pred in graph.predecessors(current):
+            for pred in gm.predecessors(current):
                 if pred in reachable:
                     continue
 
-                edge_data = graph.get_edge_data(pred, current) or {}
+                edge_data = gm.backend.get_edge_data(pred, current) or {}
                 if any((attrs or {}).get("kind") == EdgeKind.CONTAINS.value for attrs in edge_data.values()):
                     stack.append(pred)
 

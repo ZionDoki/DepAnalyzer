@@ -17,7 +17,7 @@ from depanalyzer.graph import GraphManager, GraphRegistry
 from depanalyzer.graph.contract_registry import ContractRegistry
 from depanalyzer.parsers.registry import EcosystemRegistry
 from depanalyzer.runtime.context import ExportContext, TransactionContext
-from depanalyzer.runtime.coordinator import TransactionResult
+from depanalyzer.runtime.task_types import TransactionResult
 from depanalyzer.runtime.dependency_collector import DependencyCollector
 from depanalyzer.runtime.eventbus import EventBus
 from depanalyzer.runtime.lifecycle import LifecyclePhase

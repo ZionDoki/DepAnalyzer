@@ -177,7 +177,7 @@ def _resolve_graphs_root(
         else Path(".dep_cache").expanduser().resolve()
     )
 
-    if (base_cache / "registry.json").is_file():
+    if (base_cache / "registry.db").is_file():
         return base_cache
 
     if source:
@@ -186,14 +186,14 @@ def _resolve_graphs_root(
             return candidate
 
     direct_graphs = base_cache / "graphs"
-    if (direct_graphs / "registry.json").is_file():
+    if (direct_graphs / "registry.db").is_file():
         return direct_graphs
 
     candidates: List[Path] = []
     if base_cache.is_dir():
         for child in base_cache.iterdir():
             graphs_dir = child / "graphs"
-            if (graphs_dir / "registry.json").is_file():
+            if (graphs_dir / "registry.db").is_file():
                 candidates.append(graphs_dir)
 
     if len(candidates) == 1:

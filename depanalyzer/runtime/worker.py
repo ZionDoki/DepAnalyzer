@@ -183,7 +183,9 @@ class Worker:
         sequence = self._next_sequence()
 
         # PriorityQueue.put is thread-safe, no lock needed
-        self._queue.put(PrioritizedTask(priority=priority, sequence=sequence, task=task))
+        self._queue.put(
+            PrioritizedTask(priority=priority, sequence=sequence, task=task)
+        )
 
         logger.debug(
             "Enqueued task %s (priority=%s, seq=%d)",
