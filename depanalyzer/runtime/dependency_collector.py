@@ -11,6 +11,7 @@ later resolution during the RESOLVE_DEPS phase.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import List
 
 from depanalyzer.runtime.eventbus import Event, EventType, EventBus
@@ -26,6 +27,8 @@ class DependencyCollector:
     third-party dependencies. The collector subscribes to these events
     and stores the corresponding ``DependencySpec`` objects so that the
     transaction can resolve them in a later phase.
+
+    Thread-safe: uses a lock to protect the dependency list.
     """
 
     def __init__(self, eventbus: EventBus) -> None:
@@ -36,6 +39,7 @@ class DependencyCollector:
         """
         self.eventbus = eventbus
         self._discovered_deps: List[DependencySpec] = []
+        self._lock = threading.Lock()  # Thread-safe access to _discovered_deps
         self._register_handlers()
 
     def _register_handlers(self) -> None:
@@ -72,7 +76,8 @@ class DependencyCollector:
                 )
                 return
 
-            self._discovered_deps.append(spec)
+            with self._lock:
+                self._discovered_deps.append(spec)
             logger.debug(
                 "Collected dependency: %s/%s (ecosystem=%s) from %s",
                 spec.name,
@@ -91,14 +96,21 @@ class DependencyCollector:
     def get_discovered_dependencies(self) -> List[DependencySpec]:
         """Return all discovered dependencies.
 
+        Thread-safe: returns a copy of the list.
+
         Returns:
             List[DependencySpec]: Collected dependency specifications.
         """
-        return self._discovered_deps.copy()
+        with self._lock:
+            return self._discovered_deps.copy()
 
     def clear(self) -> None:
-        """Clear all collected dependency specifications."""
-        self._discovered_deps.clear()
+        """Clear all collected dependency specifications.
+
+        Thread-safe.
+        """
+        with self._lock:
+            self._discovered_deps.clear()
         logger.debug("Cleared all collected dependencies")
 
 

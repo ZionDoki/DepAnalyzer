@@ -8,8 +8,9 @@ import shutil
 import sys
 import tarfile
 import tempfile
-import urllib.request
 import zipfile
+
+import requests
 from pathlib import Path
 from typing import Optional
 
@@ -204,24 +205,26 @@ def install_scancode(
         url,
     )
 
-    tmp_dir = Path(tempfile.mkdtemp(prefix="scancode_dl_"))
-    archive_name = Path(url.split("?")[0]).name or "scancode-toolkit.tar.gz"
-    archive_path = tmp_dir / archive_name
-
     try:
-        with urllib.request.urlopen(url) as resp, archive_path.open("wb") as out:
-            shutil.copyfileobj(resp, out)
+        with tempfile.TemporaryDirectory(prefix="scancode_dl_") as tmp_dir_str:
+            tmp_dir = Path(tmp_dir_str)
+            archive_name = Path(url.split("?")[0]).name or "scancode-toolkit.tar.gz"
+            archive_path = tmp_dir / archive_name
 
-        extract_dir = Path(tempfile.mkdtemp(prefix="scancode_extract_"))
-        try:
-            _extract_archive(archive_path, extract_dir)
-            content_root = _find_extracted_root(extract_dir)
-            if install_root.exists():
-                shutil.rmtree(install_root, ignore_errors=True)
-            install_root.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(content_root), str(install_root))
-        finally:
-            shutil.rmtree(extract_dir, ignore_errors=True)
+            response = requests.get(url, timeout=300, stream=True)
+            response.raise_for_status()
+            with archive_path.open("wb") as out:
+                for chunk in response.iter_content(chunk_size=8192):
+                    out.write(chunk)
+
+            with tempfile.TemporaryDirectory(prefix="scancode_extract_") as extract_dir_str:
+                extract_dir = Path(extract_dir_str)
+                _extract_archive(archive_path, extract_dir)
+                content_root = _find_extracted_root(extract_dir)
+                if install_root.exists():
+                    shutil.rmtree(install_root, ignore_errors=True)
+                install_root.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(content_root), str(install_root))
 
         scancode_path = get_installed_scancode_path(install_root)
         if not is_scancode_executable(scancode_path):
@@ -248,5 +251,3 @@ def install_scancode(
         return scancode_path
     except Exception as exc:
         raise RuntimeError(f"Failed to install ScanCode: {exc}") from exc
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)

@@ -1,11 +1,14 @@
-"""Java code parser for Maven ecosystem using tree-sitter."""
+"""Java code parser for Maven ecosystem using tree-sitter.
+
+Uses tree-sitter for parsing when available, falls back to regex parsing.
+"""
 
 from __future__ import annotations
 
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from depanalyzer.parsers.base import BaseCodeParser
 
@@ -23,6 +26,7 @@ except (ImportError, AttributeError, OSError, TypeError) as err:  # pragma: no c
     JAVA_LANGUAGE = None
 
 
+# Tree-sitter queries
 IMPORT_QUERY = """
     (import_declaration (scoped_identifier) @import_name)
 """
@@ -30,6 +34,17 @@ IMPORT_QUERY = """
 PACKAGE_QUERY = """
     (package_declaration (scoped_identifier) @package_name)
 """
+
+# Regex fallback patterns for Java import statements
+IMPORT_RE = re.compile(
+    r'^\s*import\s+(?:static\s+)?([a-zA-Z_][\w.]*(?:\.\*)?)\s*;',
+    flags=re.MULTILINE
+)
+
+PACKAGE_RE = re.compile(
+    r'^\s*package\s+([a-zA-Z_][\w.]*)\s*;',
+    flags=re.MULTILINE
+)
 
 
 class MavenCodeParser(BaseCodeParser):
@@ -43,44 +58,64 @@ class MavenCodeParser(BaseCodeParser):
         self._config = config
 
     def parse_file(self, file_path: Path) -> Dict[str, Any]:
-        """Parse a Java file and extract imports/native loads."""
+        """Parse a Java file and extract imports/native loads.
+
+        Uses tree-sitter when available, falls back to regex parsing.
+        """
         result: Dict[str, Any] = {
             "file": str(file_path),
             "ecosystem": self.ECOSYSTEM,
             "parser_name": self.NAME,
         }
 
-        if not _TREE_SITTER_AVAILABLE or JAVA_LANGUAGE is None:
-            return {**result, "error": "tree-sitter Java language not available"}
-
         try:
             content = file_path.read_bytes()
         except OSError as exc:
             return {**result, "error": str(exc)}
 
-        try:
-            parser = Parser(JAVA_LANGUAGE)
-            tree = parser.parse(content)
+        # Try tree-sitter first
+        if _TREE_SITTER_AVAILABLE and JAVA_LANGUAGE is not None:
+            try:
+                parser = Parser(JAVA_LANGUAGE)
+                tree = parser.parse(content)
 
-            imports = _run_query(tree, content, IMPORT_QUERY, "import_name")
-            package_values = _run_query(tree, content, PACKAGE_QUERY, "package_name")
-            package_name = package_values[0] if package_values else None
+                imports = _run_query(tree, content, IMPORT_QUERY, "import_name")
+                package_values = _run_query(tree, content, PACKAGE_QUERY, "package_name")
+                package_name = package_values[0] if package_values else None
 
-            native_libs = _extract_native_libs(content.decode("utf8", errors="ignore"))
+                native_libs = _extract_native_libs(content.decode("utf8", errors="ignore"))
 
-            result.update(
-                {
-                    "imports": imports,
-                    "includes": imports,
-                    "package": package_name,
-                    "native_libs": native_libs,
-                    "root": "tree-sitter",
-                }
-            )
-            return result
-        except (ValueError, TypeError, RuntimeError) as exc:  # pragma: no cover
-            logger.error("tree-sitter parse failed for %s: %s", file_path, exc)
-            return {**result, "error": str(exc)}
+                result.update(
+                    {
+                        "imports": imports,
+                        "includes": imports,
+                        "package": package_name,
+                        "native_libs": native_libs,
+                        "root": "tree-sitter",
+                    }
+                )
+                return result
+            except (ValueError, TypeError, RuntimeError) as exc:
+                logger.debug(
+                    "tree-sitter parse failed for %s, falling back to regex: %s",
+                    file_path,
+                    exc,
+                )
+
+        # Regex fallback
+        text = content.decode("utf8", errors="ignore")
+        imports, package_name, native_libs = _parse_with_regex(text)
+
+        result.update(
+            {
+                "imports": imports,
+                "includes": imports,
+                "package": package_name,
+                "native_libs": native_libs,
+                "root": "regex",
+            }
+        )
+        return result
 
 
 def _run_query(tree, content: bytes, query_str: str, capture_name: str) -> List[str]:
@@ -130,6 +165,34 @@ def _extract_native_libs(text: str) -> List[str]:
     for match in pattern.finditer(text):
         libs.add(match.group(1))
     return list(libs)
+
+
+def _parse_with_regex(text: str) -> Tuple[List[str], Optional[str], List[str]]:
+    """Parse Java source using regex patterns.
+
+    Args:
+        text: Java source code as string.
+
+    Returns:
+        Tuple of (imports, package_name, native_libs).
+    """
+    # Extract imports
+    imports: List[str] = []
+    seen: Set[str] = set()
+    for match in IMPORT_RE.finditer(text):
+        import_name = match.group(1)
+        if import_name not in seen:
+            seen.add(import_name)
+            imports.append(import_name)
+
+    # Extract package
+    package_match = PACKAGE_RE.search(text)
+    package_name = package_match.group(1) if package_match else None
+
+    # Extract native libs
+    native_libs = _extract_native_libs(text)
+
+    return imports, package_name, native_libs
 
 
 __all__ = ["MavenCodeParser"]

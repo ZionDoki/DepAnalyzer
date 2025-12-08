@@ -306,17 +306,14 @@ class GlobalTaskPool:
         deadline = time.time() + timeout if timeout else None
 
         try:
+            # Build reverse mapping for O(1) lookup
+            future_to_task = {f: tid for tid, f in futures_to_wait.items()}
+
             for future in as_completed(
                 futures_to_wait.values(),
                 timeout=timeout,
             ):
-                # Find task_id for this future
-                task_id = None
-                for tid, f in futures_to_wait.items():
-                    if f is future:
-                        task_id = tid
-                        break
-
+                task_id = future_to_task.get(future)
                 if task_id is None:
                     continue
 

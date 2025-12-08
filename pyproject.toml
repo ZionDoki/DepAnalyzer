@@ -28,6 +28,7 @@ json5 = "^0.12.0"
 pydantic = "^2.11.7"
 tree-sitter-cmake = "^0.7.2"
 tree-sitter = "^0.25.2"
+defusedxml = "^0.7.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.1"

@@ -13,8 +13,9 @@ import logging
 import shutil
 import subprocess
 import tarfile
-import urllib.request
 import zipfile
+
+import requests
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
@@ -627,12 +628,15 @@ class BaseDepFetcher(ABC):
             logger.error("Unexpected error during git clone: %s", e)
             return False
 
-    def download_file(self, url: str, target_path: Path) -> bool:
+    def download_file(self, url: str, target_path: Path, timeout: int = 300) -> bool:
         """Download a file from URL (common utility method).
+
+        Uses requests library with SSL verification enabled by default.
 
         Args:
             url: File URL.
             target_path: Target file path.
+            timeout: Request timeout in seconds (default: 300).
 
         Returns:
             bool: True if download succeeded, False otherwise.
@@ -641,10 +645,17 @@ class BaseDepFetcher(ABC):
             target_path.parent.mkdir(parents=True, exist_ok=True)
 
             logger.info("Downloading file: %s", url)
-            urllib.request.urlretrieve(url, target_path)
+            response = requests.get(url, timeout=timeout, stream=True)
+            response.raise_for_status()
+            with target_path.open("wb") as out:
+                for chunk in response.iter_content(chunk_size=8192):
+                    out.write(chunk)
             logger.info("Downloaded to: %s", target_path)
             return True
 
+        except requests.RequestException as e:
+            logger.error("Failed to download file %s: %s", url, e)
+            return False
         except _SAFE_EXCEPTIONS as e:
             logger.error("Failed to download file %s: %s", url, e)
             return False

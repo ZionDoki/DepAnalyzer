@@ -39,6 +39,12 @@ class ParsePhase(BasePhase):
 
     IS_CRITICAL = True
 
+    def __init__(self, state) -> None:
+        """Initialize ParsePhase with thread-safe graph lock."""
+        super().__init__(state)
+        # Lock for thread-safe graph operations
+        self._graph_lock = threading.Lock()
+
     def execute(self, context: TransactionContext) -> None:
         """Execute two-stage parsing with pipeline parallelism.
 
@@ -96,13 +102,14 @@ class ParsePhase(BasePhase):
         stats = {"config_success": 0, "config_failed": 0, "code_files_discovered": 0}
         stats_lock = threading.Lock()
 
-        # Start code parsing consumer thread
+        # Start code parsing consumer thread (non-daemon for proper cleanup)
         consumer_error: List[Exception] = []
+        shutdown_event = threading.Event()  # Signal for graceful shutdown
         consumer_thread = threading.Thread(
             target=self._code_parser_consumer,
-            args=(code_file_queue, config_parsing_complete, consumer_error),
+            args=(code_file_queue, config_parsing_complete, consumer_error, shutdown_event),
             name="CodeParserConsumer",
-            daemon=True,
+            daemon=False,  # Non-daemon to ensure proper cleanup
         )
         consumer_thread.start()
 
@@ -114,12 +121,16 @@ class ParsePhase(BasePhase):
         finally:
             # Signal completion to consumer
             config_parsing_complete.set()
-            code_file_queue.put(None)
+            code_file_queue.put(None)  # Sentinel value
 
         # Wait for code parsing to complete
         consumer_thread.join(timeout=600)  # 10 minute timeout
         if consumer_thread.is_alive():
-            logger.error("Code parser consumer thread timed out")
+            logger.error("Code parser consumer thread timed out, requesting shutdown")
+            shutdown_event.set()  # Request graceful shutdown
+            consumer_thread.join(timeout=10)  # Give it 10 more seconds
+            if consumer_thread.is_alive():
+                logger.error("Consumer thread still alive after shutdown request")
 
         # Check for consumer errors
         if consumer_error:
@@ -255,6 +266,7 @@ class ParsePhase(BasePhase):
         code_file_queue: "queue.Queue[Optional[Tuple[str, List[Path]]]]",
         config_complete: threading.Event,
         error_list: List[Exception],
+        shutdown_event: threading.Event,
     ) -> None:
         """Consumer thread that processes code files from the queue.
 
@@ -265,6 +277,7 @@ class ParsePhase(BasePhase):
             code_file_queue: Queue to receive code files from.
             config_complete: Event signaling config parsing is done.
             error_list: List to store any exceptions for the main thread.
+            shutdown_event: Event signaling graceful shutdown request.
         """
         # Use GlobalTaskPool instead of CodeParserPool
         task_pool = GlobalTaskPool.get_instance(self.state.max_workers)
@@ -273,9 +286,9 @@ class ParsePhase(BasePhase):
 
         try:
             # Collect futures as code files arrive
-            while True:
+            while not shutdown_event.is_set():
                 try:
-                    # Use timeout to periodically check if config parsing is done
+                    # Use timeout to periodically check events
                     item = code_file_queue.get(timeout=0.5)
 
                     if item is None:
@@ -292,6 +305,8 @@ class ParsePhase(BasePhase):
 
                         # Submit each file as a PARSE_CODE task
                         for file_path in file_paths:
+                            if shutdown_event.is_set():
+                                break
                             task = create_task(
                                 TaskType.PARSE_CODE,
                                 payload={
@@ -304,8 +319,31 @@ class ParsePhase(BasePhase):
                             task_futures[task.task_id] = (file_path, future)
 
                 except queue.Empty:
-                    # Check if config parsing is done and queue is empty
-                    if config_complete.is_set() and code_file_queue.empty():
+                    # Only exit if config is complete AND we got the sentinel (None)
+                    # This avoids race condition where queue appears empty but items are being added
+                    if config_complete.is_set():
+                        # Drain any remaining items before exiting
+                        try:
+                            while True:
+                                item = code_file_queue.get_nowait()
+                                if item is None:
+                                    break
+                                ecosystem, file_paths = item
+                                if file_paths:
+                                    code_cfg = self.state.graph_build_config.get_code_parser_config(ecosystem)
+                                    for file_path in file_paths:
+                                        task = create_task(
+                                            TaskType.PARSE_CODE,
+                                            payload={
+                                                "file_path": str(file_path),
+                                                "ecosystem": ecosystem,
+                                                "config": code_cfg,
+                                            },
+                                        )
+                                        future = task_pool.submit(task)
+                                        task_futures[task.task_id] = (file_path, future)
+                        except queue.Empty:
+                            pass
                         break
                     continue
 
@@ -317,6 +355,10 @@ class ParsePhase(BasePhase):
                 for task_id, (file_path, future) in task_futures.items():
                     try:
                         result_wrapper = future.result(timeout=60.0)
+                        if result_wrapper is None:
+                            failed += 1
+                            logger.debug("Parse task returned None for %s", file_path)
+                            continue
                         parse_result = result_wrapper.get("result", {}) if result_wrapper.get("success") else {}
 
                         if not result_wrapper.get("success"):
@@ -439,6 +481,10 @@ class ParsePhase(BasePhase):
         for task_id, (file_path, future) in task_futures.items():
             try:
                 result_wrapper = future.result(timeout=60.0)
+                if result_wrapper is None:
+                    failed += 1
+                    logger.debug("Parse task returned None for %s", file_path)
+                    continue
                 parse_result = result_wrapper.get("result", {}) if result_wrapper.get("success") else {}
 
                 if not result_wrapper.get("success"):
@@ -464,7 +510,10 @@ class ParsePhase(BasePhase):
         )
 
     def _process_code_parse_result(self, file_path: Path, parse_result: Dict[str, Any]) -> None:
-        """Process code parse result via CodeDependencyMapper."""
+        """Process code parse result via CodeDependencyMapper.
+
+        Thread-safe: uses _graph_lock to protect graph modifications.
+        """
         if not self.state.graph_manager:
             return
 
@@ -498,7 +547,9 @@ class ParsePhase(BasePhase):
         else:
             mapper = self.state.default_code_dependency_mapper
 
-        try:
-            mapper.map(code_ctx)
-        except _SAFE_EXCEPTIONS:
-            logger.exception("CodeDependencyMapper failed for %s", file_path)
+        # Thread-safe graph modification
+        with self._graph_lock:
+            try:
+                mapper.map(code_ctx)
+            except _SAFE_EXCEPTIONS:
+                logger.exception("CodeDependencyMapper failed for %s", file_path)
