@@ -50,7 +50,6 @@ class HvigorCodeDependencyMapper(BaseCodeDependencyMapper):
                 id=file_node_id,
                 type=NodeType.CODE,
                 src_path=str(file_path.resolve()),
-                path=str(file_path),
                 name=file_path.name,
                 parser_name=parser_name,
             )
@@ -84,7 +83,6 @@ class HvigorCodeDependencyMapper(BaseCodeDependencyMapper):
                 include_spec = NodeSpec(
                     id=include_node_id,
                     type=NodeType.CODE,
-                    path=target_path_str,
                     src_path=(
                         str(target_path.resolve())
                         if target_path.exists()

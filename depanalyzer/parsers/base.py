@@ -13,6 +13,7 @@ import logging
 import shutil
 import subprocess
 import tarfile
+import urllib.error
 import zipfile
 
 import requests
