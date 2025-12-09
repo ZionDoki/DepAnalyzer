@@ -34,6 +34,12 @@ class ContractRegistry:
 
         Deprecated: Prefer passing the registry instance via TransactionContext.
         """
+        import warnings
+        warnings.warn(
+            "ContractRegistry.get_instance() is deprecated. Pass the registry via TransactionContext.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if cls._instance is None:
             with cls._instance_lock:
                 if cls._instance is None:

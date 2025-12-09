@@ -4,6 +4,7 @@ import logging
 from typing import Dict
 
 from depanalyzer.graph import EdgeKind, GraphManager
+from depanalyzer.graph.models.schema import NodeType
 
 logger = logging.getLogger("depanalyzer.analysis.linkage")
 
@@ -36,7 +37,7 @@ class LinkageAnalyzer:
 
         for source, target, key, attrs in self.graph_manager.edges():
             edge_kind = attrs.get("kind")
-            if edge_kind == EdgeKind.LINKS or edge_kind == "link_libraries":
+            if edge_kind == EdgeKind.LINKS.value or edge_kind == EdgeKind.LINK_LIBRARIES.value:
                 edge_id = f"{source}->{target}:{key}"
                 linkage_type = self._infer_linkage_type(target, attrs)
                 linkage_map[edge_id] = linkage_type
@@ -78,13 +79,13 @@ class LinkageAnalyzer:
         target_linkage_kind = target_attrs.get("linkage_kind")
 
         # Infer based on target type
-        if target_type == "shared_library" or target_linkage_kind == "shared":
+        if target_type == NodeType.SHARED_LIBRARY.value or target_linkage_kind == "shared":
             return "dynamic"
-        elif target_type == "static_library" or target_linkage_kind == "static":
+        elif target_type == NodeType.STATIC_LIBRARY.value or target_linkage_kind == "static":
             return "static"
-        elif target_type == "module" or target_linkage_kind == "module":
+        elif target_type == NodeType.MODULE.value or target_linkage_kind == "module":
             return "module"
-        elif target_type in ["hap", "har", "hsp"]:
+        elif target_type in [NodeType.HAP.value, NodeType.HAR.value, NodeType.HSP.value]:
             # OpenHarmony packaging - typically dynamic
             return "dynamic"
         else:

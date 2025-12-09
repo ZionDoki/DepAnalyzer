@@ -13,7 +13,7 @@ import logging
 import shutil
 import subprocess
 import tarfile
-import urllib.error
+import urllib
 import zipfile
 
 import requests
@@ -25,6 +25,7 @@ from depanalyzer.graph import GraphManager
 from depanalyzer.runtime.context import TransactionContext
 from depanalyzer.runtime.eventbus import Event, EventBus
 from depanalyzer.runtime.policies import CodeDependencyContext, CodeDependencyMapper
+from depanalyzer.utils.validation import validate_url
 
 if TYPE_CHECKING:
     from depanalyzer.graph.contract_registry import ContractRegistry
@@ -579,6 +580,10 @@ class BaseDepFetcher(ABC):
         Returns:
             bool: True if clone succeeded, False otherwise.
         """
+        if not validate_url(url):
+            logger.error("Invalid or unsafe Git URL: %s", url)
+            return False
+
         # Check if already exists
         if target_dir.exists():
             if force:
@@ -601,7 +606,8 @@ class BaseDepFetcher(ABC):
         elif tag:
             cmd.extend(["--branch", tag])
 
-        cmd.extend([url, str(target_dir)])
+        # Use '--' to separate options from arguments (prevents injection)
+        cmd.extend(["--", url, str(target_dir)])
 
         logger.info("Cloning git repository: %s", url)
         logger.debug("Git clone command: %s", " ".join(cmd))
@@ -642,6 +648,10 @@ class BaseDepFetcher(ABC):
         Returns:
             bool: True if download succeeded, False otherwise.
         """
+        if not validate_url(url):
+            logger.error("Invalid or unsafe URL: %s", url)
+            return False
+
         try:
             target_path.parent.mkdir(parents=True, exist_ok=True)
 

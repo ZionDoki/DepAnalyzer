@@ -170,8 +170,8 @@ class ExportPhase(BasePhase):
                             if nid.startswith(("ext_lib:", "module:")):
                                 canonical_dead.append(f"//{nid}")
                                 continue
-                    except Exception:
-                        pass
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.debug("Failed to canonicalize dead node %s: %s", nid, exc)
                 metadata["dead_nodes"] = sorted(set(canonical_dead))
 
             if (

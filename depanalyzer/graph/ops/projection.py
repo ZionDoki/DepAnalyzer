@@ -28,6 +28,22 @@ def _edge_kind(data: Dict[str, Any]) -> Optional[str]:
     return data.get("kind") or data.get("label") or data.get("type")
 
 
+def _safe_get_type(nodes_data: Dict[str, Any], node_id: str) -> Optional[str]:
+    """Safely get node type from nodes data dict.
+
+    Args:
+        nodes_data: Dictionary mapping node IDs to node attribute dicts.
+        node_id: The node ID to look up.
+
+    Returns:
+        Optional[str]: The node type, or None if not found or invalid.
+    """
+    node_data = nodes_data.get(node_id)
+    if not isinstance(node_data, dict):
+        return None
+    return node_data.get("type")
+
+
 def derive_asset_artifact_projection(
     manager: "GraphManager",
     config: Optional[ProjectionConfig] = None,
@@ -206,7 +222,7 @@ def derive_asset_artifact_projection(
         if _edge_kind(data) == "include":
             code_node = u
             header_node = v
-            header_type = (nodes_data_all.get(header_node, {}) or {}).get("type")
+            header_type = _safe_get_type(nodes_data_all, header_node)
             if header_type == "system_header" or str(header_node).startswith(
                 "//system:"
             ):
@@ -225,11 +241,13 @@ def derive_asset_artifact_projection(
         rev_adj: Dict[str, Set[str]] = defaultdict(set)
         nodes_data = dict(graph.nodes(data=True))
         for u, v, data in graph.edges(data=True):
+            src_type = _safe_get_type(nodes_data, u)
+            tgt_type = _safe_get_type(nodes_data, v)
             if (
                 _edge_kind(data) == "link_libraries"
-                and nodes_data.get(u, {}).get("type") in artifact_types
+                and src_type in artifact_types
             ):
-                if nodes_data.get(v, {}).get("type") in artifact_types:
+                if tgt_type in artifact_types:
                     rev_adj[v].add(u)
 
         for code, bases in list(code_to_artifacts.items()):
@@ -271,7 +289,7 @@ def derive_asset_artifact_projection(
         for start, arts in list(node_to_artifacts.items()):
             if not arts:
                 continue
-            st_type = (nodes_data_all.get(start, {}) or {}).get("type")
+            st_type = _safe_get_type(nodes_data_all, start)
             if st_type == "system_header" or str(start).startswith("//system:"):
                 continue
             frontier = deque([(start, 0)])
@@ -284,7 +302,7 @@ def derive_asset_artifact_projection(
                     if nxt in visited:
                         continue
                     visited.add(nxt)
-                    ntype = (nodes_data_all.get(nxt, {}) or {}).get("type")
+                    ntype = _safe_get_type(nodes_data_all, nxt)
                     if not (
                         ntype == "system_header" or str(nxt).startswith("//system:")
                     ):

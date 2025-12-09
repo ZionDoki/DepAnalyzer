@@ -48,6 +48,7 @@ except ImportError:
     logger.debug("packaging library not available, will use lexical version sorting")
 
 from depanalyzer.parsers.base import BaseDepFetcher, DependencySpec
+from depanalyzer.utils.validation import validate_url, validate_safe_path
 
 
 class HvigorDepFetcher(BaseDepFetcher):
@@ -99,7 +100,12 @@ class HvigorDepFetcher(BaseDepFetcher):
         """
         logger.info("Fetching Hvigor dependency: %s", dep_spec.name)
 
+        if dep_spec.source_url and not validate_url(dep_spec.source_url):
+            logger.error("Invalid source URL for %s: %s", dep_spec.name, dep_spec.source_url)
+            return None
+
         metadata = dep_spec.metadata or {}
+
         registry_type = self._get_registry_type(dep_spec)
         path_hint = self._get_path_hint(dep_spec, metadata)
         workspace_root = self._get_workspace_root(metadata)
@@ -340,6 +346,9 @@ class HvigorDepFetcher(BaseDepFetcher):
         meta = self._fetch_ohpm_metadata(dep_spec.name)
         if not meta:
             logger.error("Could not fetch OHPM metadata for %s", dep_spec.name)
+            return None
+        if not isinstance(meta, dict):
+            logger.error("Unexpected metadata format for %s", dep_spec.name)
             return None
 
         # Resolve version (may be a semver range or tag). The resolved version
@@ -603,7 +612,8 @@ class HvigorDepFetcher(BaseDepFetcher):
         target_dir.parent.mkdir(parents=True, exist_ok=True)
 
         # Clone full repository (not shallow) for accurate time-based checkout
-        cmd = ["git", "clone", "--filter=blob:none", repo_url, str(target_dir)]
+        # Use '--' to prevent argument injection from malicious URLs
+        cmd = ["git", "clone", "--filter=blob:none", "--", repo_url, str(target_dir)]
         logger.info(
             "Cloning repository (full clone for time-based checkout): %s", repo_url
         )
@@ -746,6 +756,12 @@ class HvigorDepFetcher(BaseDepFetcher):
         path = Path(local_path)
         if not path.is_absolute() and workspace_root:
             path = workspace_root / local_path
+        
+        # Validate path safety if workspace_root is available
+        if workspace_root and not validate_safe_path(path, workspace_root):
+            logger.error("Unsafe local dependency path detected: %s", path)
+            return None
+
         if not path.exists():
             logger.error("Local dependency path does not exist: %s", path)
             return None

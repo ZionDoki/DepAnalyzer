@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
+from urllib.parse import urlparse
 
 import requests
 from pathlib import Path
@@ -16,6 +17,11 @@ from typing import Optional
 
 DEFAULT_SCANCODE_VERSION = os.environ.get("SCANCODE_VERSION", "32.4.1")
 DEFAULT_INSTALL_ROOT = Path.home() / ".depanalyzer" / "scancode-toolkit"
+ALLOWED_SCANCODE_HOSTS = {
+    "github.com",
+    "objects.githubusercontent.com",
+    "github-releases.githubusercontent.com",
+}
 _LOG = logging.getLogger("depanalyzer.utils.scancode_installer")
 
 
@@ -107,6 +113,24 @@ def _build_download_url(version: str, py_tag: str, platform_tag: str) -> str:
     return f"{base}/v{version}/{filename}"
 
 
+def _validate_download_url(url: str) -> str:
+    """Ensure the ScanCode download URL points to an allowed host."""
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+
+    if scheme != "https":
+        raise RuntimeError("ScanCode download URL must use HTTPS")
+    if host not in ALLOWED_SCANCODE_HOSTS:
+        raise RuntimeError(
+            f"ScanCode download host {host!r} is not in the allowed list"
+        )
+    if not parsed.path or parsed.path == "/":
+        raise RuntimeError("ScanCode download URL must include a file path")
+
+    return url
+
+
 def _extract_archive(archive_path: Path, dest_dir: Path) -> None:
     """Extract an archive (.tar.* or .zip) into dest_dir.
 
@@ -194,8 +218,10 @@ def install_scancode(
     )
     py_tag = _detect_python_tag()
     platform_tag = _detect_platform_tag()
-    url = download_url or os.environ.get("SCANCODE_DOWNLOAD_URL") or _build_download_url(
-        chosen_version, py_tag, platform_tag
+    requested_url = download_url or os.environ.get("SCANCODE_DOWNLOAD_URL")
+    url = _validate_download_url(
+        requested_url
+        or _build_download_url(chosen_version, py_tag, platform_tag)
     )
     _LOG.info(
         "Downloading ScanCode %s for %s/%s from %s",
@@ -212,6 +238,7 @@ def install_scancode(
             archive_path = tmp_dir / archive_name
 
             response = requests.get(url, timeout=300, stream=True)
+            _validate_download_url(response.url)
             response.raise_for_status()
             with archive_path.open("wb") as out:
                 for chunk in response.iter_content(chunk_size=8192):

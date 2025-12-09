@@ -67,6 +67,7 @@ class GlobalTaskPool:
         self._shutdown_lock = threading.Lock()
         self._original_sigint_handler = None
         self._original_sigterm_handler = None
+        self._signal_shutdown_started = False
 
         logger.info(
             "GlobalTaskPool initialized with %d max workers", self.max_workers
@@ -82,19 +83,17 @@ class GlobalTaskPool:
         Returns:
             GlobalTaskPool: Global instance.
         """
-        if cls._instance is None:
-            with cls._lock:
-                # Double-check locking
-                if cls._instance is None:
-                    cls._instance = cls(max_workers)
+        # All operations inside lock to prevent TOCTOU race conditions
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = cls(max_workers)
 
-        instance = cls._instance
+            instance = cls._instance
 
-        # Detect fork: reset if PID changed
-        current_pid = os.getpid()
-        owner_pid = getattr(instance, "_owner_pid", current_pid)
-        if owner_pid != current_pid:
-            with cls._lock:
+            # Detect fork: reset if PID changed (now inside lock)
+            current_pid = os.getpid()
+            owner_pid = getattr(instance, "_owner_pid", current_pid)
+            if owner_pid != current_pid:
                 logger.debug(
                     "Resetting GlobalTaskPool after fork (owner=%s, current=%s)",
                     owner_pid,
@@ -103,19 +102,19 @@ class GlobalTaskPool:
                 cls._instance = cls(max_workers)
                 return cls._instance
 
-        # Update max_workers if executor not started
-        if (
-            max_workers is not None
-            and instance._executor is None
-            and max_workers != instance.max_workers
-        ):
-            instance.max_workers = max_workers
-            logger.info(
-                "Reconfigured GlobalTaskPool max_workers to %d",
-                instance.max_workers,
-            )
+            # Update max_workers if executor not started
+            if (
+                max_workers is not None
+                and instance._executor is None
+                and max_workers != instance.max_workers
+            ):
+                instance.max_workers = max_workers
+                logger.info(
+                    "Reconfigured GlobalTaskPool max_workers to %d",
+                    instance.max_workers,
+                )
 
-        return instance
+            return instance
 
     @classmethod
     def reset_instance(cls) -> None:
@@ -205,8 +204,8 @@ class GlobalTaskPool:
                 signal.signal(signal.SIGINT, self._original_sigint_handler)
             if hasattr(signal, "SIGTERM") and self._original_sigterm_handler is not None:
                 signal.signal(signal.SIGTERM, self._original_sigterm_handler)
-        except (ValueError, OSError):
-            pass
+        except (ValueError, OSError) as exc:
+            logger.debug("Failed to restore signal handlers: %s", exc)
 
     def _handle_signal(self, signum: int, frame) -> None:
         """Handle shutdown signals (SIGINT/SIGTERM).
@@ -219,22 +218,52 @@ class GlobalTaskPool:
         logger.warning("Received signal %s, initiating graceful shutdown", sig_name)
 
         self._shutdown_event.set()
-        self.cancel_all()
-        self.shutdown(wait=False, force=True)
+        if not self._signal_shutdown_started:
+            self._signal_shutdown_started = True
+            threading.Thread(
+                target=self._initiate_signal_shutdown,
+                name="GlobalTaskPoolSignalShutdown",
+                daemon=True,
+            ).start()
 
         # Re-raise to allow default handling
-        if self._original_sigint_handler and signum == signal.SIGINT:
+        if signum == signal.SIGINT:
             if callable(self._original_sigint_handler):
                 self._original_sigint_handler(signum, frame)
             else:
                 raise KeyboardInterrupt
+        elif hasattr(signal, "SIGTERM") and signum == signal.SIGTERM:
+            handler = self._original_sigterm_handler
+            if callable(handler):
+                handler(signum, frame)
+            else:
+                raise SystemExit(143)
+
+    def _initiate_signal_shutdown(self) -> None:
+        """Best-effort cleanup when a termination signal is received."""
+        try:
+            self.cancel_all()
+            self.shutdown(wait=False, force=True)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Signal-triggered shutdown failed: %s", exc)
 
     def _atexit_cleanup(self) -> None:
         """Cleanup handler for atexit."""
         try:
             self.shutdown(wait=False, force=True)
-        except Exception:
-            pass
+        except Exception as exc:  # pragma: no cover - defensive cleanup
+            logger.debug("Atexit cleanup failed: %s", exc)
+
+    def _cleanup_completed_futures(self) -> int:
+        """Remove completed futures from tracking dict.
+
+        Returns:
+            int: Number of futures cleaned up.
+        """
+        completed = [tid for tid, f in self._futures.items() if f.done()]
+        for tid in completed:
+            self._futures.pop(tid, None)
+        return len(completed)
 
     def submit(self, task: Task) -> Future:
         """Submit a task for execution.
@@ -249,6 +278,10 @@ class GlobalTaskPool:
             future: Future = Future()
             future.set_exception(RuntimeError("Task pool is shutting down"))
             return future
+
+        # Periodic cleanup of completed futures to prevent memory growth
+        if len(self._futures) > 100:
+            self._cleanup_completed_futures()
 
         executor = self._ensure_executor()
 
@@ -451,15 +484,15 @@ class GlobalTaskPool:
                 for proc in alive:
                     try:
                         proc.terminate()
-                    except (OSError, ValueError):
-                        pass
+                    except (OSError, ValueError) as exc:
+                        logger.debug("Failed to terminate worker process: %s", exc)
 
                 # Brief wait for termination
                 for proc in alive:
                     try:
                         proc.join(timeout=1.0)
-                    except (OSError, ValueError):
-                        pass
+                    except (OSError, ValueError) as exc:
+                        logger.debug("Failed waiting for worker termination: %s", exc)
 
     def _log_diagnostics(self, when: str) -> None:
         """Log diagnostic information about the pool state.

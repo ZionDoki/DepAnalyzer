@@ -437,8 +437,8 @@ class GlobalDAG:
             for conn in cls._connections:
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as exc:  # pragma: no cover - defensive cleanup
+                    logger.debug("Error closing GlobalDAG connection: %s", exc)
             cls._connections.clear()
 
         # Reset singleton state
@@ -446,8 +446,8 @@ class GlobalDAG:
             try:
                 if hasattr(cls._instance, "_local"):
                     cls._instance._local = threading.local()
-            except Exception:
-                pass
+            except Exception as exc:  # pragma: no cover - defensive cleanup
+                logger.debug("Error resetting GlobalDAG thread-local: %s", exc)
 
         logger.info("GlobalDAG shutdown complete")
         cls._instance = None

@@ -45,18 +45,20 @@ class GraphManager:
         graph_id: Optional[str] = None,
         root_path: Optional[Union[str, Path]] = None,
         path_namespace: Optional[str] = None,
+        backend: Optional[GraphBackend] = None,
     ) -> None:
         """Initialize graph manager.
 
         Args:
             graph_id: Optional graph identifier.
             root_path: Optional root path for node ID normalization.
+            backend: Optional graph backend. Defaults to NetworkXBackend.
         """
         self.graph_id = graph_id or "default"
         self.root_path = Path(root_path).resolve() if root_path else None
 
         self.path_namespace = path_namespace
-        self._backend: GraphBackend = NetworkXBackend()
+        self._backend: GraphBackend = backend or NetworkXBackend()
         self._metadata: Dict[str, Any] = {}
 
         # Lazy loading registry for external graphs (graph_id -> Path)
@@ -594,7 +596,7 @@ class GraphManager:
 
         prefix = f"code_scc:{self.graph_id}:"
         return build_condensation_dag(
-            self._backend.native_graph,
+            self._as_networkx_graph(),
             node_prefix=prefix,
             cluster_type=NodeType.CODE_SCC_CLUSTER.value,
         )
@@ -815,15 +817,16 @@ class GraphManager:
         file_path = Path(file_path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
+        graph = self._as_networkx_graph()
         if file_format == "json":
             data = nx.readwrite.json_graph.node_link_data(
-                self._backend.native_graph, edges="edges"
+                graph, edges="edges"
             )
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             logger.info("Graph saved to: %s", file_path)
         elif file_format == "gml":
-            nx.write_gml(self._backend.native_graph, str(file_path))
+            nx.write_gml(graph, str(file_path))
             logger.info("Graph saved to: %s", file_path)
         else:
             raise ValueError(f"Unsupported format: {file_format}")
@@ -839,7 +842,7 @@ class GraphManager:
         Returns:
             GraphManager: Loaded graph manager.
         """
-        manager = cls()
+        manager = cls(backend=NetworkXBackend())
 
         if file_format == "json":
             with open(file_path, "r", encoding="utf-8") as f:
@@ -856,3 +859,33 @@ class GraphManager:
             raise ValueError(f"Unsupported format: {file_format}")
 
         return manager
+
+    def _as_networkx_graph(self) -> nx.MultiDiGraph:
+        """Return a NetworkX MultiDiGraph view of the backend."""
+        if isinstance(self._backend, NetworkXBackend):
+            return self._backend.native_graph
+
+        nx_graph = nx.MultiDiGraph()
+        try:
+            for node_item in self._backend.nodes(data=True):
+                if isinstance(node_item, tuple) and len(node_item) == 2:
+                    nid, attrs = node_item
+                    nx_graph.add_node(nid, **(attrs or {}))
+                else:
+                    nx_graph.add_node(node_item)
+
+            for edge_item in self._backend.edges(data=True, keys=True):
+                if len(edge_item) == 4:
+                    u, v, key, attrs = edge_item
+                    nx_graph.add_edge(u, v, key=key, **(attrs or {}))
+                elif len(edge_item) == 3:
+                    u, v, attrs = edge_item
+                    nx_graph.add_edge(u, v, **(attrs or {}))
+                elif len(edge_item) == 2:
+                    u, v = edge_item
+                    nx_graph.add_edge(u, v)
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.error("Failed to materialize backend as NetworkX graph: %s", exc)
+            raise
+
+        return nx_graph

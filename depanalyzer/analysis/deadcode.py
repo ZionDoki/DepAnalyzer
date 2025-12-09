@@ -1,10 +1,11 @@
 """Dead code detection via reachability analysis."""
 
 import logging
-from typing import List, Set
+from collections import defaultdict
+from typing import Dict, List, Set
 
 from depanalyzer.graph import GraphManager
-from depanalyzer.graph.models.schema import EdgeKind
+from depanalyzer.graph.models.schema import EdgeKind, NodeType
 
 logger = logging.getLogger("depanalyzer.analysis.deadcode")
 
@@ -55,10 +56,16 @@ class DeadcodeAnalyzer:
             List[str]: List of packaging target node IDs.
         """
         roots = []
+        packaging_types = {
+            NodeType.HAP.value,
+            NodeType.HAR.value,
+            NodeType.HSP.value,
+            NodeType.EXECUTABLE.value,
+        }
         for node_id, attrs in self.graph_manager.nodes():
             node_type = attrs.get("type")
             # Consider HAP/HAR/HSP as roots
-            if node_type in ["hap", "har", "hsp", "executable"]:
+            if node_type in packaging_types:
                 roots.append(node_id)
         return roots
 
@@ -74,6 +81,12 @@ class DeadcodeAnalyzer:
         reachable = set()
         gm = self.graph_manager
         stack = list(roots)
+        contains_sources: Dict[str, Set[str]] = defaultdict(set)
+
+        # GraphManager.edges() returns (src, dst, key, data) tuples
+        for src, dst, _key, data in gm.edges():
+            if (data or {}).get("kind") == EdgeKind.CONTAINS.value:
+                contains_sources[dst].add(src)
 
         while stack:
             current = stack.pop()
@@ -89,12 +102,8 @@ class DeadcodeAnalyzer:
 
             # Allow reachability to flow from members to their SCC/cluster
             # containers via `contains` edges (container -> member).
-            for pred in gm.predecessors(current):
-                if pred in reachable:
-                    continue
-
-                edge_data = gm.backend.get_edge_data(pred, current) or {}
-                if any((attrs or {}).get("kind") == EdgeKind.CONTAINS.value for attrs in edge_data.values()):
+            for pred in contains_sources.get(current, ()):
+                if pred not in reachable:
                     stack.append(pred)
 
         return reachable

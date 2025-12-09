@@ -6,7 +6,7 @@ replacing the JSON + file lock approach for better concurrent access.
 
 import logging
 from pathlib import Path
-from typing import List, Set, Tuple
+from typing import Iterable, List, Set, Tuple
 
 from .sqlite_store import SQLiteStore
 
@@ -85,6 +85,56 @@ class GlobalDAGSQLite(SQLiteStore):
                 "INSERT OR IGNORE INTO edges (parent_id, child_id) VALUES (?, ?)",
                 (parent_id, child_id),
             )
+
+    def add_nodes_bulk(self, graph_ids: Iterable[str]) -> int:
+        """Insert multiple nodes in a single transaction.
+
+        Args:
+            graph_ids: Iterable of graph IDs to insert.
+
+        Returns:
+            int: Number of rows changed (best-effort).
+        """
+        unique_ids = {(gid,) for gid in graph_ids if gid}
+        if not unique_ids:
+            return 0
+
+        with self.transaction() as conn:
+            before = conn.total_changes
+            conn.executemany(
+                "INSERT OR IGNORE INTO nodes (graph_id) VALUES (?)",
+                unique_ids,
+            )
+            return conn.total_changes - before
+
+    def add_edges_bulk(self, edges: Iterable[Tuple[str, str]]) -> int:
+        """Insert multiple edges using batch SQL for speed.
+
+        Nodes are inserted first to satisfy foreign key expectations.
+
+        Args:
+            edges: Iterable of (parent_id, child_id) tuples.
+
+        Returns:
+            int: Number of rows changed (best-effort).
+        """
+        edge_records = [(p, c) for p, c in edges if p and c]
+        if not edge_records:
+            return 0
+
+        node_records = {(p,) for p, _ in edge_records} | {(c,) for _, c in edge_records}
+
+        with self.transaction() as conn:
+            before = conn.total_changes
+            conn.executemany(
+                "INSERT OR IGNORE INTO nodes (graph_id) VALUES (?)",
+                node_records,
+            )
+            conn.executemany(
+                "INSERT OR IGNORE INTO edges (parent_id, child_id) VALUES (?, ?)",
+                edge_records,
+            )
+            return conn.total_changes - before
 
     def remove_edges_from_parent(self, parent_id: str) -> int:
         """Remove all outgoing edges from a parent node.

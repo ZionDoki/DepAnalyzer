@@ -1,9 +1,12 @@
 """Optimized file scanner using scandir and generator pattern."""
 
 import fnmatch
+import logging
 import os
 from pathlib import Path
 from typing import Generator, List, Optional, Set
+
+logger = logging.getLogger("depanalyzer.utils.scanner")
 
 
 def load_gitignore_patterns(root_path: Path) -> List[str]:
@@ -17,8 +20,8 @@ def load_gitignore_patterns(root_path: Path) -> List[str]:
                     line = line.strip()
                     if line and not line.startswith("#"):
                         patterns.append(line)
-        except Exception:
-            pass
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Failed to read .gitignore at %s: %s", gitignore, exc)
     return patterns
 
 

@@ -13,7 +13,7 @@ from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from queue import PriorityQueue
+from queue import Empty, PriorityQueue
 from typing import Any, Callable, Dict, Optional, Set, Tuple
 
 logger = logging.getLogger("depanalyzer.worker")
@@ -151,6 +151,10 @@ class Worker:
         self._executor: Optional[ThreadPoolExecutor] = None
         self._sequence = 0  # Monotonic counter for FIFO ordering
         self._sequence_lock = threading.Lock()
+        self._idle_wait_seconds = 0.5
+        
+        # Condition variable for task notifications (eliminates busy waiting)
+        self._task_available = threading.Condition()
 
         logger.info(
             "[PID %d] Worker initialized with %d max workers", os.getpid(), max_workers
@@ -182,10 +186,12 @@ class Worker:
         priority = self._PRIORITY_MAP.get(task.priority, 1)
         sequence = self._next_sequence()
 
-        # PriorityQueue.put is thread-safe, no lock needed
-        self._queue.put(
-            PrioritizedTask(priority=priority, sequence=sequence, task=task)
-        )
+        # Enqueue and notify waiting threads
+        with self._task_available:
+            self._queue.put(
+                PrioritizedTask(priority=priority, sequence=sequence, task=task)
+            )
+            self._task_available.notify()
 
         logger.debug(
             "Enqueued task %s (priority=%s, seq=%d)",
@@ -293,6 +299,7 @@ class Worker:
                     os.getpid(),
                     task.task_id,
                     e,
+                    exc_info=True,  # Include full traceback for debugging
                 )
                 return TaskResult(
                     task_id=task.task_id,
@@ -325,36 +332,38 @@ class Worker:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             self._executor = executor
             futures: Dict[Future, str] = {}
+            last_activity = time.time()
 
-            while not self._queue.empty() or futures:
+            while True:
                 # Submit new tasks up to max_workers limit
-                while not self._queue.empty() and len(futures) < self.max_workers:
+                submitted_count = 0
+                while len(futures) < self.max_workers:
                     try:
                         prioritized_task = self._queue.get_nowait()
                         task = prioritized_task.task
-                    except Exception:
+                        future = executor.submit(self._execute_task, task)
+                        futures[future] = task.task_id
+                        submitted_count += 1
+                        logger.debug(
+                            "[PID %d] Submitted task %s", os.getpid(), task.task_id
+                        )
+                    except Empty:
                         break
+                
+                if submitted_count > 0:
+                    last_activity = time.time()
 
-                    future = executor.submit(self._execute_task, task)
-                    futures[future] = task.task_id
-                    logger.debug(
-                        "[PID %d] Submitted task %s for execution",
-                        os.getpid(),
-                        task.task_id,
-                    )
-
-                # Wait for at least one task to complete if there are running tasks
+                # If we have running tasks, wait for at least one to complete
                 if futures:
                     done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
-
                     for future in done:
                         task_id = futures.pop(future)
                         try:
                             result = future.result()
                             with self._results_lock:
                                 self._results[task_id] = result
+                            last_activity = time.time()
                         except Exception as e:
-                            # Should be caught by _execute_task, but just in case
                             logger.error("Task %s failed unexpectedly: %s", task_id, e)
                             with self._results_lock:
                                 self._results[task_id] = TaskResult(
@@ -363,6 +372,24 @@ class Worker:
                                     error=e,
                                     execution_time=0.0,
                                 )
+                            last_activity = time.time()
+                    continue
+
+                # If no tasks running but queue is empty
+                # We need to wait for new tasks or timeout; loop until both queue
+                # and futures remain empty after a timeout to avoid racing producers.
+                with self._task_available:
+                    if self._queue.empty():
+                        notified = self._task_available.wait(
+                            timeout=self._idle_wait_seconds
+                        )
+                        # If we were notified, loop and pick up tasks.
+                        if notified:
+                            continue
+                        # Timed out: double-check queue without exiting early.
+                        if self._queue.empty():
+                            # No new tasks arrived during the wait; break out.
+                            break
 
             self._executor = None
 

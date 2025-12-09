@@ -185,8 +185,8 @@ def _normalize_path(graph: GraphManager, path: Path) -> str:
     try:
         if graph.root_path:
             return graph.normalize_path(path)
-    except Exception:
-        pass
+    except Exception as exc:  # pragma: no cover - defensive normalization
+        logger.debug("Failed to normalize path %s: %s", path, exc)
     return str(path)
 
 

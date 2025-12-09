@@ -148,9 +148,19 @@ class PhaseOrchestrator:
 
             # Execute all phases in order
             for phase_enum in LifecyclePhase:
+                phase_start = time.time()
                 phase = self._phases[phase_enum]
                 context = self._create_context_for_phase(phase_enum)
                 phase.run(context)
+                phase_duration = time.time() - phase_start
+                
+                # Structured log for telemetry
+                logger.info(
+                    "Phase complete: %s (duration_ms=%d)",
+                    phase_enum.name,
+                    int(phase_duration * 1000)
+                )
+                self.state.update_phase_result(phase_enum, "duration_seconds", phase_duration)
 
             # Flush graph to disk
             cache_path = self._flush_graph_to_disk()

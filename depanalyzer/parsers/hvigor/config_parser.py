@@ -740,8 +740,10 @@ class HvigorParser(BaseParser):
                             pkg_name = pkg_data.get("name")
                             if pkg_name:
                                 workspace_map[pkg_name] = mod_name
-                    except Exception:
-                        pass
+                    except Exception as exc:  # pragma: no cover - defensive parse
+                        logger.debug(
+                            "Failed to read package alias from %s: %s", pkg_file, exc
+                        )
 
         except Exception as e:
             logger.warning(
@@ -872,7 +874,7 @@ class HvigorParser(BaseParser):
                     config_file_id,
                 )
         except ValueError:
-            pass
+            logger.debug("Could not derive owning module for %s", config_file)
 
         if target_module_ids_override is not None:
             target_module_ids = list(target_module_ids_override)
@@ -1245,7 +1247,7 @@ class HvigorParser(BaseParser):
                 module_name = parts[0]
                 owning_module_id = self._ensure_module_node(module_name)
         except ValueError:
-            pass
+            logger.debug("Could not derive owning module for %s", config_file)
 
         if target_module_ids_override is not None:
             target_module_ids = list(target_module_ids_override)

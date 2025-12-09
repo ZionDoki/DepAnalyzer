@@ -216,8 +216,8 @@ class GraphRegistry:
             for conn in cls._connections:
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as exc:  # pragma: no cover - defensive cleanup
+                    logger.debug("Error closing registry connection: %s", exc)
             cls._connections.clear()
 
         # Reset singleton state
@@ -225,8 +225,8 @@ class GraphRegistry:
             try:
                 if hasattr(cls._instance, "_local"):
                     cls._instance._local = threading.local()
-            except Exception:
-                pass
+            except Exception as exc:  # pragma: no cover - defensive cleanup
+                logger.debug("Error resetting registry thread-local: %s", exc)
 
         logger.info("GraphRegistry shutdown complete")
         cls._instance = None

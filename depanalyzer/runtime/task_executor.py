@@ -7,6 +7,7 @@ and should be stateless to safely execute in worker processes.
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
 import time
@@ -26,15 +27,40 @@ _CODE_PARSER_CACHE: Dict[str, Any] = {}
 _CACHE_TIMESTAMPS: Dict[str, float] = {}
 _CACHE_TTL: float = 300.0  # 5 minutes
 _MAX_CACHE_SIZE: int = 50
+_LAST_CLEANUP_TIME: float = 0.0
+_CLEANUP_INTERVAL: float = 60.0  # Rate limit: cleanup at most once per 60 seconds
+
+
+def _cleanup_all_parsers() -> None:
+    """Clean up all cached parsers (called at process exit)."""
+    for key in list(_CODE_PARSER_CACHE.keys()):
+        parser = _CODE_PARSER_CACHE.pop(key, None)
+        _CACHE_TIMESTAMPS.pop(key, None)
+        if parser and hasattr(parser, "cleanup"):
+            try:
+                parser.cleanup()
+            except Exception:
+                pass  # Best-effort cleanup at exit
+
+
+# Register cleanup at module load to ensure parsers are cleaned up on process exit
+atexit.register(_cleanup_all_parsers)
 
 
 def _cleanup_expired_cache() -> int:
-    """Clean up expired parser cache entries.
+    """Clean up expired parser cache entries with rate limiting.
 
     Returns:
         int: Number of entries cleaned up.
     """
+    global _LAST_CLEANUP_TIME
     now = time.time()
+
+    # Rate limit cleanup calls to avoid overhead on every parse
+    if now - _LAST_CLEANUP_TIME < _CLEANUP_INTERVAL:
+        return 0
+    _LAST_CLEANUP_TIME = now
+
     cleaned = 0
 
     # Remove expired entries
@@ -45,8 +71,8 @@ def _cleanup_expired_cache() -> int:
         if parser and hasattr(parser, "cleanup"):
             try:
                 parser.cleanup()
-            except Exception:
-                pass
+            except Exception as exc:  # pragma: no cover - best-effort cleanup
+                logger.debug("Failed to cleanup code parser %s: %s", key, exc)
         cleaned += 1
 
     # Enforce max size (LRU eviction)
@@ -62,8 +88,8 @@ def _cleanup_expired_cache() -> int:
             if parser and hasattr(parser, "cleanup"):
                 try:
                     parser.cleanup()
-                except Exception:
-                    pass
+                except Exception as exc:  # pragma: no cover - best-effort cleanup
+                    logger.debug("Failed to cleanup code parser %s: %s", key, exc)
             cleaned += 1
 
     return cleaned
@@ -143,8 +169,24 @@ def execute_task(task_dict: Dict[str, Any]) -> Dict[str, Any]:
 
     start_time = time.time()
 
+    # Validate task_type before processing
+    if not task_type_str:
+        return {
+            "success": False,
+            "error": f"Missing or empty task_type in task {task_id}",
+            "execution_time": time.time() - start_time,
+        }
+
     try:
         task_type = TaskType(task_type_str)
+    except ValueError:
+        return {
+            "success": False,
+            "error": f"Invalid task_type '{task_type_str}' in task {task_id}",
+            "execution_time": time.time() - start_time,
+        }
+
+    try:
 
         if task_type == TaskType.DETECT_ECOSYSTEM:
             result = _execute_detect_ecosystem(payload)
@@ -292,11 +334,8 @@ def _execute_parse_config(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "target_path": str(target_path),
             "ecosystem": ecosystem,
-            "node_count": graph_manager.node_count,
-            "edge_count": graph_manager.edge_count,
-            # Serialize graph data for aggregation in main process
-            "nodes": list(graph_manager.nodes(data=True)),
-            "edges": list(graph_manager.edges(data=True)),
+            "node_count": graph_manager.node_count(),
+            "edge_count": graph_manager.edge_count(),
             "code_files": [str(p) for p in parser.discover_code_files()],
         }
 

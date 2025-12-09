@@ -314,7 +314,7 @@ class CMakeGraphBuilder:
             self.graph_manager.add_edge(
                 source_id,
                 target_id,
-                edge_kind="link_libraries",
+                edge_kind=EdgeKind.LINK_LIBRARIES.value,
                 parser_name=event.source,
                 confidence=confidence,
                 over_approx=over_approx,
