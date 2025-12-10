@@ -16,6 +16,7 @@ from typing import Optional
 
 from depanalyzer.graph import GlobalDAG, GraphRegistry, merge_graph_with_dependencies
 from depanalyzer.runtime.config_loader import load_graph_build_config
+from depanalyzer.runtime.display import RichDisplayManager
 from depanalyzer.runtime.task_pool import GlobalTaskPool, shutdown_pool
 from depanalyzer.runtime.transaction import Transaction
 
@@ -65,20 +66,20 @@ def _scan_command_impl(args) -> int:
     Returns:
         int: Exit code.
     """
-    logger.info("=== Depanalyzer Scan ===")
-    logger.info("Source: %s", args.source)
+    logger.debug("=== Depanalyzer Scan ===")
+    logger.debug("Source: %s", args.source)
     output = getattr(args, "output", None)
     cache_dir_arg = getattr(args, "cache_dir", None)
     third_party_enabled = getattr(args, "third_party", False)
     wait_timeout = getattr(args, "timeout", 900)
     if output:
-        logger.info("Output: %s", output)
+        logger.debug("Output: %s", output)
     if cache_dir_arg:
-        logger.info("Cache dir: %s", cache_dir_arg)
-    logger.info("Workers: %d", args.workers)
-    logger.info("Max depth: %d", args.max_depth)
-    logger.info("Scan timeout (s): %d", wait_timeout)
-    logger.info("Third-party resolution enabled: %s", third_party_enabled)
+        logger.debug("Cache dir: %s", cache_dir_arg)
+    logger.debug("Workers: %d", args.workers)
+    logger.debug("Max depth: %d", args.max_depth)
+    logger.debug("Scan timeout (s): %d", wait_timeout)
+    logger.debug("Third-party resolution enabled: %s", third_party_enabled)
 
     start_time = time.time()
 
@@ -123,10 +124,17 @@ def _scan_command_impl(args) -> int:
 
         # GlobalTaskPool will be initialized lazily when first task is submitted
         # No need to pre-initialize here
-        logger.info("Workers: %d (GlobalTaskPool will initialize on first use)", args.workers)
+        logger.debug("Workers: %d (GlobalTaskPool will initialize on first use)", args.workers)
+
+        # Create display manager for progress tracking
+        log_file = getattr(args, "log_file", None)
+        display_manager = RichDisplayManager(
+            enabled=True,
+            log_file=log_file,
+        )
 
         # Create transaction (runs in main process, tasks are parallelized)
-        logger.info("Creating transaction...")
+        logger.debug("Creating transaction...")
         transaction = Transaction(
             source=args.source,
             max_workers=args.workers,
@@ -137,20 +145,24 @@ def _scan_command_impl(args) -> int:
             dep_cache_root=sources_root,
             workspace_cache_root=workspace_cache_root,
             graph_build_config=graph_build_config,
+            display_manager=display_manager,
         )
-        logger.info("Transaction created: %s", transaction.transaction_id)
+        logger.debug("Transaction created: %s", transaction.transaction_id)
 
         # Run transaction directly (parallelism happens at task level via GlobalTaskPool)
-        logger.info("Running transaction %s...", transaction.transaction_id)
+        logger.debug("Running transaction %s...", transaction.transaction_id)
         try:
-            result = transaction.run()
+            with display_manager.live_display():
+                result = transaction.run()
             logger.info("Transaction completed, processing result...")
         except KeyboardInterrupt:
             logger.warning("Transaction interrupted by user (Ctrl+C)")
+            display_manager.stop()
             shutdown_pool(wait=False, force=True)
             return 130  # Standard exit code for SIGINT
         except (CancelledError, OSError, RuntimeError, ValueError) as e:
             logger.error("Transaction failed with exception: %s", e, exc_info=True)
+            display_manager.stop()
             return 1
 
         if not result.success:

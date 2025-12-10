@@ -135,9 +135,9 @@ class PhaseOrchestrator:
             self.state.source,
         )
 
-        # Start progress manager
-        if self.state.progress_manager:
-            self.state.progress_manager.start_transaction(
+        # Start display manager
+        if self.state.display_manager:
+            self.state.display_manager.start_transaction(
                 graph_id=self.state.graph_id or "unknown",
                 source=self.state.source,
             )
@@ -161,6 +161,9 @@ class PhaseOrchestrator:
                     int(phase_duration * 1000)
                 )
                 self.state.update_phase_result(phase_enum, "duration_seconds", phase_duration)
+
+                # Update metrics after each phase for real-time display
+                self._update_progress_metrics()
 
             # Flush graph to disk
             cache_path = self._flush_graph_to_disk()
@@ -242,7 +245,7 @@ class PhaseOrchestrator:
             graph_build_config=self.state.graph_build_config,
             eventbus=self.state.eventbus,
             contract_registry=self.state.contract_registry,
-            progress_manager=self.state.progress_manager,
+            display_manager=self.state.display_manager,
             enable_dependency_resolution=self.state.enable_dependency_resolution,
             max_dependency_depth=self.state.max_dependency_depth,
             max_dependencies=self.state.max_dependencies,
@@ -290,9 +293,9 @@ class PhaseOrchestrator:
             logger.info("Registered graph %s in GraphRegistry", self.state.graph_id)
 
     def _update_progress_metrics(self) -> None:
-        """Update progress manager with final metrics."""
-        if self.state.progress_manager and self.state.graph_manager:
-            self.state.progress_manager.update_metrics(
+        """Update display manager with final metrics."""
+        if self.state.display_manager and self.state.graph_manager:
+            self.state.display_manager.update_metrics(
                 node_count=self.state.graph_manager.node_count(),
                 edge_count=self.state.graph_manager.edge_count(),
             )

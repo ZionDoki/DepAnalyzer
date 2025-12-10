@@ -126,7 +126,7 @@ public class App {
         graph_build_config=GraphBuildConfig.default(),
         eventbus=EventBus(),
         contract_registry=ContractRegistry.get_instance(),
-        progress_manager=None,
+        display_manager=None,
         enable_dependency_resolution=False,
         max_dependency_depth=0,
         max_dependencies=None,

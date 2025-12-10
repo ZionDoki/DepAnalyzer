@@ -20,7 +20,7 @@ from depanalyzer.runtime.eventbus import EventBus
 from depanalyzer.runtime.graph_config import GraphBuildConfig
 from depanalyzer.runtime.lifecycle import LifecyclePhase
 from depanalyzer.runtime.workspace import Workspace
-from depanalyzer.runtime.progress import ProgressManager
+from depanalyzer.runtime.display import RichDisplayManager
 
 
 @dataclass
@@ -40,7 +40,7 @@ class TransactionContext:
         graph_build_config: Aggregate graph build configuration.
         eventbus: Event bus for parser and hook communication.
         contract_registry: Global contract registry singleton.
-        progress_manager: Optional progress manager for live updates.
+        display_manager: Optional display manager for live updates.
         enable_dependency_resolution: Whether third-party deps are resolved.
         max_dependency_depth: Maximum depth for dependency resolution.
         max_dependencies: Optional global cap for resolved dependencies.
@@ -55,7 +55,7 @@ class TransactionContext:
     graph_build_config: GraphBuildConfig
     eventbus: EventBus
     contract_registry: ContractRegistry
-    progress_manager: Optional[ProgressManager]
+    display_manager: Optional[RichDisplayManager]
     enable_dependency_resolution: bool
     max_dependency_depth: int
     max_dependencies: Optional[int]

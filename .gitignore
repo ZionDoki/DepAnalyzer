@@ -11,4 +11,6 @@ GEMINI.md
 *.json
 *.pyc
 *cache
+*.log
+*.cast
 out/

@@ -527,7 +527,7 @@ class ParsePhase(BasePhase):
             graph_build_config=self.state.graph_build_config,
             eventbus=self.state.eventbus,
             contract_registry=self.state.contract_registry,
-            progress_manager=self.state.progress_manager,
+            display_manager=self.state.display_manager,
             enable_dependency_resolution=self.state.enable_dependency_resolution,
             max_dependency_depth=self.state.max_dependency_depth,
             max_dependencies=self.state.max_dependencies,
@@ -551,5 +551,8 @@ class ParsePhase(BasePhase):
         with self._graph_lock:
             try:
                 mapper.map(code_ctx)
+                # Record file processed for stats
+                if self.state.display_manager:
+                    self.state.display_manager.stats_collector.record_file_processed()
             except _SAFE_EXCEPTIONS:
                 logger.exception("CodeDependencyMapper failed for %s", file_path)

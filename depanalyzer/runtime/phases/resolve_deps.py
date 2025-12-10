@@ -218,7 +218,16 @@ class ResolveDepsPhase(BasePhase):
         completed, failed = 0, 0
 
         for dep in successful_deps:
-            logger.info("Creating child transaction for: %s", dep["name"])
+            dep_name = dep.get("name", "unknown")
+            dep_version = dep.get("version") or ""
+            logger.info("Creating child transaction for: %s", dep_name)
+
+            # Calculate child depth (parent depth + 1)
+            child_depth = self.state.current_depth + 1
+
+            # Update display manager with new dependency
+            if self.state.display_manager:
+                self.state.display_manager.add_dependency(dep_name, child_depth, dep_version)
 
             # Persist dependency metadata on originating nodes before spawning child runs.
             self._attach_dependency_metadata(dep)
@@ -229,8 +238,8 @@ class ResolveDepsPhase(BasePhase):
                 graph_metadata["dependency_metadata"] = dep_metadata
             if dep.get("name"):
                 graph_metadata["name"] = dep.get("name")
-            if dep.get("version"):
-                graph_metadata["version"] = dep.get("version")
+            if dep_version:
+                graph_metadata["version"] = dep_version
             for meta_key in ("resolved_version", "license", "license_only"):
                 if dep.get(meta_key) is not None:
                     graph_metadata[meta_key] = dep.get(meta_key)
@@ -249,6 +258,9 @@ class ResolveDepsPhase(BasePhase):
                 workspace_cache_root=self.state.workspace_cache_root,
                 graph_build_config=self.state.graph_build_config,
                 graph_metadata=graph_metadata,
+                # Pass display_manager and current_depth to child
+                display_manager=self.state.display_manager,
+                current_depth=child_depth,
             )
 
             # Execute child transaction inline to avoid nested process pools

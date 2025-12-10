@@ -26,8 +26,8 @@ from depanalyzer.runtime.policies import (
 
 if TYPE_CHECKING:  # pragma: no cover
     from depanalyzer.runtime.dependency_collector import DependencyCollector
+    from depanalyzer.runtime.display import RichDisplayManager
     from depanalyzer.runtime.eventbus import EventBus
-    from depanalyzer.runtime.progress import ProgressManager
     from depanalyzer.runtime.protocols import TransactionFactory
     from depanalyzer.runtime.worker import Worker
     from depanalyzer.runtime.workspace import Workspace
@@ -88,7 +88,7 @@ class TransactionState:
         eventbus: Event bus for parser communication
         graph_manager: Graph building manager
         dependency_collector: Dependency collector
-        progress_manager: Progress tracking manager
+        display_manager: Rich display manager for progress tracking
 
         # Phase Results (shared between phases)
         detected_targets: Detected build targets (from DETECT phase)
@@ -105,6 +105,7 @@ class TransactionState:
     parent_transaction_id: Optional[str] = None
     enable_dependency_resolution: bool = False
     max_dependencies: Optional[int] = None
+    current_depth: int = 0  # Current recursion depth (0 = main project)
 
     # ===== Cache Paths =====
     graph_cache_root: Optional[Path] = None
@@ -133,7 +134,7 @@ class TransactionState:
     eventbus: Optional["EventBus"] = None
     graph_manager: Optional["GraphManager"] = None
     dependency_collector: Optional["DependencyCollector"] = None
-    progress_manager: Optional["ProgressManager"] = None
+    display_manager: Optional["RichDisplayManager"] = None
     contract_registry: Optional["ContractRegistry"] = None
 
     # ===== Phase Results =====
@@ -142,6 +143,8 @@ class TransactionState:
     start_time: float = 0.0
     graph_cache_path: Optional[Path] = None  # Set by ExportPhase
     graph_metadata: Dict[str, Any] = field(default_factory=dict)
+    # Phase duration tracking (set by orchestrator after each phase)
+    duration_seconds: float = 0.0
 
     def update_phase_result(
         self,
@@ -187,9 +190,9 @@ class TransactionState:
             value_repr,
         )
 
-        # Warn if creating a new attribute (potential typo)
+        # Log if creating a new attribute (potential typo, but not critical)
         if not hasattr(self, key):
-            logger.warning(
+            logger.debug(
                 "Phase %s creating new state attribute: %s",
                 phase.name,
                 key,

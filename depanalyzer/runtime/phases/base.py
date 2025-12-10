@@ -109,6 +109,8 @@ class BasePhase(ABC):
         """
         phase_name = self.__class__.__name__
 
+        failed = False
+
         # 1. Phase setup
         self._before_execute(context)
 
@@ -124,6 +126,7 @@ class BasePhase(ABC):
 
         except _SAFE_EXCEPTIONS as error:
             self._handle_error(error, phase_id)
+            failed = True
 
             # Decide whether to propagate based on IS_CRITICAL
             if self.IS_CRITICAL:
@@ -144,8 +147,9 @@ class BasePhase(ABC):
                 # Don't propagate - allow transaction to continue
 
         finally:
-            # 5. Complete progress tracking (always)
-            self._complete_progress(phase_id)
+            # 5. Complete progress tracking only when the phase did not fail
+            if not failed:
+                self._complete_progress(phase_id)
 
         # 6. Execute after-phase hooks
         self._run_hooks_after(context)
@@ -223,26 +227,56 @@ class BasePhase(ABC):
         Start progress tracking for this phase.
 
         Returns:
-            Phase ID for progress tracking, or None if no progress manager
+            Package key for progress tracking, or None if no display manager
         """
-        if not self.state.progress_manager:
+        if not self.state.display_manager:
             return None
 
         phase_enum = self._get_phase_enum()
-        return self.state.progress_manager.start_phase(
-            phase_enum.name,
-            description=f"Executing {phase_enum.name}",
-        )
 
-    def _complete_progress(self, phase_id: Optional[str]) -> None:
+        # Get package key from source path
+        pkg_key = self._get_package_key()
+
+        # Register package if not already registered (for all transactions including main)
+        if pkg_key:
+            if not self.state.display_manager.package_tracker.get_package(pkg_key):
+                self.state.display_manager.register_package(
+                    name=pkg_key,
+                    version="",
+                    depth=self.state.current_depth,
+                )
+
+            # Start package phase tracking
+            self.state.display_manager.start_package_phase(pkg_key, phase_enum)
+
+        return pkg_key
+
+    def _get_package_key(self) -> Optional[str]:
+        """Get package key from transaction state."""
+        # Try to get name from graph_metadata first
+        if self.state.graph_metadata:
+            name = self.state.graph_metadata.get("name")
+            version = self.state.graph_metadata.get("version", "")
+            if name:
+                return f"{name}@{version}" if version else name
+
+        # Fallback to source path basename
+        if self.state.source:
+            from pathlib import Path
+            return Path(self.state.source).name
+
+        return None
+
+    def _complete_progress(self, pkg_key: Optional[str]) -> None:
         """
         Mark phase progress as complete.
 
         Args:
-            phase_id: Phase ID returned by _start_progress()
+            pkg_key: Package key returned by _start_progress()
         """
-        if self.state.progress_manager and phase_id:
-            self.state.progress_manager.complete_phase(phase_id)
+        if self.state.display_manager and pkg_key:
+            phase_enum = self._get_phase_enum()
+            self.state.display_manager.complete_package_phase(pkg_key, phase_enum)
 
     def _run_hooks_after(self, context: TransactionContext) -> None:
         """
@@ -270,16 +304,16 @@ class BasePhase(ABC):
             _context: Phase context (reserved for subclass use)
         """
 
-    def _handle_error(self, error: Exception, phase_id: Optional[str]) -> None:
+    def _handle_error(self, error: Exception, pkg_key: Optional[str]) -> None:
         """
         Handle phase execution errors.
 
         Args:
             error: The exception that was raised
-            phase_id: Phase ID for progress tracking
+            pkg_key: Package key for progress tracking
         """
-        if self.state.progress_manager and phase_id:
-            self.state.progress_manager.fail_phase(phase_id, str(error))
+        if self.state.display_manager and pkg_key:
+            self.state.display_manager.fail_package(pkg_key, str(error))
 
     def _get_phase_enum(self) -> LifecyclePhase:
         """

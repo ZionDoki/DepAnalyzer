@@ -125,7 +125,7 @@ class DetectPhase(BasePhase):
 
             completed_count += 1
             # Update progress after each ecosystem
-            if self.state.progress_manager:
+            if self.state.display_manager:
                 total_targets = sum(
                     len(targets) for targets in detected_targets.values()
                 )

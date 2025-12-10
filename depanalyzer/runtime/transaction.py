@@ -32,7 +32,7 @@ from depanalyzer.runtime.transaction_state import TransactionState
 from depanalyzer.runtime.workspace import Workspace
 
 if TYPE_CHECKING:  # pragma: no cover
-    from depanalyzer.runtime.progress import ProgressManager
+    from depanalyzer.runtime.display import RichDisplayManager
 
 
 class Transaction:
@@ -64,7 +64,7 @@ class Transaction:
         max_dependency_depth: int = 3,
         parent_transaction_id: Optional[str] = None,
         transaction_id: Optional[str] = None,
-        progress_manager: Optional["ProgressManager"] = None,
+        display_manager: Optional["RichDisplayManager"] = None,
         enable_dependency_resolution: bool = False,
         max_dependencies: Optional[int] = None,
         graph_cache_root: Optional[Path] = None,
@@ -77,6 +77,7 @@ class Transaction:
         asset_projection_policy: Optional[AssetProjectionPolicy] = None,
         join_policies: Optional[Sequence[JoinPolicy]] = None,
         analyze_policies: Optional[Sequence[AnalyzePolicy]] = None,
+        current_depth: int = 0,
     ) -> None:
         """
         Initialize transaction (maintains backward-compatible API).
@@ -88,7 +89,7 @@ class Transaction:
             max_dependency_depth: Max recursion depth for dependency resolution
             parent_transaction_id: Parent transaction ID (for nested transactions)
             transaction_id: Unique transaction ID (generated if not provided)
-            progress_manager: Optional progress tracking manager
+            display_manager: Optional display manager for progress tracking
             enable_dependency_resolution: Enable third-party dependency resolution
             max_dependencies: Max number of dependencies to resolve
             graph_cache_root: Root directory for graph cache
@@ -147,6 +148,7 @@ class Transaction:
             parent_transaction_id=parent_transaction_id,
             enable_dependency_resolution=enable_dependency_resolution,
             max_dependencies=max_dependencies,
+            current_depth=current_depth,
             graph_cache_root=Path(graph_cache_root) if graph_cache_root else None,
             dep_cache_root=Path(dep_cache_root) if dep_cache_root else None,
             workspace_cache_root=(
@@ -162,8 +164,8 @@ class Transaction:
             analyze_policies=list(analyze_policies or []),
             # Initialize workspace
             workspace=Workspace(source, cache_root=workspace_cache_root),
-            # Progress manager
-            progress_manager=progress_manager,
+            # Display manager
+            display_manager=display_manager,
         )
 
         # Inject self as factory (solves circular import for child transactions)
@@ -283,7 +285,7 @@ class Transaction:
             self._state.eventbus = None
             self._state.graph_manager = None
             self._state.dependency_collector = None
-            self._state.progress_manager = None
+            self._state.display_manager = None
 
         return state
 

@@ -174,6 +174,10 @@ def main() -> int:
         default=900,
         help="Maximum seconds to wait for scan completion (default: 900).",
     )
+    scan_parser.add_argument(
+        "--log-file",
+        help="Output log to file (optional). When specified, logs are written to this file in addition to console.",
+    )
 
     # Export command
     export_parser = subparsers.add_parser(
