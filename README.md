@@ -4,12 +4,13 @@ Depanalyzer is a powerful dependency analysis tool designed to parse, link, and 
 
 ## 🚀 Features
 
-*   **Multi-Language Support:** C/C++ (CMake), TypeScript/JavaScript (Hvigor), Java (Maven).
+*   **Multi-Language Support:** C/C++ (CMake), TypeScript/JavaScript (npm, Hvigor), Java (Maven).
 *   **Deep Dependency Resolution:** Recursively fetches and analyzes third-party dependencies.
 *   **Graph-Based Architecture:** Represents projects as a directed acyclic graph (DAG) of file nodes and edge relationships.
 *   **License Compliance:** Integrated support for [ScanCode Toolkit](https://github.com/aboutcode-org/scancode-toolkit) and **Liscopelens** to detect licenses and verify compatibility.
 *   **High Performance:** Multiprocess architecture for parallel parsing and analysis.
 *   **Automated Pipeline:** One-click script to run scanning, license detection, and compatibility checks.
+*   **Interactive TUI:** Terminal-based graph explorer to visualize and trace dependencies.
 
 ## 📦 Installation
 
@@ -220,8 +221,21 @@ depanalyzer scancode --source /path/to/repo --third-party -o license_map.json
     ```
 *   **DAG Validation:** Check for circular dependencies in the global package graph.
     ```bash
-    depanalyzer dag --fail-on-cycle
+    depanalyzer dag --fail-on-cycle --limit 50
     ```
+
+### 5. Interactive Graph Explorer
+
+A terminal-based UI (TUI) to visualize and trace dependencies interactively.
+
+```bash
+python scripts/graph_explorer_tui.py <path_to_graph.json>
+```
+
+Features:
+*   Search nodes by ID or Label.
+*   Trace paths between two nodes (Direct path and Common Ancestor).
+*   View node details.
 
 ## 📁 Output Structure
 

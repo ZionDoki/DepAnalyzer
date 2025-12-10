@@ -105,6 +105,7 @@ class TransactionState:
     parent_transaction_id: Optional[str] = None
     enable_dependency_resolution: bool = False
     max_dependencies: Optional[int] = None
+    max_concurrent_deps: int = 4  # Max concurrent child transactions
     current_depth: int = 0  # Current recursion depth (0 = main project)
 
     # ===== Cache Paths =====

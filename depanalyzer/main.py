@@ -31,7 +31,10 @@ def setup_logging(verbose: bool = False, console: Optional[Console] = None) -> N
         verbose: Enable verbose logging.
         console: Rich Console instance for coordinated output (optional).
     """
-    level = logging.DEBUG if verbose else logging.INFO
+    if verbose:
+        level = logging.DEBUG
+    else:
+        level = logging.WARNING
 
     # Create RichHandler for coordinated output with progress display
     handler = RichHandler(
@@ -139,6 +142,12 @@ def main() -> int:
         "--max-deps",
         type=int,
         help="Global third-party dependency limit (only when third-party dependency scanning is enabled)",
+    )
+    scan_parser.add_argument(
+        "--concurrent-deps",
+        type=int,
+        default=4,
+        help="Maximum concurrent dependency transactions (default: 4)",
     )
     scan_parser.add_argument(
         "-t",

@@ -6,8 +6,10 @@ transactions in parallel to analyze third-party dependencies.
 """
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from networkx.exception import NetworkXNoCycle
 
@@ -201,10 +203,14 @@ class ResolveDepsPhase(BasePhase):
     ) -> List[str]:
         """Create child transactions and collect their graph IDs.
 
-        Child transactions are executed inline (sequentially) to avoid nested
-        process pools which cause deadlocks on Windows. The GlobalTaskPool
-        architecture ensures all parallelism happens at the task level, not
-        at the transaction level.
+        Child transactions are executed in parallel using ThreadPoolExecutor.
+        This is safe because:
+        - Threads don't create nested process pools (avoiding Windows deadlocks)
+        - Each child transaction uses the shared GlobalTaskPool for CPU tasks
+        - DisplayManager is thread-safe (uses RLock)
+
+        The number of concurrent child transactions is controlled by
+        max_concurrent_deps (defaults to 4).
         """
         factory = self.state.child_transaction_factory
 
@@ -214,10 +220,27 @@ class ResolveDepsPhase(BasePhase):
             )
             return []
 
-        child_graph_ids: List[str] = []
-        completed, failed = 0, 0
+        # Limit concurrent child transactions to avoid resource exhaustion
+        max_concurrent_raw = getattr(self.state, "max_concurrent_deps", None)
+        max_concurrent = max_concurrent_raw if max_concurrent_raw is not None else 4
+        if max_concurrent <= 0:
+            logger.warning(
+                "Invalid max_concurrent_deps=%s, defaulting to 1",
+                max_concurrent_raw,
+            )
+            max_concurrent = 1
+        # Persist sanitized value for child transactions and reuse
+        self.state.max_concurrent_deps = max_concurrent
+        effective_max_concurrent = min(max_concurrent, len(successful_deps))
 
-        for dep in successful_deps:
+        child_graph_ids: List[str] = []
+        child_graph_ids_lock = threading.Lock()
+        completed = 0
+        failed = 0
+        stats_lock = threading.Lock()
+
+        def run_child_transaction(dep: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
+            """Execute a single child transaction in a thread."""
             dep_name = dep.get("name", "unknown")
             dep_version = dep.get("version") or ""
             logger.info("Creating child transaction for: %s", dep_name)
@@ -225,11 +248,11 @@ class ResolveDepsPhase(BasePhase):
             # Calculate child depth (parent depth + 1)
             child_depth = self.state.current_depth + 1
 
-            # Update display manager with new dependency
+            # Update display manager with new dependency (thread-safe)
             if self.state.display_manager:
                 self.state.display_manager.add_dependency(dep_name, child_depth, dep_version)
 
-            # Persist dependency metadata on originating nodes before spawning child runs.
+            # Persist dependency metadata on originating nodes
             self._attach_dependency_metadata(dep)
 
             graph_metadata: Dict[str, Any] = {}
@@ -244,7 +267,7 @@ class ResolveDepsPhase(BasePhase):
                 if dep.get(meta_key) is not None:
                     graph_metadata[meta_key] = dep.get(meta_key)
 
-            # Use factory to create child transaction (avoids circular import)
+            # Use factory to create child transaction
             child_tx = factory.create(
                 source=dep["source"],
                 graph_id=None,
@@ -253,45 +276,91 @@ class ResolveDepsPhase(BasePhase):
                 parent_transaction_id=self.state.transaction_id,
                 enable_dependency_resolution=self.state.enable_dependency_resolution,
                 max_dependencies=self.state.max_dependencies,
+                max_concurrent_deps=max_concurrent,
                 graph_cache_root=self.state.graph_cache_root,
                 dep_cache_root=self.state.dep_cache_root,
                 workspace_cache_root=self.state.workspace_cache_root,
                 graph_build_config=self.state.graph_build_config,
                 graph_metadata=graph_metadata,
-                # Pass display_manager and current_depth to child
                 display_manager=self.state.display_manager,
                 current_depth=child_depth,
             )
 
-            # Execute child transaction inline to avoid nested process pools
+            # Execute child transaction
             try:
                 result = child_tx.run()
-                if result.success:
-                    completed += 1
-                    logger.info(
-                        "Child %s completed: %s (%d nodes, %d edges)",
-                        child_tx.transaction_id,
-                        dep["name"],
-                        result.node_count,
-                        result.edge_count,
-                    )
-                    self._link_dependency_graph(result.graph_id, dep)
-                    if result.graph_id:
-                        child_graph_ids.append(result.graph_id)
-                else:
-                    failed += 1
-                    logger.error(
-                        "Child %s failed: %s",
-                        child_tx.transaction_id,
-                        result.error,
-                    )
+                return (result.success, {
+                    "dep": dep,
+                    "result": result,
+                    "transaction_id": child_tx.transaction_id,
+                })
             except Exception as exc:  # pragma: no cover - defensive
-                failed += 1
                 logger.error(
                     "Child %s failed with exception: %s",
                     child_tx.transaction_id,
                     exc,
                 )
+                return (False, {
+                    "dep": dep,
+                    "error": str(exc),
+                    "transaction_id": child_tx.transaction_id,
+                })
+
+        # Execute child transactions in parallel using ThreadPoolExecutor
+        logger.info(
+            "Processing %d dependencies with %d concurrent workers",
+            len(successful_deps),
+            effective_max_concurrent,
+        )
+
+        with ThreadPoolExecutor(
+            max_workers=effective_max_concurrent, thread_name_prefix="ChildTx"
+        ) as executor:
+            futures = {
+                executor.submit(run_child_transaction, dep): dep
+                for dep in successful_deps
+            }
+
+            for future in as_completed(futures):
+                dep = futures[future]
+                try:
+                    success, result_data = future.result()
+
+                    with stats_lock:
+                        if success:
+                            completed += 1
+                            result = result_data["result"]
+                            logger.info(
+                                "Child %s completed: %s (%d nodes, %d edges)",
+                                result_data["transaction_id"],
+                                dep.get("name"),
+                                result.node_count,
+                                result.edge_count,
+                            )
+                            self._link_dependency_graph(result.graph_id, dep)
+                            if result.graph_id:
+                                with child_graph_ids_lock:
+                                    child_graph_ids.append(result.graph_id)
+                        else:
+                            failed += 1
+                            error = result_data.get("error") or (
+                                result_data.get("result").error
+                                if result_data.get("result")
+                                else "Unknown error"
+                            )
+                            logger.error(
+                                "Child %s failed: %s",
+                                result_data["transaction_id"],
+                                error,
+                            )
+                except Exception as exc:  # pragma: no cover - defensive
+                    with stats_lock:
+                        failed += 1
+                    logger.error(
+                        "Child transaction for %s failed with exception: %s",
+                        dep.get("name"),
+                        exc,
+                    )
 
         logger.info(
             "Resolution completed: %d succeeded, %d failed",

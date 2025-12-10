@@ -361,14 +361,17 @@ class RichDisplayManager:
             self._setup_file_logging(log_file)
 
     def _setup_file_logging(self, log_file: str) -> None:
-        """Set up file logging handler."""
+        """Set up file logging handler with detailed INFO level output."""
         try:
             self._file_handler = logging.FileHandler(log_file, encoding="utf-8")
+            self._file_handler.setLevel(logging.INFO)  # Detailed output to file
             self._file_handler.setFormatter(
                 logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
             )
-            logging.getLogger("depanalyzer").addHandler(self._file_handler)
-            logger.info("File logging enabled: %s", log_file)
+            # Set depanalyzer logger to INFO to allow file handler to receive INFO messages
+            depanalyzer_logger = logging.getLogger("depanalyzer")
+            depanalyzer_logger.setLevel(logging.INFO)
+            depanalyzer_logger.addHandler(self._file_handler)
         except OSError as e:
             logger.warning("Failed to set up file logging: %s", e)
 
@@ -682,29 +685,45 @@ class RichDisplayManager:
     def live_display(self) -> Generator["RichDisplayManager", None, None]:
         """Context manager for live progress display.
 
-        During live display, INFO level logs are suppressed to avoid
-        interference with the Rich panel. WARNING and above are still shown.
-        File logging (if enabled via --log-file) is not affected.
+        During live display, ALL console logs are buffered to avoid
+        interference with the Rich panel. Buffered warnings/errors are
+        printed after the display stops. File logging is not affected.
         """
         if not self.enabled:
             yield self
             return
 
-        # Raise log level to WARNING for non-file handlers during live display
-        # This hides INFO but shows WARNING/ERROR
+        # Buffer to collect log records during live display
+        buffered_records: List[logging.LogRecord] = []
+        buffered_lock = threading.Lock()
+
+        class BufferingHandler(logging.Handler):
+            """Handler that buffers records instead of emitting them."""
+
+            def emit(self, record: logging.LogRecord) -> None:
+                with buffered_lock:
+                    buffered_records.append(record)
+
+        # Create buffering handler for console output
+        buffer_handler = BufferingHandler()
+        buffer_handler.setLevel(logging.WARNING)  # Only buffer WARNING+
+
         root_logger = logging.getLogger()
         depanalyzer_logger = logging.getLogger("depanalyzer")
 
-        # Save original levels for non-file handlers
-        original_levels: List[tuple] = []
-        for handler in root_logger.handlers:
+        # Save and remove non-file handlers, add buffer handler
+        removed_handlers: List[tuple] = []
+        for handler in list(root_logger.handlers):
             if not isinstance(handler, logging.FileHandler):
-                original_levels.append((handler, handler.level))
-                handler.setLevel(logging.WARNING)
-        for handler in depanalyzer_logger.handlers:
+                removed_handlers.append(("root", handler))
+                root_logger.removeHandler(handler)
+        for handler in list(depanalyzer_logger.handlers):
             if not isinstance(handler, logging.FileHandler):
-                original_levels.append((handler, handler.level))
-                handler.setLevel(logging.WARNING)
+                removed_handlers.append(("depanalyzer", handler))
+                depanalyzer_logger.removeHandler(handler)
+
+        # Add buffer handler to capture warnings/errors
+        root_logger.addHandler(buffer_handler)
 
         try:
             self._live = Live(
@@ -725,7 +744,13 @@ class RichDisplayManager:
             yield self
 
         except (RuntimeError, ValueError, TypeError, AttributeError, OSError) as e:
-            logger.error("Display error: %s", e)
+            # Buffer this error too
+            buffer_handler.emit(
+                logging.LogRecord(
+                    "depanalyzer.display", logging.ERROR, "", 0,
+                    f"Display error: {e}", None, None
+                )
+            )
             yield self
 
         finally:
@@ -734,15 +759,33 @@ class RichDisplayManager:
                 self._update_thread.join(timeout=1.0)
             if self._live:
                 try:
+                    # Final update to show completed state before stopping
+                    self._live.update(self._build_display())
                     self._live.stop()
                 except (RuntimeError, ValueError, AttributeError):
                     pass
                 self._live = None
             self._update_thread = None
 
-            # Restore original log levels
-            for handler, level in original_levels:
-                handler.setLevel(level)
+            # Remove buffer handler
+            root_logger.removeHandler(buffer_handler)
+
+            # Restore original handlers
+            for logger_name, handler in removed_handlers:
+                if logger_name == "root":
+                    root_logger.addHandler(handler)
+                else:
+                    depanalyzer_logger.addHandler(handler)
+
+            # Output buffered warnings/errors now that display is stopped
+            if buffered_records:
+                self.console.print()  # Blank line after progress display
+                for record in buffered_records:
+                    level_style = "yellow" if record.levelno == logging.WARNING else "red"
+                    self.console.print(
+                        f"[{level_style}][{record.levelname}][/{level_style}] "
+                        f"[dim]{record.name}:[/dim] {record.getMessage()}"
+                    )
 
     def stop(self) -> None:
         """Stop display and cleanup."""

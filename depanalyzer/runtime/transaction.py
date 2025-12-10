@@ -78,6 +78,7 @@ class Transaction:
         join_policies: Optional[Sequence[JoinPolicy]] = None,
         analyze_policies: Optional[Sequence[AnalyzePolicy]] = None,
         current_depth: int = 0,
+        max_concurrent_deps: int = 4,
     ) -> None:
         """
         Initialize transaction (maintains backward-compatible API).
@@ -148,6 +149,7 @@ class Transaction:
             parent_transaction_id=parent_transaction_id,
             enable_dependency_resolution=enable_dependency_resolution,
             max_dependencies=max_dependencies,
+            max_concurrent_deps=max_concurrent_deps,
             current_depth=current_depth,
             graph_cache_root=Path(graph_cache_root) if graph_cache_root else None,
             dep_cache_root=Path(dep_cache_root) if dep_cache_root else None,
