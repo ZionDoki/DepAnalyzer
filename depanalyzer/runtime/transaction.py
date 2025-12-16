@@ -66,6 +66,7 @@ class Transaction:
         transaction_id: Optional[str] = None,
         display_manager: Optional["RichDisplayManager"] = None,
         enable_dependency_resolution: bool = False,
+        skip_analysis: bool = False,
         max_dependencies: Optional[int] = None,
         graph_cache_root: Optional[Path] = None,
         dep_cache_root: Optional[Path] = None,
@@ -92,6 +93,7 @@ class Transaction:
             transaction_id: Unique transaction ID (generated if not provided)
             display_manager: Optional display manager for progress tracking
             enable_dependency_resolution: Enable third-party dependency resolution
+            skip_analysis: Skip the ANALYZE phase (projection/deadcode/linkage/uncertainty)
             max_dependencies: Max number of dependencies to resolve
             graph_cache_root: Root directory for graph cache
             dep_cache_root: Root directory for dependency cache
@@ -148,6 +150,7 @@ class Transaction:
             max_dependency_depth=max_dependency_depth,
             parent_transaction_id=parent_transaction_id,
             enable_dependency_resolution=enable_dependency_resolution,
+            skip_analysis=skip_analysis,
             max_dependencies=max_dependencies,
             max_concurrent_deps=max_concurrent_deps,
             current_depth=current_depth,

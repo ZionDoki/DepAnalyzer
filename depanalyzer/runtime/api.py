@@ -29,6 +29,7 @@ def create_transaction(
     asset_projection_policy: Optional[AssetProjectionPolicy] = None,
     join_policies: Optional[Sequence[JoinPolicy]] = None,
     analyze_policies: Optional[Sequence[AnalyzePolicy]] = None,
+    skip_analysis: bool = False,
     **kwargs: object,
 ) -> Transaction:
     """Create a Transaction with optional hooks and policies.
@@ -43,6 +44,7 @@ def create_transaction(
         asset_projection_policy: Optional AssetProjectionPolicy used during ANALYZE.
         join_policies: Optional sequence of JoinPolicy instances.
         analyze_policies: Optional sequence of AnalyzePolicy instances.
+        skip_analysis: Skip the ANALYZE phase when True.
         **kwargs: Additional keyword arguments passed through to
             ``Transaction.__init__``.
 
@@ -57,6 +59,7 @@ def create_transaction(
         asset_projection_policy=asset_projection_policy,
         join_policies=join_policies,
         analyze_policies=analyze_policies,
+        skip_analysis=skip_analysis,
         **kwargs,
     )
 

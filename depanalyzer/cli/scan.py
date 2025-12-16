@@ -140,6 +140,7 @@ def _scan_command_impl(args) -> int:
             max_workers=args.workers,
             max_dependency_depth=args.max_depth,
             enable_dependency_resolution=getattr(args, "third_party", False),
+            skip_analysis=getattr(args, "no_analyze", False),
             max_dependencies=getattr(args, "max_deps", None),
             max_concurrent_deps=getattr(args, "concurrent_deps", 4),
             graph_cache_root=graphs_root,

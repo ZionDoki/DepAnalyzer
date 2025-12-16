@@ -6,11 +6,25 @@ Depanalyzer is a powerful dependency analysis tool designed to parse, link, and 
 
 *   **Multi-Language Support:** C/C++ (CMake), TypeScript/JavaScript (npm, Hvigor), Java (Maven).
 *   **Deep Dependency Resolution:** Recursively fetches and analyzes third-party dependencies.
-*   **Graph-Based Architecture:** Represents projects as a directed acyclic graph (DAG) of file nodes and edge relationships.
+*   **Graph-Based Architecture:** Represents projects as a typed directed multigraph; exports are DAG-safe via cycle condensation.
 *   **License Compliance:** Integrated support for [ScanCode Toolkit](https://github.com/aboutcode-org/scancode-toolkit) and **Liscopelens** to detect licenses and verify compatibility.
 *   **High Performance:** Multiprocess architecture for parallel parsing and analysis.
 *   **Automated Pipeline:** One-click script to run scanning, license detection, and compatibility checks.
 *   **Interactive TUI:** Terminal-based graph explorer to visualize and trace dependencies.
+
+## 📚 Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Architecture](docs/architecture.md) | System design, 7-phase lifecycle, and core components |
+| [Getting Started](docs/getting-started.md) | Quick installation and first scan guide |
+| [Usage Guide](docs/usage.md) | Cache layout, merged exports, and CLI behavior |
+| [CLI Reference](docs/cli-reference.md) | Complete command-line interface documentation |
+| [Configuration](docs/configuration.md) | All configuration options (TOML/JSON/environment variables) |
+| [Scripts](docs/scripts.md) | Helper scripts for license compliance and graph exploration |
+| [Extension Guide](docs/extension-guide.md) | How to add new ecosystems, analyzers, and hooks |
+
+For the full documentation index, see [docs/index.md](docs/index.md).
 
 ## 📦 Installation
 
@@ -21,6 +35,13 @@ Depanalyzer is a powerful dependency analysis tool designed to parse, link, and 
 ### 1. Using Pip (Recommended)
 
 ```bash
+pip install depanalyzer
+```
+
+or install from source code:
+
+```bash
+# clone the repository, cd respository root path
 pip install .
 ```
 
@@ -215,9 +236,13 @@ depanalyzer scancode --source /path/to/repo --third-party -o license_map.json
 
 ### 4. Other Commands
 
-*   **Export:** Convert graphs to other formats (GML, DOT).
+*   **Export:** Export cached graphs as JSON views (bundle export or derived views).
     ```bash
-    depanalyzer export <graph_id> -o graph.gml --format gml
+    # Export JSON bundle (include dependency graphs if present)
+    depanalyzer export <graph_id> -o export.json --with-deps --work-dir .dep_cache/<source_stem>
+
+    # Export asset→artifact mapping view
+    depanalyzer export <graph_id> -o asset_artifact.json --format asset_artifact --work-dir .dep_cache/<source_stem>
     ```
 *   **DAG Validation:** Check for circular dependencies in the global package graph.
     ```bash
@@ -315,4 +340,4 @@ include_isolated_nodes = true            # Connect isolated nodes to root (defau
 
 ### Other Configuration Options
 
-For advanced configuration options (projection, contract matching, per-ecosystem settings), see `docs/dependency_graph_lifecycle_and_config.md`
+For advanced configuration options (projection, contract matching, per-ecosystem settings), see [Configuration Reference](docs/configuration.md).

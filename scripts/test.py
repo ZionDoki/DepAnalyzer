@@ -35,6 +35,12 @@ DEFAULT_LISCOPLENS_CONFIG = {
     "edge_permissive_spreads": ["STATIC_LINKING"],
     "default_edge_behavior": "inherit",
     "edge_literal_mapping": {
+        # Depanalyzer core edge kinds
+        "depends_on": "DEPENDENCY",
+        "import": "COMPILE",
+        "sources": "COMPILE",
+        "link_libraries": "STATIC_LINKING",
+        "links": "STATIC_LINKING",
         "dependency": "DEPENDENCY",
         "include": "INCLUDE",
         "link": "STATIC_LINKING",

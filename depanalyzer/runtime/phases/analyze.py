@@ -40,6 +40,9 @@ class AnalyzePhase(BasePhase):
 
     def execute(self, context: TransactionContext) -> None:
         """Execute ANALYZE phase logic."""
+        if getattr(self.state, "skip_analysis", False):
+            logger.info("Analyze phase skipped by configuration")
+            return
         if not self.state.graph_manager:
             logger.warning("GraphManager not initialized, skipping analyze phase")
             return

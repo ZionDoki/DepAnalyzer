@@ -61,6 +61,7 @@ class TransactionState:
         parent_transaction_id: Parent transaction ID (for nested transactions)
         enable_dependency_resolution: Enable third-party dependency resolution
         max_dependencies: Max number of dependencies to resolve
+        skip_analysis: Skip ANALYZE phase execution
 
         # Cache Paths
         graph_cache_root: Root directory for graph cache
@@ -104,6 +105,7 @@ class TransactionState:
     max_dependency_depth: int = 3
     parent_transaction_id: Optional[str] = None
     enable_dependency_resolution: bool = False
+    skip_analysis: bool = False
     max_dependencies: Optional[int] = None
     max_concurrent_deps: int = 4  # Max concurrent child transactions
     current_depth: int = 0  # Current recursion depth (0 = main project)

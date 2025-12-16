@@ -275,6 +275,7 @@ class ResolveDepsPhase(BasePhase):
                 max_dependency_depth=self.state.max_dependency_depth - 1,
                 parent_transaction_id=self.state.transaction_id,
                 enable_dependency_resolution=self.state.enable_dependency_resolution,
+                skip_analysis=getattr(self.state, "skip_analysis", False),
                 max_dependencies=self.state.max_dependencies,
                 max_concurrent_deps=max_concurrent,
                 graph_cache_root=self.state.graph_cache_root,
