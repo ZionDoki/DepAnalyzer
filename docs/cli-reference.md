@@ -52,7 +52,7 @@ depanalyzer scan <source> -o <output> [options]
 | `--no-analyze` | flag | false | Skip analysis phase |
 | `--fallback-tree` | flag | false | Enable fallback tree for unparsed files |
 | `-c, --config` | path/string | - | Configuration file (TOML/JSON) or inline config |
-| `--timeout` | int | 900 | Reserved for future global timeout enforcement (task-level timeouts still apply) |
+| `--timeout` | int | 900 | Reserved for future global timeout enforcement (currently unused; task-level timeouts still apply) |
 | `--log-file` | path | - | Output log to file |
 
 ### Examples

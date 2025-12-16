@@ -970,7 +970,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--timeout",
         type=int,
         default=900,
-        help="Seconds to wait for scan to finish (default: %(default)s).",
+        help=(
+            "Forwarded to `depanalyzer scan --timeout` (currently reserved/unused; "
+            "task-level timeouts still apply)."
+        ),
     )
     parser.add_argument(
         "-t",

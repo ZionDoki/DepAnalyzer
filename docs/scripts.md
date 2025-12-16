@@ -47,7 +47,7 @@ python scripts/run_license_compatibility.py [options]
 Notes:
 
 - When no project selection flags are provided, the script falls back to a workspace-specific default path. In practice, always pass `--project-path`, `--projects-file`, or `--projects-dir`.
-- `--timeout` is forwarded to `depanalyzer scan --timeout` (currently reserved for future global timeout enforcement; task-level timeouts still apply).
+- `--timeout` is forwarded to `depanalyzer scan --timeout` (currently reserved for future global timeout enforcement and unused by `scan`; task-level timeouts still apply).
 
 ### Arguments
 
@@ -73,7 +73,7 @@ Notes:
 | `--workers` | int | 8 | Worker count for scanning |
 | `--max-depth` | int | 3 | Third-party dependency depth |
 | `--max-deps` | int | - | Global dependency limit |
-| `--timeout` | int | 900 | Forwarded to `depanalyzer scan --timeout` (currently best-effort) |
+| `--timeout` | int | 900 | Forwarded to `depanalyzer scan --timeout` (currently unused by `scan`) |
 | `-t, --third-party` | flag | false | Enable third-party resolution |
 | `--disable-fallback-tree` | flag | false | Disable fallback tree |
 

@@ -75,8 +75,15 @@ def scan_files(
     root_path = root_path.resolve()
     ignores = (ignore_patterns or []) + [".git", ".svn", ".hg", "__pycache__"]
 
-    # Pre-process patterns to separate strict filename matches vs extensions
-    # This helps optimization (only check extension if pattern is *.ext)
+    # Normalize common glob patterns so detectors can use "**/foo" and still
+    # match files at the repository root (where the relative path has no "/").
+    expanded_patterns: List[str] = []
+    for pattern in patterns:
+        expanded_patterns.append(pattern)
+        if pattern.startswith("**/"):
+            expanded_patterns.append(pattern[3:])
+        if pattern.startswith("./"):
+            expanded_patterns.append(pattern[2:])
 
     # Walk using os.walk or efficient recursion
     # We use a stack-based iteration for control
@@ -117,7 +124,7 @@ def scan_files(
             rel_path = file_path.relative_to(root_path)
             str_path = str(rel_path).replace(os.sep, "/")
 
-            for pattern in patterns:
+            for pattern in expanded_patterns:
                 if fnmatch.fnmatch(file_path.name, pattern) or fnmatch.fnmatch(
                     str_path, pattern
                 ):

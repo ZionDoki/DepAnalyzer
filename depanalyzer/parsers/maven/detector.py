@@ -16,7 +16,8 @@ class MavenDetector(BaseDetector):
     NAME = "maven"
     ECOSYSTEM = "maven"
     TARGET_NAME = "pom.xml"
-    DEFAULT_IGNORE_PATTERNS = ["**/target/**"]
+    # Use a directory-form ignore so the scanner can prune traversal early.
+    DEFAULT_IGNORE_PATTERNS = ["target/"]
 
     def detect(self) -> List[Path]:
         """Detect pom.xml files under the workspace."""

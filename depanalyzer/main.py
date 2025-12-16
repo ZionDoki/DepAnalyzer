@@ -114,7 +114,7 @@ def main() -> int:
         "-o",
         "--output",
         required=True,
-        help="Output graph file (.json, .gml, or .dot)",
+        help="Output graph file (JSON, typically .json)",
     )
     scan_parser.add_argument(
         "--cache-dir",
@@ -181,7 +181,10 @@ def main() -> int:
         "--timeout",
         type=int,
         default=900,
-        help="Maximum seconds to wait for scan completion (default: 900).",
+        help=(
+            "Reserved for future global timeout enforcement (currently unused; "
+            "task-level timeouts still apply)."
+        ),
     )
     scan_parser.add_argument(
         "--log-file",
@@ -214,7 +217,7 @@ def main() -> int:
     export_parser.add_argument(
         "-f",
         "--format",
-        choices=["json", "gml", "dot", "asset_artifact"],
+        choices=["json", "asset_artifact"],
         default="json",
         help="Output format (default: json, use asset_artifact for asset->artifact mapping)",
     )

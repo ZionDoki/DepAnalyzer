@@ -45,7 +45,7 @@ depanalyzer scan <source> -o <output.json> [options]
 - `-c/--config`: GraphBuildConfig (TOML/JSON file path or inline TOML/JSON string). CLI flags override config where applicable.
 - `--fallback-tree`: Forces `fallback.enabled = true` in GraphBuildConfig to ensure all files are represented for license workflows.
 - `--no-analyze`: Skips graph analysis work (projection/deadcode/linkage/uncertainty).
-- `--timeout`: Reserved for future global timeout enforcement (task-level timeouts still apply).
+- `--timeout`: Reserved for future global timeout enforcement (currently unused; task-level timeouts still apply).
 - `--log-file`: Writes logs to a file in addition to console output.
 
 **Outputs**
